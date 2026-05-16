@@ -1,0 +1,17 @@
+{
+  "name": "drop-ship",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "pnpm --filter @drop-ship/web dev",
+    "dev:web": "pnpm --filter @drop-ship/web run dev",
+    "dev:server": "pnpm --filter @drop-ship/server run dev",
+    "build": "pnpm --filter @drop-ship/web build",
+    "deploy": "pnpm build && pnpm --filter @drop-ship/server run deploy",
+    "preview": "pnpm --filter @drop-ship/web preview"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+  }
+}

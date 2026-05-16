@@ -1,0 +1,19 @@
+{
+  "name": "@drop-ship/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@drop-ship/content": "workspace:*",
+    "@drop-ship/protocol": "workspace:*",
+    "@drop-ship/sim": "workspace:*",
+    "three": "^0.181.2"
+  },
+  "devDependencies": {
+    "@types/three": "^0.181.0"
+  }
+}

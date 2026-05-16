@@ -1,0 +1,21 @@
+{
+  "name": "@drop-ship/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@drop-ship/content": "workspace:*",
+    "@drop-ship/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

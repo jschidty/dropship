@@ -1,0 +1,84 @@
+{
+  "matchId": "local-minimal-skirmish",
+  "seed": 1337,
+  "players": [
+    {
+      "id": 1,
+      "name": "Player 1",
+      "color": "#74d9ff"
+    },
+    {
+      "id": 2,
+      "name": "Player 2",
+      "color": "#ffb45f"
+    }
+  ],
+  "initialUnits": [
+    {
+      "owner": 1,
+      "templateId": 1,
+      "position": {
+        "x": -38,
+        "y": 2,
+        "z": 24
+      }
+    },
+    {
+      "owner": 1,
+      "templateId": 1,
+      "position": {
+        "x": -28,
+        "y": 6,
+        "z": 36
+      }
+    },
+    {
+      "owner": 1,
+      "templateId": 1,
+      "position": {
+        "x": -52,
+        "y": -3,
+        "z": 16
+      }
+    },
+    {
+      "owner": 2,
+      "templateId": 1,
+      "position": {
+        "x": 38,
+        "y": 2,
+        "z": 24
+      }
+    },
+    {
+      "owner": 2,
+      "templateId": 1,
+      "position": {
+        "x": 28,
+        "y": 6,
+        "z": 36
+      }
+    },
+    {
+      "owner": 2,
+      "templateId": 1,
+      "position": {
+        "x": 52,
+        "y": -3,
+        "z": 16
+      }
+    }
+  ],
+  "initialPlanets": [
+    {
+      "templateId": 100,
+      "mass": 7200000000,
+      "radius": 28,
+      "position": {
+        "x": 0,
+        "y": -2,
+        "z": -60
+      }
+    }
+  ]
+}

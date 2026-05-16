@@ -1,0 +1,12 @@
+{
+  "id": 1,
+  "slug": "scout-ship",
+  "displayName": "Scout",
+  "maxHealth": 100,
+  "colliderRadius": 0.9,
+  "defaultVelocity": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  }
+}

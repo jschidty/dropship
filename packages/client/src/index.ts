@@ -417,12 +417,19 @@ export function createNetworkedGame(options: {
         content: DEFAULT_CONTENT_REGISTRY,
       });
       queuedBatches.clear();
-      fastForwardToTick(message.serverTick);
       status = {
         ...status,
         playerId: message.playerId,
         serverTick: message.serverTick,
       };
+
+      if (message.serverTick > world.tick) {
+        sendClientMessage({
+          type: "reconnect",
+          playerId: options.playerId,
+          lastTick: world.tick,
+        });
+      }
       return;
     }
 
@@ -451,16 +458,42 @@ export function createNetworkedGame(options: {
       return;
     }
 
+    if (message.type === "catchup") {
+      applyCatchup(message);
+      return;
+    }
+
     if (message.type === "resyncHard") {
       world = hydrateWorldFromSnapshot(message.snapshot, DEFAULT_CONTENT_REGISTRY);
       queuedBatches.clear();
     }
   }
 
-  function fastForwardToTick(tick: number): void {
-    while (world.tick < tick) {
-      runTick(world, createEmptyCommandBatch(world.tick));
+  function applyCatchup(message: Extract<ServerMessage, { type: "catchup" }>): void {
+    world = message.snapshot
+      ? hydrateWorldFromSnapshot(message.snapshot, DEFAULT_CONTENT_REGISTRY)
+      : createWorld({
+          config: world.config,
+          content: DEFAULT_CONTENT_REGISTRY,
+        });
+
+    queuedBatches.clear();
+
+    const catchupBatches = new Map(
+      message.commands.map((batch) => [batch.tick, batch])
+    );
+
+    while (world.tick < message.serverTick) {
+      runTick(
+        world,
+        catchupBatches.get(world.tick) ?? createEmptyCommandBatch(world.tick)
+      );
     }
+
+    status = {
+      ...status,
+      serverTick: message.serverTick,
+    };
   }
 
   function sendClientMessage(message: ClientMessage): void {

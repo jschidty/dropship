@@ -9,6 +9,22 @@ type DurableObjectNamespace = {
   get: (id: DurableObjectId) => DurableObjectStub;
 };
 
+type DurableObjectStorageListOptions = {
+  prefix?: string;
+};
+
+type DurableObjectStorage = {
+  get: <T = unknown>(key: string) => Promise<T | undefined>;
+  put: <T = unknown>(key: string, value: T) => Promise<void>;
+  list: <T = unknown>(
+    options?: DurableObjectStorageListOptions
+  ) => Promise<Map<string, T>>;
+};
+
+type DurableObjectState = {
+  storage: DurableObjectStorage;
+};
+
 type ExecutionContext = {
   waitUntil: (promise: Promise<unknown>) => void;
   passThroughOnException: () => void;

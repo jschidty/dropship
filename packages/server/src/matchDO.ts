@@ -3,6 +3,7 @@ import {
   PHASE_ONE_PLAYER_IDS,
   createMinimalSkirmishConfig,
   type ClientMessage,
+  type CatchupMessage,
   type CommandAckMessage,
   type CommandBatch,
   type ConnectionStatusMessage,
@@ -13,6 +14,10 @@ import {
   type SnapshotMessage,
 } from "@drop-ship/protocol";
 import { createCommandBuffer, type CommandBuffer } from "./commandBuffer";
+import {
+  createCommandLogStore,
+  type CommandLogStore,
+} from "./commandLogStore";
 import { createHashArbiter, type HashArbiter } from "./hashArbiter";
 import {
   createSnapshotStore,
@@ -20,6 +25,8 @@ import {
   type StoredSnapshot,
 } from "./snapshotStore";
 import { createTickLoop, type TickLoop } from "./tickLoop";
+
+const CURRENT_TICK_KEY = "match:currentTick";
 
 type MatchSession = {
   id: string;
@@ -29,31 +36,50 @@ type MatchSession = {
 
 export type MatchCoordinator = Readonly<{
   commandBuffer: CommandBuffer;
+  commandLogStore: CommandLogStore;
   hashArbiter: HashArbiter;
   snapshotStore: SnapshotStore;
   tickLoop: TickLoop;
   receive: (
     message: ClientMessage
-  ) => CommandAckMessage | DesyncMessage | StoredSnapshot | null;
+  ) => Promise<
+    CommandAckMessage | DesyncMessage | StoredSnapshot | CatchupMessage | null
+  >;
   nextTick: () => CommandBatch;
 }>;
 
+export type MatchCoordinatorOptions = Readonly<{
+  commandLeadTicks?: number;
+  initialTick?: number;
+  commandLogStore?: CommandLogStore;
+  snapshotStore?: SnapshotStore;
+}>;
+
 export function createMatchCoordinator(
-  commandLeadTicks = DEFAULT_COMMAND_LEAD_TICKS
+  options: MatchCoordinatorOptions | number = {}
 ): MatchCoordinator {
+  const optionBag: MatchCoordinatorOptions =
+    typeof options === "number" ? {} : options;
+  const commandLeadTicks =
+    typeof options === "number"
+      ? options
+      : optionBag.commandLeadTicks ?? DEFAULT_COMMAND_LEAD_TICKS;
   const commandBuffer = createCommandBuffer();
+  const commandLogStore = optionBag.commandLogStore ?? createCommandLogStore();
   const hashArbiter = createHashArbiter(PHASE_ONE_PLAYER_IDS);
-  const snapshotStore = createSnapshotStore();
+  const snapshotStore = optionBag.snapshotStore ?? createSnapshotStore();
   const tickLoop = createTickLoop({
+    initialTick: optionBag.initialTick,
     takeBatch: (tick) => commandBuffer.takeBatch(tick),
   });
 
   return {
     commandBuffer,
+    commandLogStore,
     hashArbiter,
     snapshotStore,
     tickLoop,
-    receive(message) {
+    async receive(message) {
       if (message.type === "command") {
         const executeTick = tickLoop.currentTick() + commandLeadTicks;
         return commandBuffer.schedule(executeTick, message);
@@ -67,6 +93,14 @@ export function createMatchCoordinator(
         return recordSnapshot(snapshotStore, message);
       }
 
+      if (message.type === "reconnect") {
+        return createCatchupMessage(
+          snapshotStore,
+          commandLogStore,
+          tickLoop.currentTick()
+        );
+      }
+
       return null;
     },
     nextTick() {
@@ -76,23 +110,58 @@ export function createMatchCoordinator(
 }
 
 export class MatchDurableObject {
-  private readonly coordinator = createMatchCoordinator();
+  private coordinator: MatchCoordinator | null = null;
   private readonly sessions = new Map<string, MatchSession>();
   private readonly config = createMinimalSkirmishConfig();
   private timerId: ReturnType<typeof setInterval> | null = null;
+  private broadcastingTick = false;
   private nextSessionId = 1;
 
-  fetch(request: Request): Response {
+  constructor(private readonly state?: DurableObjectState) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const coordinator = await this.getCoordinator();
     const url = new URL(request.url);
 
     if (url.pathname.endsWith("/ws")) {
-      return this.connect(request, url);
+      return this.connect(request, url, coordinator);
     }
 
-    return Response.json(this.readStatus());
+    return Response.json(this.readStatus(coordinator));
   }
 
-  private connect(request: Request, url: URL): Response {
+  private async getCoordinator(): Promise<MatchCoordinator> {
+    if (this.coordinator) {
+      return this.coordinator;
+    }
+
+    const storage = this.state?.storage;
+    const initialTick = (await storage?.get<number>(CURRENT_TICK_KEY)) ?? 0;
+
+    this.coordinator = createMatchCoordinator({
+      initialTick,
+      commandLogStore: createCommandLogStore(storage),
+      snapshotStore: createSnapshotStore({
+        storage,
+      }),
+    });
+
+    return this.coordinator;
+  }
+
+  private requireCoordinator(): MatchCoordinator {
+    if (!this.coordinator) {
+      throw new Error("Match coordinator has not been initialized");
+    }
+
+    return this.coordinator;
+  }
+
+  private connect(
+    request: Request,
+    url: URL,
+    coordinator: MatchCoordinator
+  ): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
@@ -124,14 +193,14 @@ export class MatchDurableObject {
     this.send(session, {
       type: "matchStart",
       playerId,
-      serverTick: this.coordinator.tickLoop.currentTick(),
+      serverTick: coordinator.tickLoop.currentTick(),
       config: this.config,
     });
     this.broadcastConnectionStatus();
     this.updateTicking();
 
     server.addEventListener("message", (event: MessageEvent) => {
-      this.receiveSocketMessage(session.id, event.data);
+      void this.receiveSocketMessage(session.id, event.data);
     });
     server.addEventListener("close", () => {
       this.disconnect(session.id);
@@ -146,7 +215,10 @@ export class MatchDurableObject {
     });
   }
 
-  private receiveSocketMessage(sessionId: string, data: unknown): void {
+  private async receiveSocketMessage(
+    sessionId: string,
+    data: unknown
+  ): Promise<void> {
     const session = this.sessions.get(sessionId);
 
     if (!session || typeof data !== "string") {
@@ -160,10 +232,23 @@ export class MatchDurableObject {
       return;
     }
 
-    const result = this.coordinator.receive({
-      ...message,
-      playerId: session.playerId,
-    });
+    let result:
+      | CommandAckMessage
+      | DesyncMessage
+      | StoredSnapshot
+      | CatchupMessage
+      | null;
+
+    try {
+      const coordinator = await this.getCoordinator();
+      result = await coordinator.receive({
+        ...message,
+        playerId: session.playerId,
+      });
+    } catch {
+      this.sendError(session, "server-error");
+      return;
+    }
 
     if (!result) {
       return;
@@ -179,6 +264,11 @@ export class MatchDurableObject {
     }
 
     if (result.type === "commandAck") {
+      this.send(session, result);
+      return;
+    }
+
+    if (result.type === "catchup") {
       this.send(session, result);
     }
   }
@@ -199,7 +289,7 @@ export class MatchDurableObject {
 
     if (shouldRun && this.timerId === null) {
       this.timerId = setInterval(() => {
-        this.broadcastNextTick();
+        void this.broadcastNextTick();
       }, 1000 / 30);
       this.broadcastConnectionStatus();
       return;
@@ -212,15 +302,33 @@ export class MatchDurableObject {
     }
   }
 
-  private broadcastNextTick(): void {
-    const batch = this.coordinator.nextTick();
-    this.broadcast({
-      type: "tickCommands",
-      batch,
-    });
+  private async broadcastNextTick(): Promise<void> {
+    if (this.broadcastingTick) {
+      return;
+    }
 
-    if (this.coordinator.tickLoop.currentTick() % 30 === 0) {
-      this.broadcastConnectionStatus();
+    this.broadcastingTick = true;
+
+    try {
+      const coordinator = await this.getCoordinator();
+      const batch = coordinator.nextTick();
+
+      await coordinator.commandLogStore.record(batch);
+      await this.state?.storage.put(
+        CURRENT_TICK_KEY,
+        coordinator.tickLoop.currentTick()
+      );
+
+      this.broadcast({
+        type: "tickCommands",
+        batch,
+      });
+
+      if (coordinator.tickLoop.currentTick() % 30 === 0) {
+        this.broadcastConnectionStatus();
+      }
+    } finally {
+      this.broadcastingTick = false;
     }
   }
 
@@ -231,7 +339,7 @@ export class MatchDurableObject {
   private createConnectionStatus(): ConnectionStatusMessage {
     return {
       type: "connectionStatus",
-      serverTick: this.coordinator.tickLoop.currentTick(),
+      serverTick: this.requireCoordinator().tickLoop.currentTick(),
       running: this.timerId !== null,
       players: PHASE_ONE_PLAYER_IDS.map((playerId) => ({
         playerId,
@@ -272,12 +380,12 @@ export class MatchDurableObject {
     }
   }
 
-  private readStatus() {
+  private readStatus(coordinator: MatchCoordinator) {
     return {
       status: "match-do",
-      tick: this.coordinator.tickLoop.currentTick(),
+      tick: coordinator.tickLoop.currentTick(),
       running: this.timerId !== null,
-      scheduledTicks: this.coordinator.commandBuffer.peekScheduledTicks(),
+      scheduledTicks: coordinator.commandBuffer.peekScheduledTicks(),
       sessions: [...this.sessions.values()]
         .map((session) => ({
           id: session.id,
@@ -299,11 +407,29 @@ function recordHash(
   return hashArbiter.record(message);
 }
 
-function recordSnapshot(
+async function recordSnapshot(
   snapshotStore: SnapshotStore,
   message: SnapshotMessage
-): StoredSnapshot {
+): Promise<StoredSnapshot> {
   return snapshotStore.write(message.playerId, message.snapshot);
+}
+
+async function createCatchupMessage(
+  snapshotStore: SnapshotStore,
+  commandLogStore: CommandLogStore,
+  serverTick: number
+): Promise<CatchupMessage> {
+  const latestSnapshot = await snapshotStore.latestAtOrBefore(serverTick);
+  const snapshotTick = latestSnapshot?.tick ?? 0;
+  const commands = await commandLogStore.readRange(snapshotTick, serverTick);
+
+  return {
+    type: "catchup",
+    serverTick,
+    snapshotTick,
+    snapshot: latestSnapshot?.snapshot ?? null,
+    commands,
+  };
 }
 
 function parsePlayerId(value: string | null): PlayerId | null {
@@ -320,7 +446,8 @@ function parseClientMessage(data: string): ClientMessage | null {
       parsed.type === "ready" ||
       parsed.type === "command" ||
       parsed.type === "hash" ||
-      parsed.type === "snapshot"
+      parsed.type === "snapshot" ||
+      parsed.type === "reconnect"
     ) {
       return parsed as ClientMessage;
     }

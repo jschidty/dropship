@@ -30,11 +30,18 @@ export type SnapshotMessage = Readonly<{
   snapshot: CompactSimSnapshot;
 }>;
 
+export type ReconnectMessage = Readonly<{
+  type: "reconnect";
+  playerId: PlayerId;
+  lastTick: number;
+}>;
+
 export type ClientMessage =
   | ReadyMessage
   | CommandMessage
   | HashMessage
-  | SnapshotMessage;
+  | SnapshotMessage
+  | ReconnectMessage;
 
 export type MatchStartMessage = Readonly<{
   type: "matchStart";
@@ -67,6 +74,14 @@ export type ResyncHardMessage = Readonly<{
   snapshot: CompactSimSnapshot;
 }>;
 
+export type CatchupMessage = Readonly<{
+  type: "catchup";
+  serverTick: number;
+  snapshotTick: number;
+  snapshot: CompactSimSnapshot | null;
+  commands: readonly CommandBatch[];
+}>;
+
 export type ConnectionStatusMessage = Readonly<{
   type: "connectionStatus";
   serverTick: number;
@@ -83,4 +98,5 @@ export type ServerMessage =
   | CommandAckMessage
   | DesyncMessage
   | ResyncHardMessage
+  | CatchupMessage
   | ConnectionStatusMessage;

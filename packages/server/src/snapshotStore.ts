@@ -11,16 +11,60 @@ export type StoredSnapshot = Readonly<{
 }>;
 
 export type SnapshotStore = {
-  write: (authorPlayerId: PlayerId, snapshot: CompactSimSnapshot) => StoredSnapshot;
-  latestAtOrBefore: (tick: number) => StoredSnapshot | null;
-  list: () => readonly StoredSnapshot[];
+  write: (
+    authorPlayerId: PlayerId,
+    snapshot: CompactSimSnapshot
+  ) => Promise<StoredSnapshot>;
+  latestAtOrBefore: (tick: number) => Promise<StoredSnapshot | null>;
+  list: () => Promise<readonly StoredSnapshot[]>;
 };
 
-export function createSnapshotStore(maxSnapshots = 10): SnapshotStore {
+export type CreateSnapshotStoreOptions = Readonly<{
+  maxSnapshots?: number;
+  storage?: DurableObjectStorage;
+}>;
+
+const SNAPSHOT_PREFIX = "snapshot:";
+
+export function createSnapshotStore(
+  options: CreateSnapshotStoreOptions = {}
+): SnapshotStore {
+  const maxSnapshots = options.maxSnapshots ?? 10;
+  const storage = options.storage;
   const snapshots: StoredSnapshot[] = [];
+  let loaded = false;
+
+  async function load(): Promise<void> {
+    if (loaded) {
+      return;
+    }
+
+    loaded = true;
+
+    if (!storage) {
+      return;
+    }
+
+    const stored = await storage.list<StoredSnapshot>({
+      prefix: SNAPSHOT_PREFIX,
+    });
+
+    snapshots.push(...stored.values());
+    pruneSnapshots();
+  }
+
+  function pruneSnapshots(): void {
+    snapshots.sort((a, b) => a.tick - b.tick);
+
+    while (snapshots.length > maxSnapshots) {
+      snapshots.shift();
+    }
+  }
 
   return {
-    write(authorPlayerId, snapshot) {
+    async write(authorPlayerId, snapshot) {
+      await load();
+
       const byteLength = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
 
       if (byteLength >= SNAPSHOT_MAX_BYTES) {
@@ -35,15 +79,15 @@ export function createSnapshotStore(maxSnapshots = 10): SnapshotStore {
       };
 
       snapshots.push(stored);
-      snapshots.sort((a, b) => a.tick - b.tick);
+      pruneSnapshots();
 
-      while (snapshots.length > maxSnapshots) {
-        snapshots.shift();
-      }
+      await storage?.put(snapshotKey(stored.tick), stored);
 
       return stored;
     },
-    latestAtOrBefore(tick) {
+    async latestAtOrBefore(tick) {
+      await load();
+
       for (let index = snapshots.length - 1; index >= 0; index -= 1) {
         if (snapshots[index].tick <= tick) {
           return snapshots[index];
@@ -52,8 +96,14 @@ export function createSnapshotStore(maxSnapshots = 10): SnapshotStore {
 
       return null;
     },
-    list() {
+    async list() {
+      await load();
+
       return snapshots.slice();
     },
   };
+}
+
+function snapshotKey(tick: number): string {
+  return `${SNAPSHOT_PREFIX}${tick.toString().padStart(10, "0")}`;
 }

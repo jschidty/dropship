@@ -1,4 +1,5 @@
 export * from "./commandBuffer";
+export * from "./commandLogStore";
 export * from "./hashArbiter";
 export * from "./matchDO";
 export * from "./matchEnd";

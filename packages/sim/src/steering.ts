@@ -66,13 +66,21 @@ type UnitSpatialIndex = Readonly<{
 
 export function computePlanetGravityVector(
   point: Vec3Data,
-  planets: readonly GravitySource[]
+  planets: readonly GravitySource[],
+  target: MutableVec3 = createZero()
 ): Vec3Data {
-  const gravity = createZero();
+  target.x = 0;
+  target.y = 0;
+  target.z = 0;
 
   for (const planet of planets) {
-    const towardPlanet = subtract(planet.position, point);
-    const distanceSquaredValue = lengthSquared(towardPlanet);
+    const towardPlanetX = planet.position.x - point.x;
+    const towardPlanetY = planet.position.y - point.y;
+    const towardPlanetZ = planet.position.z - point.z;
+    const distanceSquaredValue =
+      towardPlanetX * towardPlanetX +
+      towardPlanetY * towardPlanetY +
+      towardPlanetZ * towardPlanetZ;
     const influenceRange = planet.radius * PLANET_GRAVITY_RANGE_MULTIPLIER;
 
     if (distanceSquaredValue > influenceRange * influenceRange) {
@@ -105,14 +113,17 @@ export function computePlanetGravityVector(
       continue;
     }
 
-    addScaled(gravity, scale(towardPlanet, 1 / distance), strength);
+    const scaledStrength = strength / distance;
+    target.x += towardPlanetX * scaledStrength;
+    target.y += towardPlanetY * scaledStrength;
+    target.z += towardPlanetZ * scaledStrength;
   }
 
-  return {
-    x: quantizeSimFloat(gravity.x),
-    y: quantizeSimFloat(gravity.y),
-    z: quantizeSimFloat(gravity.z),
-  };
+  target.x = quantizeSimFloat(target.x);
+  target.y = quantizeSimFloat(target.y);
+  target.z = quantizeSimFloat(target.z);
+
+  return target;
 }
 
 export function steerUnits(world: SimWorld, tick: number): void {
@@ -120,6 +131,7 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const planets = getPlanetsInStableOrder(world);
   const spatialIndex = createUnitSpatialIndex(units);
   const nextVelocities = new Map<number, Vec3Data>();
+  const gravityVector = createZero();
 
   for (const unit of units) {
     const desiredVelocity = createZero();
@@ -137,7 +149,7 @@ export function steerUnits(world: SimWorld, tick: number): void {
 
     addScaled(
       desiredVelocity,
-      computePlanetGravityVector(unit.position, planets),
+      computePlanetGravityVector(unit.position, planets, gravityVector),
       GRAVITY_STEERING_WEIGHT
     );
     addBoidForces(desiredVelocity, unit, spatialIndex);

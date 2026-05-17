@@ -127,10 +127,21 @@ function testPlanetGravityVector(): void {
     },
     []
   );
+  const reusableTarget = { x: 99, y: 99, z: 99 };
+  const reused = computePlanetGravityVector(
+    {
+      x: 80,
+      y: 0,
+      z: 0,
+    },
+    [planet],
+    reusableTarget
+  );
 
   assert.ok(near.x < 0);
   assert.ok(Math.abs(near.x) > Math.abs(far.x));
   assert.deepEqual(noPlanets, { x: 0, y: 0, z: 0 });
+  assert.equal(reused, reusableTarget);
 }
 
 function testDeterministicReplayHash(): void {

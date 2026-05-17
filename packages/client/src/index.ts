@@ -212,6 +212,7 @@ type GravityOverlay = {
   lines: THREE.LineSegments<THREE.BufferGeometry, THREE.ShaderMaterial>;
   sample: THREE.Vector3;
   gravityVector: THREE.Vector3;
+  gravityResult: { x: number; y: number; z: number };
   end: THREE.Vector3;
   headBase: THREE.Vector3;
   side: THREE.Vector3;
@@ -2014,6 +2015,7 @@ function createGravityOverlay(): GravityOverlay {
     lines,
     sample: new THREE.Vector3(),
     gravityVector: new THREE.Vector3(),
+    gravityResult: { x: 0, y: 0, z: 0 },
     end: new THREE.Vector3(),
     headBase: new THREE.Vector3(),
     side: new THREE.Vector3(),
@@ -2057,7 +2059,11 @@ function updateGravityOverlay(
         continue;
       }
 
-      const gravity = computePlanetGravityVector(sample, planets);
+      const gravity = computePlanetGravityVector(
+        sample,
+        planets,
+        overlay.gravityResult
+      );
       const gravityVector = overlay.gravityVector.set(
         gravity.x,
         gravity.y,

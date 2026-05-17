@@ -38,6 +38,8 @@ const PLANET_GRAVITY_RANGE_MULTIPLIER = 9;
 const PLANET_GRAVITY_MIN_DISTANCE_RATIO = 0.8;
 const BOID_NEIGHBOR_RADIUS = 34;
 const BOID_SEPARATION_RADIUS = 8;
+const BOID_SEPARATION_RADIUS_SQUARED =
+  BOID_SEPARATION_RADIUS * BOID_SEPARATION_RADIUS;
 const BOID_ALIGNMENT_WEIGHT = 0.34;
 const BOID_COHESION_WEIGHT = 0.22;
 const BOID_SEPARATION_WEIGHT = 0.9;
@@ -313,12 +315,6 @@ function addBoidForces(
         return;
       }
 
-      const distance = deterministicSqrt(distanceSquaredValue);
-
-      if (distance <= EPSILON) {
-        return;
-      }
-
       neighborCount += 1;
       cohesionX += other.position.x;
       cohesionY += other.position.y;
@@ -327,13 +323,18 @@ function addBoidForces(
       const velocitySquared = lengthSquared(other.velocity);
 
       if (velocitySquared > EPSILON) {
-        const inverseVelocityLength = 1 / deterministicSqrt(velocitySquared);
-        alignmentX += other.velocity.x * inverseVelocityLength;
-        alignmentY += other.velocity.y * inverseVelocityLength;
-        alignmentZ += other.velocity.z * inverseVelocityLength;
+        alignmentX += other.velocity.x;
+        alignmentY += other.velocity.y;
+        alignmentZ += other.velocity.z;
       }
 
-      if (distance < BOID_SEPARATION_RADIUS) {
+      if (distanceSquaredValue < BOID_SEPARATION_RADIUS_SQUARED) {
+        const distance = deterministicSqrt(distanceSquaredValue);
+
+        if (distance <= EPSILON) {
+          return;
+        }
+
         const separationStrength = deterministicSquare(
           (BOID_SEPARATION_RADIUS - distance) / BOID_SEPARATION_RADIUS
         );

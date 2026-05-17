@@ -1,6 +1,6 @@
 import {
   PHASE_ONE_SIM_HZ,
-  compareHandles,
+  type PlayerId,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -61,8 +61,20 @@ export type GravitySource = Readonly<{
 }>;
 
 type UnitSpatialIndex = Readonly<{
-  queryRadius: (center: Vec3Data, radius: number) => readonly SimUnit[];
+  forEachRadius: (
+    center: Vec3Data,
+    radius: number,
+    visitor: (unit: SimUnit) => void
+  ) => void;
+  forEachOwnerRadius: (
+    owner: PlayerId,
+    center: Vec3Data,
+    radius: number,
+    visitor: (unit: SimUnit) => void
+  ) => void;
 }>;
+
+type SpatialCells = Map<number, Map<number, Map<number, SimUnit[]>>>;
 
 export function computePlanetGravityVector(
   point: Vec3Data,
@@ -130,7 +142,8 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const units = getUnitsInStableOrder(world);
   const planets = getPlanetsInStableOrder(world);
   const spatialIndex = createUnitSpatialIndex(units);
-  const nextVelocities = new Map<number, Vec3Data>();
+  const nextVelocities: Vec3Data[] = [];
+  const colliderRadii = new Map<number, number>();
   const gravityVector = createZero();
 
   for (const unit of units) {
@@ -153,11 +166,17 @@ export function steerUnits(world: SimWorld, tick: number): void {
       GRAVITY_STEERING_WEIGHT
     );
     addBoidForces(desiredVelocity, unit, spatialIndex);
-    addObjectAvoidance(desiredVelocity, unit, world, planets, spatialIndex);
+    addObjectAvoidance(
+      desiredVelocity,
+      unit,
+      world,
+      planets,
+      spatialIndex,
+      colliderRadii
+    );
 
     const limitedDesired = limitLength(desiredVelocity, UNIT_MAX_SPEED);
-    nextVelocities.set(
-      unit.runtimeEntityId,
+    nextVelocities.push(
       approachVelocity(
         unit.velocity,
         limitedDesired,
@@ -166,8 +185,8 @@ export function steerUnits(world: SimWorld, tick: number): void {
     );
   }
 
-  for (const unit of units) {
-    unit.velocity = nextVelocities.get(unit.runtimeEntityId) ?? unit.velocity;
+  for (let index = 0; index < units.length; index += 1) {
+    units[index].velocity = nextVelocities[index] ?? units[index].velocity;
   }
 }
 
@@ -264,76 +283,93 @@ function addBoidForces(
   unit: SimUnit,
   spatialIndex: UnitSpatialIndex
 ): void {
-  const separation = createZero();
-  const alignment = createZero();
-  const cohesion = createZero();
+  let separationX = 0;
+  let separationY = 0;
+  let separationZ = 0;
+  let alignmentX = 0;
+  let alignmentY = 0;
+  let alignmentZ = 0;
+  let cohesionX = 0;
+  let cohesionY = 0;
+  let cohesionZ = 0;
   let neighborCount = 0;
 
-  for (const other of spatialIndex.queryRadius(
+  spatialIndex.forEachOwnerRadius(
+    unit.owner,
     unit.position,
-    BOID_NEIGHBOR_RADIUS
-  )) {
-    if (other === unit || other.owner !== unit.owner) {
-      continue;
-    }
+    BOID_NEIGHBOR_RADIUS,
+    (other) => {
+      if (other === unit) {
+        return;
+      }
 
-    const offset = subtract(other.position, unit.position);
-    const distance = length(offset);
+      const offsetX = other.position.x - unit.position.x;
+      const offsetY = other.position.y - unit.position.y;
+      const offsetZ = other.position.z - unit.position.z;
+      const distanceSquaredValue =
+        offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
 
-    if (distance <= EPSILON) {
-      continue;
-    }
+      if (distanceSquaredValue <= EPSILON) {
+        return;
+      }
 
-    neighborCount += 1;
-    add(cohesion, other.position);
+      const distance = deterministicSqrt(distanceSquaredValue);
 
-    if (lengthSquared(other.velocity) > EPSILON) {
-      add(alignment, normalize(other.velocity));
-    }
+      if (distance <= EPSILON) {
+        return;
+      }
 
-    if (distance < BOID_SEPARATION_RADIUS) {
-      addScaled(
-        separation,
-        normalize(scale(offset, -1)),
-        deterministicSquare(
+      neighborCount += 1;
+      cohesionX += other.position.x;
+      cohesionY += other.position.y;
+      cohesionZ += other.position.z;
+
+      const velocitySquared = lengthSquared(other.velocity);
+
+      if (velocitySquared > EPSILON) {
+        const inverseVelocityLength = 1 / deterministicSqrt(velocitySquared);
+        alignmentX += other.velocity.x * inverseVelocityLength;
+        alignmentY += other.velocity.y * inverseVelocityLength;
+        alignmentZ += other.velocity.z * inverseVelocityLength;
+      }
+
+      if (distance < BOID_SEPARATION_RADIUS) {
+        const separationStrength = deterministicSquare(
           (BOID_SEPARATION_RADIUS - distance) / BOID_SEPARATION_RADIUS
-        )
-      );
+        );
+        const inverseDistance = 1 / distance;
+        separationX -= offsetX * inverseDistance * separationStrength;
+        separationY -= offsetY * inverseDistance * separationStrength;
+        separationZ -= offsetZ * inverseDistance * separationStrength;
+      }
     }
-  }
+  );
 
   if (neighborCount === 0) {
     return;
   }
 
-  if (lengthSquared(alignment) > EPSILON) {
-    addScaled(
-      desiredVelocity,
-      scale(normalize(alignment), UNIT_CRUISE_SPEED),
-      BOID_ALIGNMENT_WEIGHT
-    );
-  }
-
-  addScaled(
+  addNormalizedScaled(
     desiredVelocity,
-    scale(
-      normalize({
-        x: cohesion.x / neighborCount - unit.position.x,
-        y: cohesion.y / neighborCount - unit.position.y,
-        z: cohesion.z / neighborCount - unit.position.z,
-      }),
-      UNIT_CRUISE_SPEED
-    ),
-    BOID_COHESION_WEIGHT
+    alignmentX,
+    alignmentY,
+    alignmentZ,
+    UNIT_CRUISE_SPEED * BOID_ALIGNMENT_WEIGHT
   );
-
-  if (lengthSquared(separation) > EPSILON) {
-    addScaled(
-      desiredVelocity,
-      scale(normalize(separation), UNIT_MAX_SPEED),
-      BOID_SEPARATION_WEIGHT
-    );
-  }
+  addNormalizedScaled(
+    desiredVelocity,
+    cohesionX / neighborCount - unit.position.x,
+    cohesionY / neighborCount - unit.position.y,
+    cohesionZ / neighborCount - unit.position.z,
+    UNIT_CRUISE_SPEED * BOID_COHESION_WEIGHT
+  );
+  addNormalizedScaled(
+    desiredVelocity,
+    separationX,
+    separationY,
+    separationZ,
+    UNIT_MAX_SPEED * BOID_SEPARATION_WEIGHT
+  );
 }
 
 function addObjectAvoidance(
@@ -341,119 +377,230 @@ function addObjectAvoidance(
   unit: SimUnit,
   world: SimWorld,
   planets: readonly SimPlanet[],
-  spatialIndex: UnitSpatialIndex
+  spatialIndex: UnitSpatialIndex,
+  colliderRadii: Map<number, number>
 ): void {
-  const avoidance = createZero();
+  let avoidanceX = 0;
+  let avoidanceY = 0;
+  let avoidanceZ = 0;
 
   for (const planet of planets) {
-    const offset = subtract(unit.position, planet.position);
-    const distance = length(offset);
+    const offsetX = unit.position.x - planet.position.x;
+    const offsetY = unit.position.y - planet.position.y;
+    const offsetZ = unit.position.z - planet.position.z;
+    const distanceSquaredValue =
+      offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
     const avoidDistance = planet.radius + PLANET_AVOIDANCE_MARGIN;
 
-    if (distance > avoidDistance || distance <= EPSILON) {
+    if (
+      distanceSquaredValue > avoidDistance * avoidDistance ||
+      distanceSquaredValue <= EPSILON
+    ) {
       continue;
     }
 
-    addScaled(
-      avoidance,
-      normalize(offset),
+    const distance = deterministicSqrt(distanceSquaredValue);
+    const strength =
       deterministicSquare((avoidDistance - distance) / avoidDistance) *
-        PLANET_AVOIDANCE_WEIGHT
-    );
+      PLANET_AVOIDANCE_WEIGHT;
+    const scaledStrength = strength / distance;
+    avoidanceX += offsetX * scaledStrength;
+    avoidanceY += offsetY * scaledStrength;
+    avoidanceZ += offsetZ * scaledStrength;
   }
 
-  for (const other of spatialIndex.queryRadius(unit.position, SHIP_AVOIDANCE_RADIUS)) {
+  const ownRadius = readColliderRadius(world, colliderRadii, unit.templateId);
+
+  spatialIndex.forEachRadius(unit.position, SHIP_AVOIDANCE_RADIUS, (other) => {
     if (other === unit) {
-      continue;
+      return;
     }
 
-    const ownRadius = world.content.getUnitTemplate(unit.templateId).colliderRadius;
-    const otherRadius = world.content.getUnitTemplate(other.templateId).colliderRadius;
-    const avoidDistance = Math.max(SHIP_AVOIDANCE_RADIUS, ownRadius + otherRadius + 2.4);
-    const offset = subtract(unit.position, other.position);
-    const distance = length(offset);
-
-    if (distance > avoidDistance || distance <= EPSILON) {
-      continue;
-    }
-
-    addScaled(
-      avoidance,
-      normalize(offset),
-      deterministicSquare((avoidDistance - distance) / avoidDistance) *
-        SHIP_AVOIDANCE_WEIGHT
+    const otherRadius = readColliderRadius(
+      world,
+      colliderRadii,
+      other.templateId
     );
-  }
+    const avoidDistance = Math.max(
+      SHIP_AVOIDANCE_RADIUS,
+      ownRadius + otherRadius + 2.4
+    );
+    const offsetX = unit.position.x - other.position.x;
+    const offsetY = unit.position.y - other.position.y;
+    const offsetZ = unit.position.z - other.position.z;
+    const distanceSquaredValue =
+      offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
 
-  if (lengthSquared(avoidance) <= EPSILON) {
-    return;
-  }
+    if (
+      distanceSquaredValue > avoidDistance * avoidDistance ||
+      distanceSquaredValue <= EPSILON
+    ) {
+      return;
+    }
 
-  addScaled(
+    const distance = deterministicSqrt(distanceSquaredValue);
+    const strength =
+      deterministicSquare((avoidDistance - distance) / avoidDistance) *
+      SHIP_AVOIDANCE_WEIGHT;
+    const scaledStrength = strength / distance;
+    avoidanceX += offsetX * scaledStrength;
+    avoidanceY += offsetY * scaledStrength;
+    avoidanceZ += offsetZ * scaledStrength;
+  });
+
+  addNormalizedScaled(
     desiredVelocity,
-    scale(normalize(avoidance), UNIT_MAX_SPEED),
-    1
+    avoidanceX,
+    avoidanceY,
+    avoidanceZ,
+    UNIT_MAX_SPEED
   );
 }
 
 function createUnitSpatialIndex(units: readonly SimUnit[]): UnitSpatialIndex {
   if (units.length < SPATIAL_INDEX_MIN_UNITS) {
     return {
-      queryRadius(center, radius) {
+      forEachRadius(center, radius, visitor) {
         const radiusSquared = radius * radius;
-        return units.filter(
-          (unit) => distanceSquared(center, unit.position) <= radiusSquared
-        );
+
+        for (const unit of units) {
+          if (distanceSquared(center, unit.position) <= radiusSquared) {
+            visitor(unit);
+          }
+        }
+      },
+      forEachOwnerRadius(owner, center, radius, visitor) {
+        const radiusSquared = radius * radius;
+
+        for (const unit of units) {
+          if (
+            unit.owner === owner &&
+            distanceSquared(center, unit.position) <= radiusSquared
+          ) {
+            visitor(unit);
+          }
+        }
       },
     };
   }
 
   const cellSize = BOID_NEIGHBOR_RADIUS;
-  const cells = new Map<string, SimUnit[]>();
+  const cells: SpatialCells = new Map();
+  const ownerCells = new Map<PlayerId, SpatialCells>();
 
   for (const unit of units) {
-    const key = cellKey(unit.position, cellSize);
-    const cell = cells.get(key) ?? [];
-    cell.push(unit);
-    cells.set(key, cell);
-  }
+    const cellX = deterministicFloor(unit.position.x / cellSize);
+    const cellY = deterministicFloor(unit.position.y / cellSize);
+    const cellZ = deterministicFloor(unit.position.z / cellSize);
+    addUnitToSpatialCells(cells, cellX, cellY, cellZ, unit);
 
-  for (const cell of cells.values()) {
-    cell.sort((a, b) => compareHandles(a.handle, b.handle));
+    const ownerCellMap = ownerCells.get(unit.owner) ?? new Map();
+    addUnitToSpatialCells(ownerCellMap, cellX, cellY, cellZ, unit);
+    ownerCells.set(unit.owner, ownerCellMap);
   }
 
   return {
-    queryRadius(center, radius) {
-      const radiusSquared = radius * radius;
-      const minX = deterministicFloor((center.x - radius) / cellSize);
-      const maxX = deterministicFloor((center.x + radius) / cellSize);
-      const minY = deterministicFloor((center.y - radius) / cellSize);
-      const maxY = deterministicFloor((center.y + radius) / cellSize);
-      const minZ = deterministicFloor((center.z - radius) / cellSize);
-      const maxZ = deterministicFloor((center.z + radius) / cellSize);
-      const result: SimUnit[] = [];
+    forEachRadius(center, radius, visitor) {
+      forEachCellRadius(cells, cellSize, center, radius, visitor);
+    },
+    forEachOwnerRadius(owner, center, radius, visitor) {
+      const ownerCellMap = ownerCells.get(owner);
 
-      for (let x = minX; x <= maxX; x += 1) {
-        for (let y = minY; y <= maxY; y += 1) {
-          for (let z = minZ; z <= maxZ; z += 1) {
-            const cell = cells.get(`${x}:${y}:${z}`);
+      if (!ownerCellMap) {
+        return;
+      }
 
-            if (!cell) {
-              continue;
-            }
+      forEachCellRadius(ownerCellMap, cellSize, center, radius, visitor);
+    },
+  };
+}
 
-            for (const unit of cell) {
-              if (distanceSquared(center, unit.position) <= radiusSquared) {
-                result.push(unit);
-              }
-            }
+function addUnitToSpatialCells(
+  cells: SpatialCells,
+  x: number,
+  y: number,
+  z: number,
+  unit: SimUnit
+): void {
+  let xCells = cells.get(x);
+
+  if (!xCells) {
+    xCells = new Map();
+    cells.set(x, xCells);
+  }
+
+  let yCells = xCells.get(y);
+
+  if (!yCells) {
+    yCells = new Map();
+    xCells.set(y, yCells);
+  }
+
+  const cell = yCells.get(z) ?? [];
+  cell.push(unit);
+  yCells.set(z, cell);
+}
+
+function forEachCellRadius(
+  cells: SpatialCells,
+  cellSize: number,
+  center: Vec3Data,
+  radius: number,
+  visitor: (unit: SimUnit) => void
+): void {
+  const radiusSquared = radius * radius;
+  const minX = deterministicFloor((center.x - radius) / cellSize);
+  const maxX = deterministicFloor((center.x + radius) / cellSize);
+  const minY = deterministicFloor((center.y - radius) / cellSize);
+  const maxY = deterministicFloor((center.y + radius) / cellSize);
+  const minZ = deterministicFloor((center.z - radius) / cellSize);
+  const maxZ = deterministicFloor((center.z + radius) / cellSize);
+
+  for (let x = minX; x <= maxX; x += 1) {
+    const xCells = cells.get(x);
+
+    if (!xCells) {
+      continue;
+    }
+
+    for (let y = minY; y <= maxY; y += 1) {
+      const yCells = xCells.get(y);
+
+      if (!yCells) {
+        continue;
+      }
+
+      for (let z = minZ; z <= maxZ; z += 1) {
+        const cell = yCells.get(z);
+
+        if (!cell) {
+          continue;
+        }
+
+        for (const unit of cell) {
+          if (distanceSquared(center, unit.position) <= radiusSquared) {
+            visitor(unit);
           }
         }
       }
+    }
+  }
+}
 
-      return result.sort((a, b) => compareHandles(a.handle, b.handle));
-    },
-  };
+function readColliderRadius(
+  world: SimWorld,
+  cache: Map<number, number>,
+  templateId: number
+): number {
+  const cached = cache.get(templateId);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const radius = world.content.getUnitTemplate(templateId).colliderRadius;
+  cache.set(templateId, radius);
+  return radius;
 }
 
 function findNearestPlanet(
@@ -507,12 +654,6 @@ function forwardFromRotation(unit: SimUnit): Vec3Data {
   };
 }
 
-function cellKey(position: Vec3Data, cellSize: number): string {
-  return `${deterministicFloor(position.x / cellSize)}:${deterministicFloor(
-    position.y / cellSize
-  )}:${deterministicFloor(position.z / cellSize)}`;
-}
-
 function createZero(): MutableVec3 {
   return {
     x: 0,
@@ -521,16 +662,29 @@ function createZero(): MutableVec3 {
   };
 }
 
-function add(target: MutableVec3, vector: Vec3Data): void {
-  target.x += vector.x;
-  target.y += vector.y;
-  target.z += vector.z;
-}
-
 function addScaled(target: MutableVec3, vector: Vec3Data, scalar: number): void {
   target.x += vector.x * scalar;
   target.y += vector.y * scalar;
   target.z += vector.z * scalar;
+}
+
+function addNormalizedScaled(
+  target: MutableVec3,
+  x: number,
+  y: number,
+  z: number,
+  scalar: number
+): void {
+  const vectorLengthSquared = x * x + y * y + z * z;
+
+  if (vectorLengthSquared <= EPSILON) {
+    return;
+  }
+
+  const scaled = scalar / deterministicSqrt(vectorLengthSquared);
+  target.x += x * scaled;
+  target.y += y * scaled;
+  target.z += z * scaled;
 }
 
 function subtract(a: Vec3Data, b: Vec3Data): Vec3Data {

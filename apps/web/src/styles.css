@@ -35,48 +35,64 @@ canvas {
   touch-action: none;
 }
 
-.game-hud {
+.game-stats {
   position: absolute;
-  top: 18px;
-  left: 18px;
-  min-width: 220px;
-  padding: 12px 14px;
-  border: 1px solid rgb(255 255 255 / 16%);
-  border-radius: 8px;
-  background: rgb(5 3 10 / 72%);
-  box-shadow: 0 18px 42px rgb(0 0 0 / 26%);
-  color: #f3f7fb;
-  font-size: 13px;
-  line-height: 1.45;
-  backdrop-filter: blur(14px);
+  right: 14px;
+  bottom: 10px;
+  left: 14px;
+  z-index: 3;
+  color: rgb(236 245 255 / 76%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  pointer-events: none;
+  text-align: center;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 80%);
 }
 
-.hud-title {
-  margin-bottom: 6px;
-  color: #ffffff;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.game-hud ul {
-  display: grid;
-  gap: 4px;
-  padding: 0;
-  margin: 8px 0 0;
-  list-style: none;
-}
-
-.game-hud li {
+.camera-presets {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 4;
   display: flex;
-  gap: 8px;
-  align-items: center;
-  white-space: nowrap;
+  gap: 6px;
 }
 
-.game-hud li span {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: var(--unit-color);
-  box-shadow: 0 0 14px var(--unit-color);
+.camera-preset-button {
+  min-width: 48px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgb(219 235 255 / 18%);
+  border-radius: 6px;
+  background: rgb(5 8 18 / 52%);
+  color: rgb(238 246 255 / 82%);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.camera-preset-button:hover,
+.camera-preset-button.is-active {
+  border-color: rgb(255 226 103 / 62%);
+  background: rgb(28 27 34 / 76%);
+  color: #fff4bc;
+}
+
+.selection-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  border: 1px solid rgb(255 224 76 / 88%);
+  background: rgb(255 224 76 / 12%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 28%);
+  pointer-events: none;
+  will-change: transform, width, height;
+}
+
+.selection-box[hidden] {
+  display: none;
 }

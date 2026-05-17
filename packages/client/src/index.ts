@@ -91,17 +91,71 @@ export type MountMinimalGameOptions = Readonly<{
   matchId?: string;
   serverUrl?: string;
   network?: boolean;
+  stressUnits?: number;
 }>;
 
-type UnitProxy = {
-  sprite: THREE.Sprite;
-  material: THREE.SpriteMaterial;
-  selectionRing: THREE.Sprite;
-  selectionMaterial: THREE.SpriteMaterial;
+type MutableUnitViewModel = {
+  handle: EntityHandle;
+  key: string;
+  label: string;
+  owner: PlayerId;
+  ownerName: string;
+  color: string;
+  position: THREE.Vector3;
+  prevPosition: THREE.Vector3;
+  rotation: THREE.Quaternion;
+  health: {
+    current: number;
+    max: number;
+  };
+};
+
+type MutablePlanetViewModel = {
+  key: string;
+  label: string;
+  position: THREE.Vector3;
+  mass: number;
+  radius: number;
+};
+
+type ViewModelCache = {
+  world: SimWorld | null;
+  unitTick: number;
+  planetTick: number;
+  units: MutableUnitViewModel[];
+  planets: MutablePlanetViewModel[];
+};
+
+type HashCache = {
+  world: SimWorld | null;
+  tick: number;
+  hash: string;
+};
+
+type UnitBatchRenderer = {
+  root: THREE.Group;
+  geometry: THREE.PlaneGeometry;
+  selectionMaterial: THREE.MeshBasicMaterial;
+  selectionMesh: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null;
+  selectionCapacity: number;
+  symbolMaterials: Map<PlayerId, THREE.MeshBasicMaterial>;
+  symbolMeshes: Map<
+    PlayerId,
+    THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  >;
+  symbolCapacities: Map<PlayerId, number>;
+  symbolCounts: Map<PlayerId, number>;
+  matrix: THREE.Matrix4;
+  billboardQuaternion: THREE.Quaternion;
+  iconQuaternion: THREE.Quaternion;
+  localRotation: THREE.Quaternion;
+  instancePosition: THREE.Vector3;
+  scale: THREE.Vector3;
 };
 
 type PlanetProxy = {
   body: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  lastSeenFrame: number;
 };
 
 type SkyDome = Readonly<{
@@ -119,6 +173,29 @@ type FullscreenPass = Readonly<{
   geometry: THREE.PlaneGeometry;
 }>;
 
+type RenderScratch = {
+  focus: THREE.Vector3;
+  worldUp: THREE.Vector3;
+  horizontal: THREE.Vector3;
+  cameraOffset: THREE.Vector3;
+  pointer: THREE.Vector2;
+  raycaster: THREE.Raycaster;
+  rayTarget: THREE.Vector3;
+  tacticalPlaneNormal: THREE.Vector3;
+  tacticalPlane: THREE.Plane;
+  projected: THREE.Vector3;
+  sunPosition: THREE.Vector3;
+  cameraDirection: THREE.Vector3;
+  screenPosition: THREE.Vector2;
+  sunScreenPosition: THREE.Vector4;
+  sunViewDirection: THREE.Vector3;
+};
+
+type CameraPresetControls = Readonly<{
+  root: HTMLElement;
+  buttons: Record<CameraPreset, HTMLButtonElement>;
+}>;
+
 type CameraMode = "tactical" | "strategic";
 
 type CameraModeConfig = Readonly<{
@@ -131,17 +208,36 @@ type CameraModeConfig = Readonly<{
 
 type CameraControls = {
   mode: CameraMode;
+  preset: CameraPreset | null;
   yaw: number;
   pitch: number;
   viewHeights: Record<CameraMode, number>;
   isDragging: boolean;
+  dragMode: "camera" | "select" | null;
   pointerId: number | null;
+  startPointerX: number;
+  startPointerY: number;
   lastPointerX: number;
   lastPointerY: number;
   dragDistancePx: number;
 };
 
+type CameraPreset = "top" | "left" | "isometric";
+
 const DEFAULT_LOCAL_PLAYER_ID = 1 satisfies PlayerId;
+const MAX_RENDER_PIXEL_RATIO = 1.25;
+const MIN_RENDER_PIXEL_RATIO = 1;
+const HUD_UPDATE_INTERVAL_MS = 500;
+const PERF_DATASET_INTERVAL_MS = 500;
+const PIXEL_RATIO_ADJUST_INTERVAL_MS = 1500;
+const PIXEL_RATIO_STEP = 0.1;
+const LOW_FPS_PIXEL_RATIO_THRESHOLD = 55;
+const MAX_SIM_STEPS_PER_FRAME = 5;
+const MAX_SIM_FRAME_DELTA_MS = 250;
+const INITIAL_INSTANCE_CAPACITY = 64;
+const UNIT_SYMBOL_SCALE = 2.4;
+const SELECTION_RING_SCALE = 4;
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
 const SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
 const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
@@ -160,16 +256,39 @@ const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
     pitch: 1,
   },
 };
+const CAMERA_PRESETS: Record<
+  CameraPreset,
+  Readonly<{ label: string; yaw: number; pitch: number }>
+> = {
+  top: {
+    label: "Top",
+    yaw: 0,
+    pitch: 1.48,
+  },
+  left: {
+    label: "Left",
+    yaw: -Math.PI / 2,
+    pitch: 0.42,
+  },
+  isometric: {
+    label: "Iso",
+    yaw: 0.55,
+    pitch: CAMERA_MODES.strategic.pitch,
+  },
+};
 
 export function createMinimalLocalGame(
-  playerId: PlayerId = DEFAULT_LOCAL_PLAYER_ID
+  playerId: PlayerId = DEFAULT_LOCAL_PLAYER_ID,
+  options: { stressUnits?: number } = {}
 ): LocalGameRuntime {
-  const config = createMinimalSkirmishConfig();
+  const config = createLocalMatchConfig(options.stressUnits);
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
   });
   const pendingCommands: ScheduledCommand[] = [];
+  const viewModelCache = createViewModelCache();
+  const hashCache = createHashCache();
   let clientSeq = 0;
 
   return {
@@ -214,13 +333,13 @@ export function createMinimalLocalGame(
       });
     },
     readUnits() {
-      return readUnitViewModels(world);
+      return readCachedUnitViewModels(world, viewModelCache);
     },
     readPlanets() {
-      return readPlanetViewModels(world);
+      return readCachedPlanetViewModels(world, viewModelCache);
     },
     readHash() {
-      return hashWorld(world);
+      return readCachedHash(world, hashCache);
     },
     readSnapshot() {
       return serializeWorld(world);
@@ -259,6 +378,8 @@ export function createNetworkedGame(options: {
     matchId: options.matchId,
     running: false,
   };
+  const viewModelCache = createViewModelCache();
+  const hashCache = createHashCache();
 
   const runtime: LocalGameRuntime = {
     playerId: options.playerId,
@@ -284,7 +405,7 @@ export function createNetworkedGame(options: {
             type: "hash",
             playerId: options.playerId,
             tick: world.tick,
-            hash: hashWorld(world),
+            hash: readCachedHash(world, hashCache),
           });
         }
 
@@ -329,13 +450,13 @@ export function createNetworkedGame(options: {
       });
     },
     readUnits() {
-      return readUnitViewModels(world);
+      return readCachedUnitViewModels(world, viewModelCache);
     },
     readPlanets() {
-      return readPlanetViewModels(world);
+      return readCachedPlanetViewModels(world, viewModelCache);
     },
     readHash() {
-      return hashWorld(world);
+      return readCachedHash(world, hashCache);
     },
     readSnapshot() {
       return serializeWorld(world);
@@ -534,6 +655,192 @@ function createMatchWebSocketUrl(
   return url.toString();
 }
 
+function createLocalMatchConfig(stressUnits?: number): MatchConfig {
+  const config = createMinimalSkirmishConfig();
+  const totalUnits = Math.max(0, Math.floor(stressUnits ?? 0));
+
+  if (totalUnits <= config.initialUnits.length) {
+    return config;
+  }
+
+  const templateId = config.initialUnits[0]?.templateId ?? 1;
+  const initialUnits = [...config.initialUnits];
+
+  for (let index = initialUnits.length; index < totalUnits; index += 1) {
+    const owner: PlayerId = index % 2 === 0 ? 1 : 2;
+    const ring = Math.floor(index / 48);
+    const angle = index * 2.399963229728653;
+    const radius = 42 + ring * 7 + (index % 7) * 0.4;
+
+    initialUnits.push({
+      owner,
+      templateId,
+      position: {
+        x: Math.cos(angle) * radius,
+        y: ((index % 9) - 4) * 1.4,
+        z: -60 + Math.sin(angle) * radius,
+      },
+    });
+  }
+
+  return {
+    ...config,
+    matchId: `${config.matchId}-stress-${totalUnits}`,
+    initialUnits,
+  };
+}
+
+function createViewModelCache(): ViewModelCache {
+  return {
+    world: null,
+    unitTick: -1,
+    planetTick: -1,
+    units: [],
+    planets: [],
+  };
+}
+
+function readCachedUnitViewModels(
+  world: SimWorld,
+  cache: ViewModelCache
+): readonly UnitViewModel[] {
+  if (cache.world !== world) {
+    cache.world = world;
+    cache.unitTick = -1;
+    cache.planetTick = -1;
+  }
+
+  if (cache.unitTick !== world.tick || cache.units.length !== world.units.length) {
+    syncUnitViewModels(cache.units, world);
+    cache.unitTick = world.tick;
+  }
+
+  return cache.units;
+}
+
+function syncUnitViewModels(
+  target: MutableUnitViewModel[],
+  world: SimWorld
+): void {
+  target.length = world.units.length;
+
+  for (let index = 0; index < world.units.length; index += 1) {
+    const unit = world.units[index];
+    const player = world.config.players.find((entry) => entry.id === unit.owner);
+    const template = world.content.getUnitTemplate(unit.templateId);
+    const key = handleKey(unit.handle);
+    let view = target[index];
+
+    if (!view || view.key !== key) {
+      view = {
+        handle: unit.handle,
+        key,
+        label: template.displayName,
+        owner: unit.owner,
+        ownerName: player?.name ?? `Player ${unit.owner}`,
+        color: player?.color ?? "#ffffff",
+        position: new THREE.Vector3(),
+        prevPosition: new THREE.Vector3(),
+        rotation: new THREE.Quaternion(),
+        health: {
+          current: unit.health.current,
+          max: unit.health.max,
+        },
+      };
+      target[index] = view;
+    }
+
+    view.handle = unit.handle;
+    view.label = template.displayName;
+    view.owner = unit.owner;
+    view.ownerName = player?.name ?? `Player ${unit.owner}`;
+    view.color = player?.color ?? "#ffffff";
+    view.position.set(unit.position.x, unit.position.y, unit.position.z);
+    view.prevPosition.set(
+      unit.prevPosition.x,
+      unit.prevPosition.y,
+      unit.prevPosition.z
+    );
+    view.rotation.set(
+      unit.rotation.x,
+      unit.rotation.y,
+      unit.rotation.z,
+      unit.rotation.w
+    );
+    view.health.current = unit.health.current;
+    view.health.max = unit.health.max;
+  }
+}
+
+function readCachedPlanetViewModels(
+  world: SimWorld,
+  cache: ViewModelCache
+): readonly PlanetViewModel[] {
+  if (cache.world !== world) {
+    cache.world = world;
+    cache.unitTick = -1;
+    cache.planetTick = -1;
+  }
+
+  if (
+    cache.planetTick !== world.tick ||
+    cache.planets.length !== world.planets.length
+  ) {
+    syncPlanetViewModels(cache.planets, world);
+    cache.planetTick = world.tick;
+  }
+
+  return cache.planets;
+}
+
+function syncPlanetViewModels(
+  target: MutablePlanetViewModel[],
+  world: SimWorld
+): void {
+  target.length = world.planets.length;
+
+  for (let index = 0; index < world.planets.length; index += 1) {
+    const planet = world.planets[index];
+    const template = world.content.getPlanetTemplate(planet.templateId);
+    const key = handleKey(planet.handle);
+    let view = target[index];
+
+    if (!view || view.key !== key) {
+      view = {
+        key,
+        label: template.displayName,
+        position: new THREE.Vector3(),
+        mass: planet.mass,
+        radius: planet.radius,
+      };
+      target[index] = view;
+    }
+
+    view.label = template.displayName;
+    view.position.set(planet.position.x, planet.position.y, planet.position.z);
+    view.mass = planet.mass;
+    view.radius = planet.radius;
+  }
+}
+
+function createHashCache(): HashCache {
+  return {
+    world: null,
+    tick: -1,
+    hash: "",
+  };
+}
+
+function readCachedHash(world: SimWorld, cache: HashCache): string {
+  if (cache.world !== world || cache.tick !== world.tick) {
+    cache.world = world;
+    cache.tick = world.tick;
+    cache.hash = hashWorld(world);
+  }
+
+  return cache.hash;
+}
+
 export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
   return world.units.map((unit) => {
     const player = world.config.players.find((entry) => entry.id === unit.owner);
@@ -583,7 +890,9 @@ export function mountMinimalGame(
           playerId,
           serverUrl: options.serverUrl,
         })
-      : createMinimalLocalGame(playerId);
+      : createMinimalLocalGame(playerId, {
+          stressUnits: options.stressUnits,
+        });
   const scene = new THREE.Scene();
   const nebulaSkyDome = createNebulaSkyDome();
   const sunFlarePass = createSunFlarePass();
@@ -591,26 +900,33 @@ export function mountMinimalGame(
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
   const cameraControls: CameraControls = {
     mode: "strategic",
-    yaw: 0.55,
-    pitch: CAMERA_MODES.strategic.pitch,
+    preset: "isometric",
+    yaw: CAMERA_PRESETS.isometric.yaw,
+    pitch: CAMERA_PRESETS.isometric.pitch,
     viewHeights: {
       tactical: CAMERA_MODES.tactical.defaultViewHeight,
       strategic: CAMERA_MODES.strategic.defaultViewHeight,
     },
     isDragging: false,
+    dragMode: null,
     pointerId: null,
+    startPointerX: 0,
+    startPointerY: 0,
     lastPointerX: 0,
     lastPointerY: 0,
     dragDistancePx: 0,
   };
 
+  let activeRenderPixelRatio = getPreferredRenderPixelRatio();
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     logarithmicDepthBuffer: true,
+    powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(activeRenderPixelRatio);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.autoClear = false;
+  renderer.info.autoReset = false;
   renderer.setClearColor(0x01020a, 1);
   renderer.domElement.className = "game-canvas";
   container.appendChild(renderer.domElement);
@@ -619,11 +935,19 @@ export function mountMinimalGame(
   worldGroup.name = "sim-world";
   scene.add(worldGroup);
 
-  const proxies = new Map<string, UnitProxy>();
+  const unitBatches = createUnitBatchRenderer();
+  worldGroup.add(unitBatches.root);
   const planetProxies = new Map<string, PlanetProxy>();
+  const planetGeometry = new THREE.PlaneGeometry(1, 1);
+  const planetMaterial = createPlanetBillboardMaterial();
   const selectedUnitKeys = new Set<string>();
-  const hud = createHud(container);
+  const statsLayer = createStatsLayer(container);
+  const selectionBox = createSelectionBox(container);
+  const cameraPresetControls = createCameraPresetControls(container, (preset) => {
+    applyCameraPreset(cameraControls, preset);
+  });
   const renderResolution = new THREE.Vector2();
+  const scratch = createRenderScratch();
 
   scene.add(createLighting(SUN_DIRECTION));
   scene.add(createTacticalPlane());
@@ -631,6 +955,17 @@ export function mountMinimalGame(
   const startedAt = performance.now();
   let frameId = 0;
   let disposed = false;
+  let lastFrameAt = startedAt;
+  let estimatedFps = 60;
+  let observedSimHz = 0;
+  let simAccumulatorMs = 0;
+  let lastSimSampleAt = startedAt;
+  let simTicksSinceSample = 0;
+  let estimatedRenderMs = 0;
+  let lastHudUpdateAt = -HUD_UPDATE_INTERVAL_MS;
+  let lastPerfDatasetUpdateAt = -PERF_DATASET_INTERVAL_MS;
+  let lastPixelRatioAdjustAt = startedAt;
+  let renderFrameIndex = 0;
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.repeat) {
       return;
@@ -647,25 +982,21 @@ export function mountMinimalGame(
       selectedUnitKeys.clear();
 
       for (const unit of runtime.readUnits()) {
-          if (unit.owner === runtime.playerId) {
-            selectedUnitKeys.add(unit.key);
-          }
+        if (unit.owner === runtime.playerId) {
+          selectedUnitKeys.add(unit.key);
+        }
       }
 
-      renderCurrentFrame();
+      return;
+    }
+
+    if (key === "d") {
+      selectedUnitKeys.clear();
       return;
     }
 
     if (key === "2") {
       setCameraMode(cameraControls, "strategic");
-      applyCameraControls(
-        camera,
-        cameraControls,
-        container,
-        runtime.readUnits(),
-        runtime.readPlanets()
-      );
-      renderCurrentFrame();
       return;
     }
 
@@ -675,26 +1006,24 @@ export function mountMinimalGame(
         cameraControls,
         cameraControls.mode === "tactical" ? "strategic" : "tactical"
       );
-      applyCameraControls(
-        camera,
-        cameraControls,
-        container,
-        runtime.readUnits(),
-        runtime.readPlanets()
-      );
-      renderCurrentFrame();
     }
   };
   const handlePointerDown = (event: PointerEvent) => {
-    if (event.button !== 0) {
+    if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
       return;
     }
 
+    event.preventDefault();
     cameraControls.isDragging = true;
+    cameraControls.dragMode =
+      event.button !== 0 || event.altKey ? "camera" : "select";
     cameraControls.pointerId = event.pointerId;
+    cameraControls.startPointerX = event.clientX;
+    cameraControls.startPointerY = event.clientY;
     cameraControls.lastPointerX = event.clientX;
     cameraControls.lastPointerY = event.clientY;
     cameraControls.dragDistancePx = 0;
+    hideSelectionBox(selectionBox);
     renderer.domElement.setPointerCapture(event.pointerId);
   };
   const handlePointerMove = (event: PointerEvent) => {
@@ -707,9 +1036,28 @@ export function mountMinimalGame(
     cameraControls.dragDistancePx += Math.hypot(dx, dy);
     cameraControls.lastPointerX = event.clientX;
     cameraControls.lastPointerY = event.clientY;
-    cameraControls.yaw -= dx * 0.006;
-    cameraControls.pitch = clamp(cameraControls.pitch + dy * 0.004, 0.28, 1.38);
-    renderCurrentFrame();
+
+    if (cameraControls.dragMode === "camera") {
+      cameraControls.preset = null;
+      cameraControls.yaw -= dx * 0.006;
+      cameraControls.pitch = clamp(cameraControls.pitch + dy * 0.004, 0.28, 1.38);
+      updateCameraPresetControls(cameraPresetControls, cameraControls.preset);
+      return;
+    }
+
+    if (
+      cameraControls.dragMode === "select" &&
+      cameraControls.dragDistancePx > 5
+    ) {
+      updateSelectionBox(
+        selectionBox,
+        container,
+        cameraControls.startPointerX,
+        cameraControls.startPointerY,
+        event.clientX,
+        event.clientY
+      );
+    }
   };
   const handlePointerUp = (event: PointerEvent) => {
     if (cameraControls.pointerId !== event.pointerId) {
@@ -717,26 +1065,49 @@ export function mountMinimalGame(
     }
 
     const wasClick = cameraControls.dragDistancePx <= 5;
+    const dragMode = cameraControls.dragMode;
     cameraControls.isDragging = false;
+    cameraControls.dragMode = null;
     cameraControls.pointerId = null;
+    hideSelectionBox(selectionBox);
 
     if (renderer.domElement.hasPointerCapture(event.pointerId)) {
       renderer.domElement.releasePointerCapture(event.pointerId);
     }
 
-    if (
-      event.type === "pointerup" &&
-      wasClick &&
+    if (event.type !== "pointerup") {
+      return;
+    }
+
+    if (dragMode === "select" && !wasClick) {
+      selectOwnedUnitsInBox(
+        selectedUnitKeys,
+        runtime.readUnits(),
+        runtime.playerId,
+        camera,
+        renderer.domElement,
+        cameraControls.startPointerX,
+        cameraControls.startPointerY,
+        event.clientX,
+        event.clientY,
+        scratch
+      );
+      return;
+    }
+
+    if (dragMode === "select" && wasClick) {
       issueMoveCommandFromClick(
         event,
         renderer.domElement,
         camera,
         runtime,
-        selectedUnitKeys
-      )
-    ) {
-      renderCurrentFrame();
+        selectedUnitKeys,
+        scratch
+      );
     }
+  };
+  const handleContextMenu = (event: MouseEvent) => {
+    event.preventDefault();
   };
   const handleWheel = (event: WheelEvent) => {
     event.preventDefault();
@@ -748,7 +1119,6 @@ export function mountMinimalGame(
       config.maxViewHeight
     );
     cameraControls.viewHeights[cameraControls.mode] = nextHeight;
-    renderCurrentFrame();
   };
 
   const resize = () => {
@@ -757,29 +1127,97 @@ export function mountMinimalGame(
       camera,
       cameraControls,
       container,
-      runtime.readUnits(),
-      runtime.readPlanets()
+      writeCameraFocusPosition(
+        scratch.focus,
+        runtime.readUnits(),
+        runtime.readPlanets()
+      ),
+      scratch
     );
     renderer.setSize(clientWidth, clientHeight, false);
   };
 
-  const renderCurrentFrame = () => {
+  const adjustRenderPixelRatio = (now: number) => {
+    if (now - lastPixelRatioAdjustAt < PIXEL_RATIO_ADJUST_INTERVAL_MS) {
+      return;
+    }
+
+    lastPixelRatioAdjustAt = now;
+
+    if (
+      estimatedFps >= LOW_FPS_PIXEL_RATIO_THRESHOLD ||
+      activeRenderPixelRatio <= MIN_RENDER_PIXEL_RATIO
+    ) {
+      return;
+    }
+
+    activeRenderPixelRatio = Math.max(
+      MIN_RENDER_PIXEL_RATIO,
+      Number((activeRenderPixelRatio - PIXEL_RATIO_STEP).toFixed(2))
+    );
+    renderer.setPixelRatio(activeRenderPixelRatio);
+    renderer.setSize(container.clientWidth, container.clientHeight, false);
+  };
+
+  const advanceSimulation = (now: number, frameDeltaMs: number): number => {
+    simAccumulatorMs += Math.min(frameDeltaMs, MAX_SIM_FRAME_DELTA_MS);
+    let simSteps = 0;
+
+    while (
+      simAccumulatorMs >= SIM_DT_MS &&
+      simSteps < MAX_SIM_STEPS_PER_FRAME
+    ) {
+      runtime.stepTick();
+      simAccumulatorMs -= SIM_DT_MS;
+      simSteps += 1;
+      simTicksSinceSample += 1;
+    }
+
+    if (simSteps === MAX_SIM_STEPS_PER_FRAME && simAccumulatorMs >= SIM_DT_MS) {
+      simAccumulatorMs %= SIM_DT_MS;
+    }
+
+    if (now - lastSimSampleAt >= 1000) {
+      observedSimHz = (simTicksSinceSample * 1000) / (now - lastSimSampleAt);
+      simTicksSinceSample = 0;
+      lastSimSampleAt = now;
+    }
+
+    return clamp(simAccumulatorMs / SIM_DT_MS, 0, 1);
+  };
+
+  const renderCurrentFrame = (
+    now = performance.now(),
+    interpolationAlpha = 1
+  ) => {
+    const renderStartedAt = performance.now();
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
     const planetaryContext = getCurrentPlanetaryContext(planets);
-    const elapsedSeconds = (performance.now() - startedAt) / 1000;
-    const liveUnitKeys = new Set(units.map((unit) => unit.key));
+    const focus = writeCameraFocusPosition(scratch.focus, units, planets);
+    const elapsedSeconds = (now - startedAt) / 1000;
+    renderFrameIndex += 1;
 
-    for (const selectedKey of selectedUnitKeys) {
-      if (!liveUnitKeys.has(selectedKey)) {
-        selectedUnitKeys.delete(selectedKey);
-      }
-    }
+    pruneSelectedUnitKeys(selectedUnitKeys, units);
 
-    updatePlanetProxies(worldGroup, planetProxies, planets);
-    updateUnitProxies(worldGroup, proxies, units, selectedUnitKeys, 1);
-    applyCameraControls(camera, cameraControls, container, units, planets);
+    updatePlanetProxies(
+      worldGroup,
+      planetProxies,
+      planets,
+      renderFrameIndex,
+      planetGeometry,
+      planetMaterial
+    );
+    applyCameraControls(camera, cameraControls, container, focus, scratch);
     camera.updateMatrixWorld();
+    updateUnitBatches(
+      unitBatches,
+      units,
+      selectedUnitKeys,
+      camera,
+      interpolationAlpha
+    );
+    adjustRenderPixelRatio(now);
     renderer.getDrawingBufferSize(renderResolution);
     updateNebulaSkyDome(
       nebulaSkyDome,
@@ -787,50 +1225,84 @@ export function mountMinimalGame(
       camera,
       renderResolution
     );
-    updatePlanetBillboards(planetProxies, camera, elapsedSeconds);
+    updatePlanetBillboards(planetProxies, camera, elapsedSeconds, scratch);
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
-      getCameraFocusPosition(units, planets),
+      focus,
       planets,
       renderResolution,
-      elapsedSeconds
+      elapsedSeconds,
+      scratch
     );
-    container.dataset.cameraMode = cameraControls.mode;
-    container.dataset.cameraFocus = planetaryContext?.label ?? "none";
-    container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
-    container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
-    container.dataset.cameraViewHeight =
-      cameraControls.viewHeights[cameraControls.mode].toFixed(2);
-    container.dataset.sunScreenX = sunScreenPosition.x.toFixed(3);
-    container.dataset.sunScreenY = sunScreenPosition.y.toFixed(3);
-    container.dataset.sunVisible = sunScreenPosition.z.toFixed(3);
-    container.dataset.sunOcclusion = sunScreenPosition.w.toFixed(3);
-    container.dataset.unitCount = units.length.toString();
-    container.dataset.selectedUnitCount = selectedUnitKeys.size.toString();
-    container.dataset.playerId = runtime.playerId.toString();
-    container.dataset.connectionState = runtime.readConnectionStatus().state;
-    updateHud(hud, runtime, CAMERA_MODES[cameraControls.mode].label);
+
+    if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
+      container.dataset.cameraMode = cameraControls.mode;
+      container.dataset.cameraFocus = planetaryContext?.label ?? "none";
+      container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
+      container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
+      container.dataset.cameraViewHeight =
+        cameraControls.viewHeights[cameraControls.mode].toFixed(2);
+      container.dataset.sunScreenX = sunScreenPosition.x.toFixed(3);
+      container.dataset.sunScreenY = sunScreenPosition.y.toFixed(3);
+      container.dataset.sunVisible = sunScreenPosition.z.toFixed(3);
+      container.dataset.sunOcclusion = sunScreenPosition.w.toFixed(3);
+      container.dataset.unitCount = units.length.toString();
+      container.dataset.selectedUnitCount = selectedUnitKeys.size.toString();
+      container.dataset.playerId = runtime.playerId.toString();
+      container.dataset.connectionState = runtime.readConnectionStatus().state;
+      container.dataset.simHz = observedSimHz.toFixed(1);
+      container.dataset.simInterpolationAlpha = interpolationAlpha.toFixed(3);
+      updateCameraPresetControls(cameraPresetControls, cameraControls.preset);
+      lastHudUpdateAt = now;
+    }
+
+    renderer.info.reset();
     renderer.clear();
     renderer.render(nebulaSkyDome.scene, nebulaSkyDome.camera);
     renderer.clearDepth();
     renderer.render(scene, camera);
-    renderer.clearDepth();
-    renderer.render(sunFlarePass.scene, sunFlarePass.camera);
+
+    if (sunScreenPosition.z > 0.002) {
+      renderer.clearDepth();
+      renderer.render(sunFlarePass.scene, sunFlarePass.camera);
+    }
+
+    const renderMs = performance.now() - renderStartedAt;
+    estimatedRenderMs =
+      estimatedRenderMs === 0 ? renderMs : estimatedRenderMs * 0.9 + renderMs * 0.1;
+
+    if (now - lastPerfDatasetUpdateAt >= PERF_DATASET_INTERVAL_MS) {
+      container.dataset.fps = estimatedFps.toFixed(1);
+      container.dataset.renderMs = estimatedRenderMs.toFixed(2);
+      container.dataset.renderPixelRatio = renderer.getPixelRatio().toFixed(2);
+      container.dataset.drawCalls = renderer.info.render.calls.toString();
+      container.dataset.triangles = renderer.info.render.triangles.toString();
+      updateStatsLayer(
+        statsLayer,
+        runtime,
+        estimatedFps,
+        observedSimHz,
+        estimatedRenderMs,
+        renderer.info.render.calls,
+        renderer.getPixelRatio()
+      );
+      lastPerfDatasetUpdateAt = now;
+    }
   };
 
-  const tickIntervalId = window.setInterval(() => {
-    runtime.stepTick();
-    renderCurrentFrame();
-  }, SIM_DT_MS);
-
-  const frame = () => {
+  const frame = (now: number) => {
     if (disposed) {
       return;
     }
 
     frameId = requestAnimationFrame(frame);
-    renderCurrentFrame();
+    const frameDelta = Math.max(now - lastFrameAt, 1);
+    const instantaneousFps = 1000 / frameDelta;
+    estimatedFps = estimatedFps * 0.92 + instantaneousFps * 0.08;
+    lastFrameAt = now;
+    const interpolationAlpha = advanceSimulation(now, frameDelta);
+    renderCurrentFrame(now, interpolationAlpha);
   };
 
   window.addEventListener("resize", resize);
@@ -839,16 +1311,21 @@ export function mountMinimalGame(
   renderer.domElement.addEventListener("pointermove", handlePointerMove);
   renderer.domElement.addEventListener("pointerup", handlePointerUp);
   renderer.domElement.addEventListener("pointercancel", handlePointerUp);
+  renderer.domElement.addEventListener("contextmenu", handleContextMenu);
   renderer.domElement.addEventListener("wheel", handleWheel, { passive: false });
   applyCameraControls(
     camera,
     cameraControls,
     container,
-    runtime.readUnits(),
-    runtime.readPlanets()
+    writeCameraFocusPosition(
+      scratch.focus,
+      runtime.readUnits(),
+      runtime.readPlanets()
+    ),
+    scratch
   );
   resize();
-  renderCurrentFrame();
+  renderCurrentFrame(startedAt, 1);
   frameId = requestAnimationFrame(frame);
 
   return {
@@ -856,14 +1333,18 @@ export function mountMinimalGame(
     dispose() {
       disposed = true;
       cancelAnimationFrame(frameId);
-      clearInterval(tickIntervalId);
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", handleKeyDown);
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
       renderer.domElement.removeEventListener("pointercancel", handlePointerUp);
+      renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       renderer.domElement.removeEventListener("wheel", handleWheel);
+      disposeUnitBatchRenderer(unitBatches);
+      disposePlanetProxies(worldGroup, planetProxies);
+      planetGeometry.dispose();
+      planetMaterial.dispose();
       renderer.dispose();
       disposeSkyDome(nebulaSkyDome);
       disposeFullscreenPass(sunFlarePass);
@@ -875,31 +1356,69 @@ export function mountMinimalGame(
 
 function setCameraMode(cameraControls: CameraControls, mode: CameraMode): void {
   cameraControls.mode = mode;
+  cameraControls.preset = null;
   cameraControls.pitch = CAMERA_MODES[mode].pitch;
+}
+
+function applyCameraPreset(
+  cameraControls: CameraControls,
+  preset: CameraPreset
+): void {
+  const cameraPreset = CAMERA_PRESETS[preset];
+  cameraControls.preset = preset;
+  cameraControls.yaw = cameraPreset.yaw;
+  cameraControls.pitch = cameraPreset.pitch;
+}
+
+function getPreferredRenderPixelRatio(): number {
+  return clamp(
+    window.devicePixelRatio,
+    MIN_RENDER_PIXEL_RATIO,
+    MAX_RENDER_PIXEL_RATIO
+  );
+}
+
+function createRenderScratch(): RenderScratch {
+  return {
+    focus: new THREE.Vector3(),
+    worldUp: new THREE.Vector3(0, 1, 0),
+    horizontal: new THREE.Vector3(),
+    cameraOffset: new THREE.Vector3(),
+    pointer: new THREE.Vector2(),
+    raycaster: new THREE.Raycaster(),
+    rayTarget: new THREE.Vector3(),
+    tacticalPlaneNormal: new THREE.Vector3(0, 1, 0),
+    tacticalPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+    projected: new THREE.Vector3(),
+    sunPosition: new THREE.Vector3(),
+    cameraDirection: new THREE.Vector3(),
+    screenPosition: new THREE.Vector2(),
+    sunScreenPosition: new THREE.Vector4(),
+    sunViewDirection: new THREE.Vector3(),
+  };
 }
 
 function applyCameraControls(
   camera: THREE.OrthographicCamera,
   cameraControls: CameraControls,
   container: HTMLElement,
-  units: readonly UnitViewModel[],
-  planets: readonly PlanetViewModel[]
+  focus: THREE.Vector3,
+  scratch: RenderScratch
 ): void {
   const { clientWidth, clientHeight } = container;
   const aspect = clientWidth / Math.max(clientHeight, 1);
-  const focus = getCameraFocusPosition(units, planets);
   const viewHeight = cameraControls.viewHeights[cameraControls.mode];
   const halfHeight = viewHeight / 2;
   const halfWidth = halfHeight * aspect;
-  const worldUp = new THREE.Vector3(0, 1, 0);
-  const horizontal = new THREE.Vector3(
+  const worldUp = scratch.worldUp.set(0, 1, 0);
+  const horizontal = scratch.horizontal.set(
     Math.sin(cameraControls.yaw),
     0,
     Math.cos(cameraControls.yaw)
   ).normalize();
   const orbitDistance = viewHeight * 1.45;
-  const cameraOffset = worldUp
-    .clone()
+  const cameraOffset = scratch.cameraOffset
+    .copy(worldUp)
     .multiplyScalar(Math.sin(cameraControls.pitch) * orbitDistance)
     .add(horizontal.multiplyScalar(Math.cos(cameraControls.pitch) * orbitDistance));
 
@@ -913,14 +1432,18 @@ function applyCameraControls(
   camera.updateProjectionMatrix();
 }
 
-function getCameraFocusPosition(
+function writeCameraFocusPosition(
+  target: THREE.Vector3,
   units: readonly UnitViewModel[],
   planets: readonly PlanetViewModel[]
 ): THREE.Vector3 {
-  return (
-    getCurrentPlanetaryContext(planets)?.position.clone() ??
-    getLocalFocusPosition(units, DEFAULT_LOCAL_PLAYER_ID)
-  );
+  const planet = getCurrentPlanetaryContext(planets);
+
+  if (planet) {
+    return target.copy(planet.position);
+  }
+
+  return writeLocalFocusPosition(target, units, DEFAULT_LOCAL_PLAYER_ID);
 }
 
 function getCurrentPlanetaryContext(
@@ -929,15 +1452,13 @@ function getCurrentPlanetaryContext(
   return planets.find((planet) => planet.label === "Aurora") ?? planets[0] ?? null;
 }
 
-function getLocalFocusPosition(
+function writeLocalFocusPosition(
+  target: THREE.Vector3,
   units: readonly UnitViewModel[],
   playerId: PlayerId
 ): THREE.Vector3 {
-  return (
-    units.find((unit) => unit.owner === playerId)?.position.clone() ??
-    units[0]?.position.clone() ??
-    new THREE.Vector3()
-  );
+  const localUnit = units.find((unit) => unit.owner === playerId) ?? units[0];
+  return localUnit ? target.copy(localUnit.position) : target.set(0, 0, 0);
 }
 
 function issueMoveCommandFromClick(
@@ -945,7 +1466,8 @@ function issueMoveCommandFromClick(
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   runtime: LocalGameRuntime,
-  selectedUnitKeys: ReadonlySet<string>
+  selectedUnitKeys: ReadonlySet<string>,
+  scratch: RenderScratch
 ): boolean {
   const selectedUnits = runtime
     .readUnits()
@@ -962,7 +1484,8 @@ function issueMoveCommandFromClick(
     event,
     canvas,
     camera,
-    runtime.readPlanets()
+    runtime.readPlanets(),
+    scratch
   );
 
   if (!target) {
@@ -980,133 +1503,396 @@ function getPointerMoveTarget(
   event: PointerEvent,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  scratch: RenderScratch
 ): THREE.Vector3 | null {
   const bounds = canvas.getBoundingClientRect();
   const x = ((event.clientX - bounds.left) / Math.max(bounds.width, 1)) * 2 - 1;
   const y = -(((event.clientY - bounds.top) / Math.max(bounds.height, 1)) * 2 - 1);
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2(x, y);
-  const target = new THREE.Vector3();
   const context = getCurrentPlanetaryContext(planets);
-  const tacticalPlane = new THREE.Plane(
-    new THREE.Vector3(0, 1, 0),
+  const tacticalPlane = scratch.tacticalPlane.set(
+    scratch.tacticalPlaneNormal.set(0, 1, 0),
     -(context?.position.y ?? 0)
   );
 
-  raycaster.setFromCamera(pointer, camera);
-  return raycaster.ray.intersectPlane(tacticalPlane, target)
-    ? target
+  scratch.pointer.set(x, y);
+  scratch.raycaster.setFromCamera(scratch.pointer, camera);
+  return scratch.raycaster.ray.intersectPlane(tacticalPlane, scratch.rayTarget)
+    ? scratch.rayTarget
     : null;
+}
+
+function selectOwnedUnitsInBox(
+  selectedUnitKeys: Set<string>,
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  camera: THREE.Camera,
+  canvas: HTMLCanvasElement,
+  startClientX: number,
+  startClientY: number,
+  endClientX: number,
+  endClientY: number,
+  scratch: RenderScratch
+): void {
+  const bounds = canvas.getBoundingClientRect();
+  const minX = Math.min(startClientX, endClientX);
+  const maxX = Math.max(startClientX, endClientX);
+  const minY = Math.min(startClientY, endClientY);
+  const maxY = Math.max(startClientY, endClientY);
+
+  selectedUnitKeys.clear();
+
+  for (const unit of units) {
+    if (unit.owner !== playerId) {
+      continue;
+    }
+
+    const projected = scratch.projected.copy(unit.position).project(camera);
+
+    if (projected.z < -1 || projected.z > 1) {
+      continue;
+    }
+
+    const clientX = bounds.left + (projected.x * 0.5 + 0.5) * bounds.width;
+    const clientY = bounds.top + (-projected.y * 0.5 + 0.5) * bounds.height;
+
+    if (
+      clientX >= minX &&
+      clientX <= maxX &&
+      clientY >= minY &&
+      clientY <= maxY
+    ) {
+      selectedUnitKeys.add(unit.key);
+    }
+  }
+}
+
+function pruneSelectedUnitKeys(
+  selectedUnitKeys: Set<string>,
+  units: readonly UnitViewModel[]
+): void {
+  if (selectedUnitKeys.size === 0) {
+    return;
+  }
+
+  for (const selectedKey of selectedUnitKeys) {
+    let isLive = false;
+
+    for (const unit of units) {
+      if (unit.key === selectedKey) {
+        isLive = true;
+        break;
+      }
+    }
+
+    if (!isLive) {
+      selectedUnitKeys.delete(selectedKey);
+    }
+  }
 }
 
 function updatePlanetProxies(
   worldGroup: THREE.Group,
   proxies: Map<string, PlanetProxy>,
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  frameIndex: number,
+  geometry: THREE.PlaneGeometry,
+  material: THREE.ShaderMaterial
 ): void {
-  const liveKeys = new Set<string>();
-
   for (const planet of planets) {
-    liveKeys.add(planet.key);
     let proxy = proxies.get(planet.key);
 
     if (!proxy) {
-      proxy = createPlanetProxy(planet);
+      proxy = createPlanetProxy(planet, geometry, material);
       proxies.set(planet.key, proxy);
       worldGroup.add(proxy.body);
     }
 
+    proxy.lastSeenFrame = frameIndex;
     proxy.body.position.copy(planet.position);
     proxy.body.scale.setScalar(planet.radius * 2.12);
   }
 
   for (const [key, proxy] of proxies) {
-    if (!liveKeys.has(key)) {
+    if (proxy.lastSeenFrame !== frameIndex) {
       worldGroup.remove(proxy.body);
-      proxy.body.geometry.dispose();
-      proxy.body.material.dispose();
       proxies.delete(key);
     }
   }
 }
 
-function updateUnitProxies(
-  worldGroup: THREE.Group,
-  proxies: Map<string, UnitProxy>,
-  units: readonly UnitViewModel[],
-  selectedUnitKeys: ReadonlySet<string>,
-  alpha: number
-): void {
-  const liveKeys = new Set<string>();
-
-  for (const unit of units) {
-    liveKeys.add(unit.key);
-    let proxy = proxies.get(unit.key);
-
-    if (!proxy) {
-      proxy = createUnitProxy(unit);
-      proxies.set(unit.key, proxy);
-      worldGroup.add(proxy.selectionRing);
-      worldGroup.add(proxy.sprite);
-    }
-
-    const interpolated = unit.prevPosition.clone().lerp(unit.position, alpha);
-    proxy.selectionRing.position.copy(interpolated);
-    proxy.selectionRing.visible = selectedUnitKeys.has(unit.key);
-    proxy.sprite.position.copy(interpolated);
-    proxy.material.rotation = yawFromQuaternion(unit.rotation);
-  }
-
-  for (const [key, proxy] of proxies) {
-    if (!liveKeys.has(key)) {
-      worldGroup.remove(proxy.selectionRing);
-      worldGroup.remove(proxy.sprite);
-      proxy.selectionMaterial.map?.dispose();
-      proxy.selectionMaterial.dispose();
-      proxy.material.map?.dispose();
-      proxy.material.dispose();
-      proxies.delete(key);
-    }
-  }
-}
-
-function createUnitProxy(unit: UnitViewModel): UnitProxy {
-  const selectionMaterial = new THREE.SpriteMaterial({
+function createUnitBatchRenderer(): UnitBatchRenderer {
+  const geometry = new THREE.PlaneGeometry(1, 1);
+  const selectionMaterial = new THREE.MeshBasicMaterial({
     map: createSelectionRingTexture(),
     transparent: true,
     depthWrite: false,
     depthTest: false,
+    side: THREE.DoubleSide,
   });
-  const selectionRing = new THREE.Sprite(selectionMaterial);
-  selectionRing.name = `${unit.ownerName} ${unit.label} selection ring`;
-  selectionRing.scale.set(4, 4, 1);
-  selectionRing.visible = false;
-  selectionRing.renderOrder = 10;
-
-  const material = new THREE.SpriteMaterial({
-    map: createUnitSymbolTexture(unit.color, unit.owner),
-    transparent: true,
-    depthWrite: false,
-    depthTest: false,
-  });
-  const sprite = new THREE.Sprite(material);
-  sprite.name = `${unit.ownerName} ${unit.label} tactical symbol`;
-  sprite.scale.set(2.4, 2.4, 1);
-  sprite.renderOrder = 11;
+  const root = new THREE.Group();
+  root.name = "unit-batches";
 
   return {
-    sprite,
-    material,
-    selectionRing,
+    root,
+    geometry,
     selectionMaterial,
+    selectionMesh: null,
+    selectionCapacity: 0,
+    symbolMaterials: new Map(),
+    symbolMeshes: new Map(),
+    symbolCapacities: new Map(),
+    symbolCounts: new Map(),
+    matrix: new THREE.Matrix4(),
+    billboardQuaternion: new THREE.Quaternion(),
+    iconQuaternion: new THREE.Quaternion(),
+    localRotation: new THREE.Quaternion(),
+    instancePosition: new THREE.Vector3(),
+    scale: new THREE.Vector3(),
   };
 }
 
-function createPlanetProxy(planet: PlanetViewModel): PlanetProxy {
+function updateUnitBatches(
+  batches: UnitBatchRenderer,
+  units: readonly UnitViewModel[],
+  selectedUnitKeys: ReadonlySet<string>,
+  camera: THREE.Camera,
+  interpolationAlpha: number
+): void {
+  for (const key of batches.symbolCounts.keys()) {
+    batches.symbolCounts.set(key, 0);
+  }
+
+  for (const unit of units) {
+    const key = getUnitSymbolBatchKey(unit);
+    batches.symbolCounts.set(key, (batches.symbolCounts.get(key) ?? 0) + 1);
+  }
+
+  for (const [key, count] of batches.symbolCounts) {
+    if (count > 0) {
+      const unit = units.find((entry) => getUnitSymbolBatchKey(entry) === key);
+
+      if (unit) {
+        ensureSymbolMeshCapacity(batches, key, unit, count);
+      }
+    }
+  }
+
+  ensureSelectionMeshCapacity(batches, selectedUnitKeys.size);
+  batches.billboardQuaternion.copy(camera.quaternion);
+
+  for (const key of batches.symbolCounts.keys()) {
+    batches.symbolCounts.set(key, 0);
+  }
+
+  let selectedCount = 0;
+
+  for (const unit of units) {
+    const key = getUnitSymbolBatchKey(unit);
+    const symbolMesh = batches.symbolMeshes.get(key);
+    const symbolIndex = batches.symbolCounts.get(key) ?? 0;
+
+    if (!symbolMesh) {
+      continue;
+    }
+
+    const position = batches.instancePosition.lerpVectors(
+      unit.prevPosition,
+      unit.position,
+      interpolationAlpha
+    );
+    writeUnitInstanceMatrix(
+      batches,
+      position,
+      UNIT_SYMBOL_SCALE,
+      yawFromQuaternion(unit.rotation)
+    );
+    symbolMesh.setMatrixAt(symbolIndex, batches.matrix);
+    batches.symbolCounts.set(key, symbolIndex + 1);
+
+    if (selectedUnitKeys.has(unit.key) && batches.selectionMesh) {
+      writeUnitInstanceMatrix(
+        batches,
+        position,
+        SELECTION_RING_SCALE,
+        0
+      );
+      batches.selectionMesh.setMatrixAt(selectedCount, batches.matrix);
+      selectedCount += 1;
+    }
+  }
+
+  for (const [key, mesh] of batches.symbolMeshes) {
+    mesh.count = batches.symbolCounts.get(key) ?? 0;
+    mesh.instanceMatrix.needsUpdate = mesh.count > 0;
+  }
+
+  if (batches.selectionMesh) {
+    batches.selectionMesh.count = selectedCount;
+    batches.selectionMesh.instanceMatrix.needsUpdate = selectedCount > 0;
+  }
+}
+
+function ensureSymbolMeshCapacity(
+  batches: UnitBatchRenderer,
+  key: PlayerId,
+  unit: UnitViewModel,
+  requiredCount: number
+): void {
+  const capacity = batches.symbolCapacities.get(key) ?? 0;
+
+  if (capacity >= requiredCount) {
+    return;
+  }
+
+  const material = getUnitSymbolMaterial(batches, key, unit);
+  const nextCapacity = nextInstanceCapacity(requiredCount);
+  const previousMesh = batches.symbolMeshes.get(key);
+
+  if (previousMesh) {
+    batches.root.remove(previousMesh);
+    previousMesh.dispose();
+  }
+
+  const mesh = new THREE.InstancedMesh(
+    batches.geometry,
+    material,
+    nextCapacity
+  );
+  mesh.name = `${unit.ownerName} ${unit.label} symbol batch`;
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 11;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  batches.symbolMeshes.set(key, mesh);
+  batches.symbolCapacities.set(key, nextCapacity);
+  batches.root.add(mesh);
+}
+
+function ensureSelectionMeshCapacity(
+  batches: UnitBatchRenderer,
+  requiredCount: number
+): void {
+  if (batches.selectionCapacity >= requiredCount) {
+    return;
+  }
+
+  const nextCapacity = nextInstanceCapacity(requiredCount);
+
+  if (batches.selectionMesh) {
+    batches.root.remove(batches.selectionMesh);
+    batches.selectionMesh.dispose();
+  }
+
+  const mesh = new THREE.InstancedMesh(
+    batches.geometry,
+    batches.selectionMaterial,
+    nextCapacity
+  );
+  mesh.name = "selected unit ring batch";
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 10;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  batches.selectionMesh = mesh;
+  batches.selectionCapacity = nextCapacity;
+  batches.root.add(mesh);
+}
+
+function getUnitSymbolMaterial(
+  batches: UnitBatchRenderer,
+  key: PlayerId,
+  unit: UnitViewModel
+): THREE.MeshBasicMaterial {
+  let material = batches.symbolMaterials.get(key);
+
+  if (!material) {
+    material = new THREE.MeshBasicMaterial({
+      map: createUnitSymbolTexture(unit.color, unit.owner),
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    batches.symbolMaterials.set(key, material);
+  }
+
+  return material;
+}
+
+function writeUnitInstanceMatrix(
+  batches: UnitBatchRenderer,
+  position: THREE.Vector3,
+  scale: number,
+  screenRotation: number
+): void {
+  batches.localRotation.setFromAxisAngle(Z_AXIS, screenRotation);
+  batches.iconQuaternion
+    .copy(batches.billboardQuaternion)
+    .multiply(batches.localRotation);
+  batches.scale.set(scale, scale, 1);
+  batches.matrix.compose(position, batches.iconQuaternion, batches.scale);
+}
+
+function getUnitSymbolBatchKey(unit: UnitViewModel): PlayerId {
+  return unit.owner;
+}
+
+function nextInstanceCapacity(requiredCount: number): number {
+  let capacity = INITIAL_INSTANCE_CAPACITY;
+
+  while (capacity < requiredCount) {
+    capacity *= 2;
+  }
+
+  return capacity;
+}
+
+function disposeUnitBatchRenderer(batches: UnitBatchRenderer): void {
+  for (const mesh of batches.symbolMeshes.values()) {
+    batches.root.remove(mesh);
+    mesh.dispose();
+  }
+
+  if (batches.selectionMesh) {
+    batches.root.remove(batches.selectionMesh);
+    batches.selectionMesh.dispose();
+    batches.selectionMesh = null;
+  }
+
+  for (const material of batches.symbolMaterials.values()) {
+    material.map?.dispose();
+    material.dispose();
+  }
+
+  batches.selectionMaterial.map?.dispose();
+  batches.selectionMaterial.dispose();
+  batches.geometry.dispose();
+  batches.symbolMeshes.clear();
+  batches.symbolMaterials.clear();
+  batches.symbolCapacities.clear();
+  batches.symbolCounts.clear();
+}
+
+function disposePlanetProxies(
+  worldGroup: THREE.Group,
+  proxies: Map<string, PlanetProxy>
+): void {
+  for (const proxy of proxies.values()) {
+    worldGroup.remove(proxy.body);
+  }
+
+  proxies.clear();
+}
+
+function createPlanetProxy(
+  planet: PlanetViewModel,
+  geometry: THREE.PlaneGeometry,
+  material: THREE.ShaderMaterial
+): PlanetProxy {
   const body = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    createPlanetBillboardMaterial()
+    geometry,
+    material
   );
   body.name = `${planet.label} shaded billboard planet`;
   body.position.copy(planet.position);
@@ -1115,6 +1901,7 @@ function createPlanetProxy(planet: PlanetViewModel): PlanetProxy {
 
   return {
     body,
+    lastSeenFrame: 0,
   };
 }
 
@@ -1137,7 +1924,7 @@ function createTacticalPlane(): THREE.Object3D {
 }
 
 function createNebulaSkyDome(): SkyDome {
-  const geometry = new THREE.SphereGeometry(4500, 96, 48);
+  const geometry = new THREE.SphereGeometry(4500, 64, 32);
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
@@ -1233,19 +2020,19 @@ function updateSunFlarePass(
   focus: THREE.Vector3,
   planets: readonly PlanetViewModel[],
   resolution: THREE.Vector2,
-  elapsedSeconds: number
+  elapsedSeconds: number,
+  scratch: RenderScratch
 ): THREE.Vector4 {
-  const sunPosition = focus
-    .clone()
-    .add(SUN_DIRECTION.clone().multiplyScalar(2600));
-  const projectedSun = sunPosition.project(camera);
-  const cameraDirection = new THREE.Vector3();
-  camera.getWorldDirection(cameraDirection);
+  const projectedSun = scratch.sunPosition
+    .copy(focus)
+    .addScaledVector(SUN_DIRECTION, 2600)
+    .project(camera);
+  camera.getWorldDirection(scratch.cameraDirection);
   const visibility =
     projectedSun.z >= -1 && projectedSun.z <= 1
-      ? clamp(cameraDirection.dot(SUN_DIRECTION), 0, 1)
+      ? clamp(scratch.cameraDirection.dot(SUN_DIRECTION), 0, 1)
       : 0;
-  const screenPosition = new THREE.Vector2(
+  const screenPosition = scratch.screenPosition.set(
     0.5 + projectedSun.x * 0.5,
     0.5 + projectedSun.y * 0.5
   );
@@ -1254,7 +2041,12 @@ function updateSunFlarePass(
     Math.abs(screenPosition.y - 0.5)
   );
   const screenFade = 1 - smoothstep(0.58, 0.82, screenDistance);
-  const occlusion = computeSunPlanetOcclusion(camera, screenPosition, planets);
+  const occlusion = computeSunPlanetOcclusion(
+    camera,
+    screenPosition,
+    planets,
+    scratch
+  );
   const visibleSun = visibility * screenFade * (1 - occlusion);
 
   pass.material.uniforms.uResolution.value.copy(resolution);
@@ -1262,13 +2054,19 @@ function updateSunFlarePass(
   pass.material.uniforms.uVisibility.value = visibleSun;
   pass.material.uniforms.uTime.value = elapsedSeconds;
 
-  return new THREE.Vector4(screenPosition.x, screenPosition.y, visibleSun, occlusion);
+  return scratch.sunScreenPosition.set(
+    screenPosition.x,
+    screenPosition.y,
+    visibleSun,
+    occlusion
+  );
 }
 
 function computeSunPlanetOcclusion(
   camera: THREE.Camera,
   sunScreenPosition: THREE.Vector2,
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  scratch: RenderScratch
 ): number {
   if (!(camera instanceof THREE.OrthographicCamera)) {
     return 0;
@@ -1279,22 +2077,20 @@ function computeSunPlanetOcclusion(
   let occlusion = 0;
 
   for (const planet of planets) {
-    const projectedPlanet = planet.position.clone().project(camera);
+    const projectedPlanet = scratch.projected.copy(planet.position).project(camera);
 
     if (projectedPlanet.z < -1 || projectedPlanet.z > 1) {
       continue;
     }
 
-    const planetScreenPosition = new THREE.Vector2(
-      0.5 + projectedPlanet.x * 0.5,
-      0.5 + projectedPlanet.y * 0.5
-    );
+    const planetScreenX = 0.5 + projectedPlanet.x * 0.5;
+    const planetScreenY = 0.5 + projectedPlanet.y * 0.5;
     const occlusionRadius = planet.radius * 1.03;
     const radiusX = occlusionRadius / viewWidth;
     const radiusY = occlusionRadius / viewHeight;
     const normalizedDistance = Math.hypot(
-      (sunScreenPosition.x - planetScreenPosition.x) / radiusX,
-      (sunScreenPosition.y - planetScreenPosition.y) / radiusY
+      (sunScreenPosition.x - planetScreenX) / radiusX,
+      (sunScreenPosition.y - planetScreenY) / radiusY
     );
     occlusion = Math.max(
       occlusion,
@@ -1308,16 +2104,23 @@ function computeSunPlanetOcclusion(
 function updatePlanetBillboards(
   proxies: Map<string, PlanetProxy>,
   camera: THREE.Camera,
-  elapsedSeconds: number
+  elapsedSeconds: number,
+  scratch: RenderScratch
 ): void {
-  const sunViewDirection = SUN_DIRECTION.clone()
+  const sunViewDirection = scratch.sunViewDirection
+    .copy(SUN_DIRECTION)
     .transformDirection(camera.matrixWorldInverse)
     .normalize();
+  let updatedSharedMaterial = false;
 
   for (const proxy of proxies.values()) {
     proxy.body.quaternion.copy(camera.quaternion);
-    proxy.body.material.uniforms.uSunDirection.value.copy(sunViewDirection);
-    proxy.body.material.uniforms.uTime.value = elapsedSeconds;
+
+    if (!updatedSharedMaterial) {
+      proxy.body.material.uniforms.uSunDirection.value.copy(sunViewDirection);
+      proxy.body.material.uniforms.uTime.value = elapsedSeconds;
+      updatedSharedMaterial = true;
+    }
   }
 }
 
@@ -1402,47 +2205,103 @@ function createSelectionRingTexture(): THREE.CanvasTexture {
   return texture;
 }
 
-function createHud(container: HTMLElement): HTMLElement {
-  const hud = document.createElement("div");
-  hud.className = "game-hud";
-  container.appendChild(hud);
-  return hud;
+function createStatsLayer(container: HTMLElement): HTMLElement {
+  const statsLayer = document.createElement("div");
+  statsLayer.className = "game-stats";
+  container.appendChild(statsLayer);
+  return statsLayer;
 }
 
-function updateHud(
-  hud: HTMLElement,
+function updateStatsLayer(
+  statsLayer: HTMLElement,
   runtime: LocalGameRuntime,
-  cameraModeLabel: string
+  estimatedFps: number,
+  observedSimHz: number,
+  estimatedRenderMs: number,
+  drawCalls: number,
+  pixelRatio: number
 ): void {
-  const units = runtime.readUnits();
-  const planets = runtime.readPlanets();
-  const connection = runtime.readConnectionStatus();
-  const connectedPlayers = connection.players
-    ?.filter((player) => player.connected)
-    .map((player) => player.playerId)
-    .join(", ");
-  const connectionLine =
-    connection.mode === "network"
-      ? `Match ${connection.matchId} P${connection.playerId} ${connection.state}${
-          connection.running ? "" : " waiting"
-        }${connectedPlayers ? ` seats ${connectedPlayers}` : ""}`
-      : `Local P${connection.playerId}`;
-  const unitRows = units
-    .map(
-      (unit) =>
-        `<li data-unit-owner="${unit.owner}" data-pos-x="${unit.position.x.toFixed(3)}" data-pos-y="${unit.position.y.toFixed(3)}" data-pos-z="${unit.position.z.toFixed(3)}" data-rotation-y="${unit.rotation.y.toFixed(6)}"><span style="--unit-color:${unit.color}"></span>${unit.ownerName} ${unit.label} ${unit.health.current}/${unit.health.max}</li>`
-    )
-    .join("");
-  const planetRows = planets
-    .map(
-      (planet) =>
-        `<li><span style="--unit-color:#78efe0"></span>${planet.label} r=${planet.radius.toFixed(1)} m=${planet.mass.toExponential(1)}</li>`
-    )
-    .join("");
-
-  hud.innerHTML = `<div class="hud-title">Drop Ship</div><div>${connectionLine}</div><div>Mode ${cameraModeLabel}</div><div>Tick ${runtime.world.tick
+  statsLayer.textContent = `Tick ${runtime.world.tick
     .toString()
-    .padStart(5, "0")}</div><div>Hash ${runtime.readHash()}</div><ul>${unitRows}${planetRows}</ul>`;
+    .padStart(5, "0")} / ${estimatedFps.toFixed(0)} fps / ${observedSimHz.toFixed(1)} sim / ${drawCalls} calls / ${estimatedRenderMs.toFixed(2)} ms / ${pixelRatio.toFixed(2)}x / Hash ${runtime.readHash()}`;
+}
+
+function createCameraPresetControls(
+  container: HTMLElement,
+  onSelect: (preset: CameraPreset) => void
+): CameraPresetControls {
+  const root = document.createElement("div");
+  root.className = "camera-presets";
+  root.setAttribute("aria-label", "Camera views");
+  const buttons = {} as Record<CameraPreset, HTMLButtonElement>;
+
+  for (const preset of Object.keys(CAMERA_PRESETS) as CameraPreset[]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "camera-preset-button";
+    button.textContent = CAMERA_PRESETS[preset].label;
+    button.dataset.cameraPreset = preset;
+    button.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onSelect(preset);
+      updateCameraPresetControls({ root, buttons }, preset);
+    });
+    buttons[preset] = button;
+    root.appendChild(button);
+  }
+
+  container.appendChild(root);
+  updateCameraPresetControls({ root, buttons }, "isometric");
+  return { root, buttons };
+}
+
+function updateCameraPresetControls(
+  controls: CameraPresetControls,
+  activePreset: CameraPreset | null
+): void {
+  for (const preset of Object.keys(controls.buttons) as CameraPreset[]) {
+    const isActive = preset === activePreset;
+    controls.buttons[preset].setAttribute("aria-pressed", String(isActive));
+    controls.buttons[preset].classList.toggle("is-active", isActive);
+  }
+}
+
+function createSelectionBox(container: HTMLElement): HTMLElement {
+  const selectionBox = document.createElement("div");
+  selectionBox.className = "selection-box";
+  selectionBox.hidden = true;
+  container.appendChild(selectionBox);
+  return selectionBox;
+}
+
+function updateSelectionBox(
+  selectionBox: HTMLElement,
+  container: HTMLElement,
+  startClientX: number,
+  startClientY: number,
+  endClientX: number,
+  endClientY: number
+): void {
+  const bounds = container.getBoundingClientRect();
+  const left = Math.min(startClientX, endClientX) - bounds.left;
+  const top = Math.min(startClientY, endClientY) - bounds.top;
+  const width = Math.abs(endClientX - startClientX);
+  const height = Math.abs(endClientY - startClientY);
+
+  selectionBox.hidden = false;
+  selectionBox.style.transform = `translate(${left}px, ${top}px)`;
+  selectionBox.style.width = `${width}px`;
+  selectionBox.style.height = `${height}px`;
+}
+
+function hideSelectionBox(selectionBox: HTMLElement): void {
+  selectionBox.hidden = true;
+  selectionBox.style.width = "0";
+  selectionBox.style.height = "0";
 }
 
 function toVector3(vector: { x: number; y: number; z: number }): THREE.Vector3 {
@@ -1497,7 +2356,7 @@ void main() {
 `;
 
 const NEBULA_BACKGROUND_FRAGMENT_SHADER = `
-#define OCTAVES 5
+#define OCTAVES 3
 
 uniform float uTime;
 

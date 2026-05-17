@@ -1,10 +1,5 @@
 import {
-  DEFAULT_COMMAND_LEAD_TICKS,
-  PROTOCOL_VERSION,
-  type InitialPlanetConfig,
-  type InitialUnitConfig,
-  type MatchConfig,
-  type PlayerConfig,
+  createMinimalSkirmishConfig,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -120,61 +115,4 @@ export function createContentRegistry(options: {
   };
 }
 
-export function createMinimalSkirmishConfig(): MatchConfig {
-  const players: readonly PlayerConfig[] = [
-    { id: 1, name: "Player 1", color: "#74d9ff" },
-    { id: 2, name: "Player 2", color: "#ffb45f" },
-  ];
-
-  const initialUnits: readonly InitialUnitConfig[] = [
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: -38, y: 2, z: 24 },
-    },
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: -28, y: 6, z: 36 },
-    },
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: -52, y: -3, z: 16 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: 38, y: 2, z: 24 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: 28, y: 6, z: 36 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.scoutShip,
-      position: { x: 52, y: -3, z: 16 },
-    },
-  ];
-  const initialPlanets: readonly InitialPlanetConfig[] = [
-    {
-      templateId: TEMPLATE_IDS.billboardPlanet,
-      position: { x: 0, y: -2, z: -60 },
-      mass: BILLBOARD_PLANET_TEMPLATE.defaultMass,
-      radius: BILLBOARD_PLANET_TEMPLATE.defaultRadius,
-    },
-  ];
-
-  return {
-    matchId: "local-minimal-skirmish",
-    seed: 1337,
-    protocolVersion: PROTOCOL_VERSION,
-    contentVersion: CONTENT_VERSION,
-    commandLeadTicks: DEFAULT_COMMAND_LEAD_TICKS,
-    players,
-    initialUnits,
-    initialPlanets,
-  };
-}
+export { createMinimalSkirmishConfig };

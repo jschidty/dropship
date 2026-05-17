@@ -1,7 +1,7 @@
-import { createMinimalSkirmishConfig } from "@drop-ship/content";
 import {
   DEFAULT_COMMAND_LEAD_TICKS,
   PHASE_ONE_PLAYER_IDS,
+  createMinimalSkirmishConfig,
   type ClientMessage,
   type CommandAckMessage,
   type CommandBatch,

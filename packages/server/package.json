@@ -12,7 +12,6 @@
   },
   "types": "./src/index.ts",
   "dependencies": {
-    "@drop-ship/content": "workspace:*",
     "@drop-ship/protocol": "workspace:*"
   },
   "devDependencies": {

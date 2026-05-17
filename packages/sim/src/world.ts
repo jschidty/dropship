@@ -20,6 +20,10 @@ import {
   type RuntimeEntityId,
 } from "./ids";
 import { createPrngStream, type PrngStream } from "./prng";
+import {
+  deterministicCos,
+  deterministicSin,
+} from "./deterministicMath";
 
 export type SimUnitMoveOrder = {
   type: "moveTo";
@@ -280,8 +284,8 @@ function allocateRuntimeEntityId(world: SimWorld): RuntimeEntityId {
 export function yawRotation(yawRadians: number): QuaternionData {
   return {
     x: 0,
-    y: Math.sin(yawRadians / 2),
+    y: deterministicSin(yawRadians / 2),
     z: 0,
-    w: Math.cos(yawRadians / 2),
+    w: deterministicCos(yawRadians / 2),
   };
 }

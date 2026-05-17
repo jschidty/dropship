@@ -11,6 +11,16 @@ import {
   type SimWorld,
   yawRotation,
 } from "./world";
+import {
+  SIM_TAU,
+  deterministicAtan2,
+  deterministicCos,
+  deterministicFloor,
+  deterministicSin,
+  deterministicSqrt,
+  deterministicSquare,
+  quantizeSimFloat,
+} from "./deterministicMath";
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
 export const UNIT_CRUISE_SPEED = 22;
@@ -85,13 +95,15 @@ export function steerUnits(world: SimWorld, tick: number): void {
 export function integrateUnitMotion(world: SimWorld): void {
   for (const unit of getUnitsInStableOrder(world)) {
     unit.position = {
-      x: unit.position.x + unit.velocity.x * SIM_DT_SECONDS,
-      y: unit.position.y + unit.velocity.y * SIM_DT_SECONDS,
-      z: unit.position.z + unit.velocity.z * SIM_DT_SECONDS,
+      x: quantizeSimFloat(unit.position.x + unit.velocity.x * SIM_DT_SECONDS),
+      y: quantizeSimFloat(unit.position.y + unit.velocity.y * SIM_DT_SECONDS),
+      z: quantizeSimFloat(unit.position.z + unit.velocity.z * SIM_DT_SECONDS),
     };
 
     if (lengthSquared(unit.velocity) > EPSILON) {
-      unit.rotation = yawRotation(Math.atan2(unit.velocity.x, unit.velocity.z));
+      unit.rotation = yawRotation(
+        deterministicAtan2(unit.velocity.x, unit.velocity.z)
+      );
     }
 
     if (
@@ -139,7 +151,7 @@ function computeDefaultMotionVelocity(
 
   const x = unit.position.x - planet.position.x;
   const z = unit.position.z - planet.position.z;
-  const radius = Math.max(Math.hypot(x, z), 1);
+  const radius = Math.max(deterministicSqrt(x * x + z * z), 1);
   const radialX = x / radius;
   const radialZ = z / radius;
   const orbitSign = unit.owner === 1 ? 1 : -1;
@@ -157,7 +169,7 @@ function computeDefaultMotionVelocity(
     0.42
   );
   const pulse =
-    Math.sin(tick * 0.037 + unitScalar(unit, 0x41c64e6d) * Math.PI * 2) *
+    deterministicSin(tick * 0.037 + unitScalar(unit, 0x41c64e6d) * SIM_TAU) *
     0.08;
   const direction = normalize({
     x: -radialZ * orbitSign + radialX * radialCorrection,
@@ -204,7 +216,9 @@ function addBoidForces(
       addScaled(
         separation,
         normalize(scale(offset, -1)),
-        Math.pow((BOID_SEPARATION_RADIUS - distance) / BOID_SEPARATION_RADIUS, 2)
+        deterministicSquare(
+          (BOID_SEPARATION_RADIUS - distance) / BOID_SEPARATION_RADIUS
+        )
       );
     }
   }
@@ -264,7 +278,7 @@ function addObjectAvoidance(
     addScaled(
       avoidance,
       normalize(offset),
-      Math.pow((avoidDistance - distance) / avoidDistance, 2) *
+      deterministicSquare((avoidDistance - distance) / avoidDistance) *
         PLANET_AVOIDANCE_WEIGHT
     );
   }
@@ -287,7 +301,7 @@ function addObjectAvoidance(
     addScaled(
       avoidance,
       normalize(offset),
-      Math.pow((avoidDistance - distance) / avoidDistance, 2) *
+      deterministicSquare((avoidDistance - distance) / avoidDistance) *
         SHIP_AVOIDANCE_WEIGHT
     );
   }
@@ -332,12 +346,12 @@ function createUnitSpatialIndex(units: readonly SimUnit[]): UnitSpatialIndex {
   return {
     queryRadius(center, radius) {
       const radiusSquared = radius * radius;
-      const minX = Math.floor((center.x - radius) / cellSize);
-      const maxX = Math.floor((center.x + radius) / cellSize);
-      const minY = Math.floor((center.y - radius) / cellSize);
-      const maxY = Math.floor((center.y + radius) / cellSize);
-      const minZ = Math.floor((center.z - radius) / cellSize);
-      const maxZ = Math.floor((center.z + radius) / cellSize);
+      const minX = deterministicFloor((center.x - radius) / cellSize);
+      const maxX = deterministicFloor((center.x + radius) / cellSize);
+      const minY = deterministicFloor((center.y - radius) / cellSize);
+      const maxY = deterministicFloor((center.y + radius) / cellSize);
+      const minZ = deterministicFloor((center.z - radius) / cellSize);
+      const maxZ = deterministicFloor((center.z + radius) / cellSize);
       const result: SimUnit[] = [];
 
       for (let x = minX; x <= maxX; x += 1) {
@@ -395,29 +409,29 @@ function approachVelocity(
   const limitedDelta = limitLength(delta, maxDelta);
 
   return {
-    x: current.x + limitedDelta.x,
-    y: current.y + limitedDelta.y,
-    z: current.z + limitedDelta.z,
+    x: quantizeSimFloat(current.x + limitedDelta.x),
+    y: quantizeSimFloat(current.y + limitedDelta.y),
+    z: quantizeSimFloat(current.z + limitedDelta.z),
   };
 }
 
 function forwardFromRotation(unit: SimUnit): Vec3Data {
-  const yaw = Math.atan2(
+  const yaw = deterministicAtan2(
     2 * (unit.rotation.w * unit.rotation.y),
     1 - 2 * unit.rotation.y * unit.rotation.y
   );
 
   return {
-    x: Math.sin(yaw),
+    x: deterministicSin(yaw),
     y: 0,
-    z: Math.cos(yaw),
+    z: deterministicCos(yaw),
   };
 }
 
 function cellKey(position: Vec3Data, cellSize: number): string {
-  return `${Math.floor(position.x / cellSize)}:${Math.floor(
+  return `${deterministicFloor(position.x / cellSize)}:${deterministicFloor(
     position.y / cellSize
-  )}:${Math.floor(position.z / cellSize)}`;
+  )}:${deterministicFloor(position.z / cellSize)}`;
 }
 
 function createZero(): MutableVec3 {
@@ -481,7 +495,7 @@ function limitLength(vector: Vec3Data, maxLength: number): Vec3Data {
 }
 
 function length(vector: Vec3Data): number {
-  return Math.sqrt(lengthSquared(vector));
+  return deterministicSqrt(lengthSquared(vector));
 }
 
 function lengthSquared(vector: Vec3Data): number {

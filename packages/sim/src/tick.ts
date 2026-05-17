@@ -18,6 +18,11 @@ import {
   integrateUnitMotion,
   steerUnits,
 } from "./steering";
+import {
+  SIM_TAU,
+  deterministicCos,
+  deterministicSin,
+} from "./deterministicMath";
 
 export const SIM_TICK_RATE = PHASE_ONE_SIM_HZ;
 export const SIM_DT_MS = 1000 / SIM_TICK_RATE;
@@ -36,12 +41,12 @@ export const CommandIntakeSystem: SimSystem = {
             continue;
           }
 
-          const yaw = nextFloat01(commandPrng) * Math.PI * 2;
+          const yaw = nextFloat01(commandPrng) * SIM_TAU;
           unit.rotation = yawRotation(yaw);
           unit.velocity = {
-            x: Math.sin(yaw) * UNIT_CRUISE_SPEED,
+            x: deterministicSin(yaw) * UNIT_CRUISE_SPEED,
             y: unit.velocity.y,
-            z: Math.cos(yaw) * UNIT_CRUISE_SPEED,
+            z: deterministicCos(yaw) * UNIT_CRUISE_SPEED,
           };
         }
       }

@@ -15,6 +15,10 @@ import {
 } from "../packages/server/src/index";
 import {
   createWorld,
+  deterministicAtan2,
+  deterministicCos,
+  deterministicSin,
+  deterministicSqrt,
   hashWorld,
   hydrateWorldFromSnapshot,
   runTick,
@@ -22,6 +26,7 @@ import {
 } from "../packages/sim/src/index";
 
 await testCommandSchedulingAndCatchup();
+testDeterministicMathReferenceValues();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
 testDeterministicReplayHash();
@@ -78,12 +83,20 @@ async function testCommandSchedulingAndCatchup(): Promise<void> {
   assert.equal(catchup.commands[0].tick, 2);
 }
 
+function testDeterministicMathReferenceValues(): void {
+  assert.equal(deterministicSin(0), 0);
+  assert.equal(deterministicSin(Math.PI / 2), 1);
+  assert.equal(deterministicCos(0), 1);
+  assert.equal(deterministicAtan2(1, 0), Math.PI / 2);
+  assert.equal(deterministicSqrt(9), 3);
+}
+
 function testDeterministicReplayHash(): void {
   const first = replayFixedBatches();
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.match(first, /^[0-9a-f]{8}$/);
+  assert.equal(first, "167080bb");
 }
 
 function testDefaultSteeringMovesUnits(): void {

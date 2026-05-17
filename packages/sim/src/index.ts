@@ -1,3 +1,4 @@
+export * from "./deterministicMath";
 export * from "./hash";
 export * from "./ids";
 export * from "./prng";

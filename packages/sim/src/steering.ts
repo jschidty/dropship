@@ -24,6 +24,7 @@ import {
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
 export const UNIT_CRUISE_SPEED = 22;
+export const PLANET_GRAVITY_MAX_STRENGTH = 14;
 
 const UNIT_MAX_SPEED = 30;
 const UNIT_MAX_ACCELERATION = 54;
@@ -31,6 +32,10 @@ const MOVE_ORDER_ARRIVAL_DISTANCE = 1.8;
 const MOVE_ORDER_SLOW_RADIUS = 24;
 const DEFAULT_ORBIT_WEIGHT = 0.95;
 const MOVE_ORDER_WEIGHT = 1.35;
+const GRAVITY_STEERING_WEIGHT = 1.15;
+const PLANET_GRAVITY_FIELD_SCALE = 0.000003;
+const PLANET_GRAVITY_RANGE_MULTIPLIER = 9;
+const PLANET_GRAVITY_MIN_DISTANCE_RATIO = 0.8;
 const BOID_NEIGHBOR_RADIUS = 34;
 const BOID_SEPARATION_RADIUS = 8;
 const BOID_ALIGNMENT_WEIGHT = 0.34;
@@ -49,9 +54,66 @@ type MutableVec3 = {
   z: number;
 };
 
+export type GravitySource = Readonly<{
+  position: Vec3Data;
+  mass: number;
+  radius: number;
+}>;
+
 type UnitSpatialIndex = Readonly<{
   queryRadius: (center: Vec3Data, radius: number) => readonly SimUnit[];
 }>;
+
+export function computePlanetGravityVector(
+  point: Vec3Data,
+  planets: readonly GravitySource[]
+): Vec3Data {
+  const gravity = createZero();
+
+  for (const planet of planets) {
+    const towardPlanet = subtract(planet.position, point);
+    const distanceSquaredValue = lengthSquared(towardPlanet);
+    const influenceRange = planet.radius * PLANET_GRAVITY_RANGE_MULTIPLIER;
+
+    if (distanceSquaredValue > influenceRange * influenceRange) {
+      continue;
+    }
+
+    const minimumDistance = Math.max(
+      planet.radius * PLANET_GRAVITY_MIN_DISTANCE_RATIO,
+      1
+    );
+    const distance = Math.max(
+      deterministicSqrt(distanceSquaredValue),
+      minimumDistance
+    );
+
+    if (distance <= EPSILON) {
+      continue;
+    }
+
+    const rangeFalloff = clamp(1 - distance / influenceRange, 0, 1);
+    const rawStrength =
+      (planet.mass * PLANET_GRAVITY_FIELD_SCALE) / (distance * distance);
+    const strength = clamp(
+      rawStrength * rangeFalloff,
+      0,
+      PLANET_GRAVITY_MAX_STRENGTH
+    );
+
+    if (strength <= EPSILON) {
+      continue;
+    }
+
+    addScaled(gravity, scale(towardPlanet, 1 / distance), strength);
+  }
+
+  return {
+    x: quantizeSimFloat(gravity.x),
+    y: quantizeSimFloat(gravity.y),
+    z: quantizeSimFloat(gravity.z),
+  };
+}
 
 export function steerUnits(world: SimWorld, tick: number): void {
   const units = getUnitsInStableOrder(world);
@@ -73,6 +135,11 @@ export function steerUnits(world: SimWorld, tick: number): void {
       );
     }
 
+    addScaled(
+      desiredVelocity,
+      computePlanetGravityVector(unit.position, planets),
+      GRAVITY_STEERING_WEIGHT
+    );
     addBoidForces(desiredVelocity, unit, spatialIndex);
     addObjectAvoidance(desiredVelocity, unit, world, planets, spatialIndex);
 

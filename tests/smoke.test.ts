@@ -19,6 +19,7 @@ import {
   deterministicCos,
   deterministicSin,
   deterministicSqrt,
+  computePlanetGravityVector,
   hashWorld,
   hydrateWorldFromSnapshot,
   runTick,
@@ -27,6 +28,7 @@ import {
 
 await testCommandSchedulingAndCatchup();
 testDeterministicMathReferenceValues();
+testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
 testDeterministicReplayHash();
@@ -91,12 +93,52 @@ function testDeterministicMathReferenceValues(): void {
   assert.equal(deterministicSqrt(9), 3);
 }
 
+function testPlanetGravityVector(): void {
+  const planet = {
+    position: {
+      x: 0,
+      y: 0,
+      z: 0,
+    },
+    mass: 7_200_000_000,
+    radius: 28,
+  };
+  const near = computePlanetGravityVector(
+    {
+      x: 80,
+      y: 0,
+      z: 0,
+    },
+    [planet]
+  );
+  const far = computePlanetGravityVector(
+    {
+      x: 180,
+      y: 0,
+      z: 0,
+    },
+    [planet]
+  );
+  const noPlanets = computePlanetGravityVector(
+    {
+      x: 80,
+      y: 0,
+      z: 0,
+    },
+    []
+  );
+
+  assert.ok(near.x < 0);
+  assert.ok(Math.abs(near.x) > Math.abs(far.x));
+  assert.deepEqual(noPlanets, { x: 0, y: 0, z: 0 });
+}
+
 function testDeterministicReplayHash(): void {
   const first = replayFixedBatches();
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "167080bb");
+  assert.equal(first, "243e558e");
 }
 
 function testDefaultSteeringMovesUnits(): void {

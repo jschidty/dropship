@@ -121,6 +121,8 @@ The `SteeringSystem` combines intent with environmental forces and constraints i
 4. Obstacle avoidance.
 5. Collision avoidance intent.
 
+In the current minimal sim, planetary records with `mass`, `position`, and `radius` are the `GravityWell` source of truth until the fuller ECS component split exists. Ships do not emit gravity.
+
 It writes steering outputs such as desired acceleration or adjusted velocity. The `PhysicsSystem` performs integration.
 
 This separation matters: orders express intent, steering expresses feasible motion, physics applies it.

@@ -102,6 +102,8 @@ Detailed cargo contents live in a deterministic `CargoStore` keyed by entity han
 - `GravityWell { strength, range }`
 - `Collider { radius }`
 
+Phase 1 scaffold note: `SimPlanet { mass, position, radius }` currently supplies planetary gravity inputs before this component is split out. Non-planetary entities with mass must not become gravity sources.
+
 ### Piloting
 
 - `ActivePilotInput { thrustX, thrustY, thrustZ, pitch, yaw, roll, fireFlags, lastUpdatedTick }`

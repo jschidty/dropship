@@ -81,6 +81,41 @@ canvas {
   color: #fff4bc;
 }
 
+.gravity-toggle {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px 0 8px;
+  border: 1px solid rgb(131 247 255 / 24%);
+  border-radius: 6px;
+  background: rgb(5 8 18 / 52%);
+  color: rgb(230 251 255 / 82%);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gravity-toggle:hover,
+.gravity-toggle:has(input:checked) {
+  border-color: rgb(131 247 255 / 62%);
+  background: rgb(15 29 36 / 76%);
+  color: #dffcff;
+}
+
+.gravity-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #83f7ff;
+}
+
 .selection-box {
   position: absolute;
   top: 0;

@@ -16,7 +16,9 @@ import {
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
+  PLANET_GRAVITY_MAX_STRENGTH,
   SIM_DT_MS,
+  computePlanetGravityVector,
   createWorld,
   hashWorld,
   hydrateWorldFromSnapshot,
@@ -196,6 +198,28 @@ type CameraPresetControls = Readonly<{
   buttons: Record<CameraPreset, HTMLButtonElement>;
 }>;
 
+type GravityOverlayControls = Readonly<{
+  root: HTMLElement;
+  input: HTMLInputElement;
+}>;
+
+type GravityOverlay = {
+  root: THREE.Group;
+  geometry: THREE.BufferGeometry;
+  material: THREE.ShaderMaterial;
+  positions: Float32Array;
+  alphas: Float32Array;
+  lines: THREE.LineSegments<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  sample: THREE.Vector3;
+  gravityVector: THREE.Vector3;
+  end: THREE.Vector3;
+  headBase: THREE.Vector3;
+  side: THREE.Vector3;
+  headLeft: THREE.Vector3;
+  headRight: THREE.Vector3;
+  enabled: boolean;
+};
+
 type CameraMode = "tactical" | "strategic";
 
 type CameraModeConfig = Readonly<{
@@ -237,6 +261,10 @@ const MAX_SIM_FRAME_DELTA_MS = 250;
 const INITIAL_INSTANCE_CAPACITY = 64;
 const UNIT_SYMBOL_SCALE = 2.4;
 const SELECTION_RING_SCALE = 4;
+const GRAVITY_OVERLAY_GRID_SIZE = 11;
+const GRAVITY_OVERLAY_MIN_STRENGTH = 0.006;
+const GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR = 3;
+const GRAVITY_OVERLAY_VERTICES_PER_VECTOR = GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR * 2;
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
 const SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
@@ -940,12 +968,20 @@ export function mountMinimalGame(
   const planetProxies = new Map<string, PlanetProxy>();
   const planetGeometry = new THREE.PlaneGeometry(1, 1);
   const planetMaterial = createPlanetBillboardMaterial();
+  const gravityOverlay = createGravityOverlay();
+  worldGroup.add(gravityOverlay.root);
   const selectedUnitKeys = new Set<string>();
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
   const cameraPresetControls = createCameraPresetControls(container, (preset) => {
     applyCameraPreset(cameraControls, preset);
   });
+  const gravityOverlayControls = createGravityOverlayControls(
+    container,
+    (enabled) => {
+      setGravityOverlayEnabled(gravityOverlay, gravityOverlayControls, enabled);
+    }
+  );
   const renderResolution = new THREE.Vector2();
   const scratch = createRenderScratch();
 
@@ -992,6 +1028,15 @@ export function mountMinimalGame(
 
     if (key === "d") {
       selectedUnitKeys.clear();
+      return;
+    }
+
+    if (key === "g") {
+      setGravityOverlayEnabled(
+        gravityOverlay,
+        gravityOverlayControls,
+        !gravityOverlay.enabled
+      );
       return;
     }
 
@@ -1226,6 +1271,7 @@ export function mountMinimalGame(
       renderResolution
     );
     updatePlanetBillboards(planetProxies, camera, elapsedSeconds, scratch);
+    updateGravityOverlay(gravityOverlay, planetaryContext, planets);
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
@@ -1249,6 +1295,7 @@ export function mountMinimalGame(
       container.dataset.sunOcclusion = sunScreenPosition.w.toFixed(3);
       container.dataset.unitCount = units.length.toString();
       container.dataset.selectedUnitCount = selectedUnitKeys.size.toString();
+      container.dataset.gravityOverlay = gravityOverlay.enabled ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
       container.dataset.connectionState = runtime.readConnectionStatus().state;
       container.dataset.simHz = observedSimHz.toFixed(1);
@@ -1342,6 +1389,7 @@ export function mountMinimalGame(
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       disposeUnitBatchRenderer(unitBatches);
+      disposeGravityOverlay(gravityOverlay);
       disposePlanetProxies(worldGroup, planetProxies);
       planetGeometry.dispose();
       planetMaterial.dispose();
@@ -1923,6 +1971,207 @@ function createTacticalPlane(): THREE.Object3D {
   return grid;
 }
 
+function createGravityOverlay(): GravityOverlay {
+  const root = new THREE.Group();
+  root.name = "planet-gravity-vector-field";
+  const sampleCount = GRAVITY_OVERLAY_GRID_SIZE ** 2;
+  const vertexCount = sampleCount * GRAVITY_OVERLAY_VERTICES_PER_VECTOR;
+  const positions = new Float32Array(vertexCount * 3);
+  const alphas = new Float32Array(vertexCount);
+  const geometry = new THREE.BufferGeometry();
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(0x83f7ff) },
+    },
+    vertexShader: GRAVITY_VECTOR_VERTEX_SHADER,
+    fragmentShader: GRAVITY_VECTOR_FRAGMENT_SHADER,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const lines = new THREE.LineSegments(geometry, material);
+
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
+  );
+  geometry.setAttribute(
+    "aAlpha",
+    new THREE.BufferAttribute(alphas, 1).setUsage(THREE.DynamicDrawUsage)
+  );
+  lines.name = "gravity vector field lines";
+  lines.frustumCulled = false;
+  lines.renderOrder = 8;
+  root.add(lines);
+  root.visible = true;
+
+  return {
+    root,
+    geometry,
+    material,
+    positions,
+    alphas,
+    lines,
+    sample: new THREE.Vector3(),
+    gravityVector: new THREE.Vector3(),
+    end: new THREE.Vector3(),
+    headBase: new THREE.Vector3(),
+    side: new THREE.Vector3(),
+    headLeft: new THREE.Vector3(),
+    headRight: new THREE.Vector3(),
+    enabled: true,
+  };
+}
+
+function updateGravityOverlay(
+  overlay: GravityOverlay,
+  context: PlanetViewModel | null,
+  planets: readonly PlanetViewModel[]
+): void {
+  overlay.root.visible = overlay.enabled && !!context && planets.length > 0;
+
+  if (!overlay.root.visible || !context) {
+    clearGravityOverlay(overlay);
+    return;
+  }
+
+  const halfGrid = (GRAVITY_OVERLAY_GRID_SIZE - 1) / 2;
+  const spacing = Math.max(context.radius * 0.56, 9);
+  let arrowIndex = 0;
+
+  for (let zIndex = 0; zIndex < GRAVITY_OVERLAY_GRID_SIZE; zIndex += 1) {
+    for (let xIndex = 0; xIndex < GRAVITY_OVERLAY_GRID_SIZE; xIndex += 1) {
+      const vectorIndex = arrowIndex;
+      arrowIndex += 1;
+      const x = (xIndex - halfGrid) * spacing;
+      const z = (zIndex - halfGrid) * spacing;
+      const sample = overlay.sample.set(
+        context.position.x + x,
+        context.position.y + 0.55,
+        context.position.z + z
+      );
+      const surfaceDistance = sample.distanceTo(context.position);
+
+      if (surfaceDistance < context.radius * 1.08) {
+        writeGravityVectorAlpha(overlay, vectorIndex, 0);
+        continue;
+      }
+
+      const gravity = computePlanetGravityVector(sample, planets);
+      const gravityVector = overlay.gravityVector.set(
+        gravity.x,
+        gravity.y,
+        gravity.z
+      );
+      const strength = gravityVector.length();
+      const normalizedStrength = clamp(
+        strength / PLANET_GRAVITY_MAX_STRENGTH,
+        0,
+        1
+      );
+
+      if (normalizedStrength < GRAVITY_OVERLAY_MIN_STRENGTH) {
+        writeGravityVectorAlpha(overlay, vectorIndex, 0);
+        continue;
+      }
+
+      const opacity = 0.06 + smoothstep(0.02, 0.75, normalizedStrength) * 0.64;
+      const length = 2.6 + normalizedStrength * 9.4;
+      const headLength = Math.min(length * 0.35, 2.2);
+
+      writeGravityVector(
+        overlay,
+        vectorIndex,
+        sample,
+        gravityVector.normalize(),
+        length,
+        headLength,
+        opacity
+      );
+    }
+  }
+
+  overlay.geometry.attributes.position.needsUpdate = true;
+  overlay.geometry.attributes.aAlpha.needsUpdate = true;
+}
+
+function disposeGravityOverlay(overlay: GravityOverlay): void {
+  overlay.geometry.dispose();
+  overlay.material.dispose();
+  overlay.root.clear();
+}
+
+function clearGravityOverlay(overlay: GravityOverlay): void {
+  overlay.alphas.fill(0);
+  overlay.geometry.attributes.aAlpha.needsUpdate = true;
+}
+
+function writeGravityVector(
+  overlay: GravityOverlay,
+  vectorIndex: number,
+  sample: THREE.Vector3,
+  direction: THREE.Vector3,
+  length: number,
+  headLength: number,
+  opacity: number
+): void {
+  const end = overlay.end.copy(sample).addScaledVector(direction, length);
+  const headBase = overlay.headBase
+    .copy(end)
+    .addScaledVector(direction, -headLength);
+  const side = overlay.side.set(-direction.z, 0, direction.x);
+
+  if (side.lengthSq() < 0.000001) {
+    side.set(1, 0, 0);
+  } else {
+    side.normalize();
+  }
+
+  const headWidth = headLength * 0.54;
+  const headLeft = overlay.headLeft.copy(headBase).addScaledVector(side, headWidth);
+  const headRight = overlay.headRight
+    .copy(headBase)
+    .addScaledVector(side, -headWidth);
+  const firstVertex = vectorIndex * GRAVITY_OVERLAY_VERTICES_PER_VECTOR;
+
+  writeGravityVertex(overlay, firstVertex, sample, opacity);
+  writeGravityVertex(overlay, firstVertex + 1, end, opacity);
+  writeGravityVertex(overlay, firstVertex + 2, end, opacity);
+  writeGravityVertex(overlay, firstVertex + 3, headLeft, opacity);
+  writeGravityVertex(overlay, firstVertex + 4, end, opacity);
+  writeGravityVertex(overlay, firstVertex + 5, headRight, opacity);
+}
+
+function writeGravityVertex(
+  overlay: GravityOverlay,
+  vertexIndex: number,
+  position: THREE.Vector3,
+  opacity: number
+): void {
+  const positionIndex = vertexIndex * 3;
+
+  overlay.positions[positionIndex] = position.x;
+  overlay.positions[positionIndex + 1] = position.y;
+  overlay.positions[positionIndex + 2] = position.z;
+  overlay.alphas[vertexIndex] = opacity;
+}
+
+function writeGravityVectorAlpha(
+  overlay: GravityOverlay,
+  vectorIndex: number,
+  opacity: number
+): void {
+  const firstVertex = vectorIndex * GRAVITY_OVERLAY_VERTICES_PER_VECTOR;
+
+  for (
+    let offset = 0;
+    offset < GRAVITY_OVERLAY_VERTICES_PER_VECTOR;
+    offset += 1
+  ) {
+    overlay.alphas[firstVertex + offset] = opacity;
+  }
+}
+
 function createNebulaSkyDome(): SkyDome {
   const geometry = new THREE.SphereGeometry(4500, 64, 32);
   const material = new THREE.ShaderMaterial({
@@ -2270,6 +2519,43 @@ function updateCameraPresetControls(
   }
 }
 
+function createGravityOverlayControls(
+  container: HTMLElement,
+  onChange: (enabled: boolean) => void
+): GravityOverlayControls {
+  const root = document.createElement("label");
+  root.className = "gravity-toggle";
+  const input = document.createElement("input");
+  const label = document.createElement("span");
+
+  input.type = "checkbox";
+  input.checked = true;
+  input.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  input.addEventListener("change", () => {
+    onChange(input.checked);
+  });
+  label.textContent = "Gravity";
+  root.append(input, label);
+  container.appendChild(root);
+
+  return {
+    root,
+    input,
+  };
+}
+
+function setGravityOverlayEnabled(
+  overlay: GravityOverlay,
+  controls: GravityOverlayControls,
+  enabled: boolean
+): void {
+  overlay.enabled = enabled;
+  overlay.root.visible = enabled;
+  controls.input.checked = enabled;
+}
+
 function createSelectionBox(container: HTMLElement): HTMLElement {
   const selectionBox = document.createElement("div");
   selectionBox.className = "selection-box";
@@ -2343,6 +2629,31 @@ varying vec2 vUv;
 void main() {
   vUv = uv;
   gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const GRAVITY_VECTOR_VERTEX_SHADER = `
+attribute float aAlpha;
+
+varying float vAlpha;
+
+void main() {
+  vAlpha = aAlpha;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const GRAVITY_VECTOR_FRAGMENT_SHADER = `
+uniform vec3 uColor;
+
+varying float vAlpha;
+
+void main() {
+  if (vAlpha <= 0.001) {
+    discard;
+  }
+
+  gl_FragColor = vec4(uColor, vAlpha);
 }
 `;
 

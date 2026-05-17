@@ -22,6 +22,8 @@ import {
 } from "../packages/sim/src/index";
 
 await testCommandSchedulingAndCatchup();
+testDefaultSteeringMovesUnits();
+testMoveOrderInfluencesSteering();
 testDeterministicReplayHash();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
@@ -82,6 +84,71 @@ function testDeterministicReplayHash(): void {
 
   assert.equal(first, second);
   assert.match(first, /^[0-9a-f]{8}$/);
+}
+
+function testDefaultSteeringMovesUnits(): void {
+  const world = createWorld({
+    config: createMinimalSkirmishConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const startPositions = new Map(
+    world.units.map((unit) => [unit.handle.id, unit.position])
+  );
+
+  runBatches(world, [], 30);
+
+  for (const unit of world.units) {
+    const start = startPositions.get(unit.handle.id);
+
+    assert.ok(start);
+    assert.ok(
+      distance(unit.position, start) > 0.5,
+      "Expected default steering to keep every unit in motion"
+    );
+  }
+}
+
+function testMoveOrderInfluencesSteering(): void {
+  const world = createWorld({
+    config: createMinimalSkirmishConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+
+  assert.ok(unit);
+
+  const target = {
+    x: unit.position.x + 40,
+    y: unit.position.y,
+    z: unit.position.z,
+  };
+  const initialDistance = distance(unit.position, target);
+
+  runBatches(
+    world,
+    [
+      {
+        tick: 0,
+        commands: [
+          {
+            playerId: 1,
+            clientSeq: 99,
+            command: {
+              type: "moveUnits",
+              unitHandles: [unit.handle],
+              target,
+            },
+          },
+        ],
+      },
+    ],
+    20
+  );
+
+  assert.ok(
+    distance(unit.position, target) < initialDistance,
+    "Expected move command intent to pull the selected unit toward its target"
+  );
 }
 
 function testSnapshotRoundTrip(): void {
@@ -230,6 +297,13 @@ function createMemoryStorage(): DurableObjectStorage {
       return new Map(entries) as Map<string, T>;
     },
   };
+}
+
+function distance(
+  a: Readonly<{ x: number; y: number; z: number }>,
+  b: Readonly<{ x: number; y: number; z: number }>
+): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
 function isCatchupMessage(value: unknown): value is CatchupMessage {

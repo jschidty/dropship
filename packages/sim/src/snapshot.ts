@@ -12,6 +12,7 @@ import {
 import {
   createEmptyWorld,
   copyMoveOrder,
+  copyPlanetOrbit,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   spawnPlanet,
@@ -31,6 +32,7 @@ export function serializeWorld(world: SimWorld): CompactSimSnapshot {
     commandLeadTicks: world.config.commandLeadTicks,
     nextEntityId: world.ids.nextId,
     players: world.config.players,
+    environment: world.config.environment,
     units: getUnitsInStableOrder(world).map(unitToSnapshot),
     planets: getPlanetsInStableOrder(world).map(planetToSnapshot),
     prng: snapshotPrngStreams(world.prngStreams),
@@ -48,6 +50,7 @@ export function hydrateWorldFromSnapshot(
     contentVersion: snapshot.contentVersion,
     commandLeadTicks: snapshot.commandLeadTicks ?? DEFAULT_COMMAND_LEAD_TICKS,
     players: snapshot.players,
+    environment: snapshot.environment,
     initialUnits: [],
     initialPlanets: [],
   };
@@ -77,9 +80,15 @@ export function hydrateWorldFromSnapshot(
   for (const planet of snapshot.planets) {
     spawnPlanet(world, {
       templateId: planet.templateId,
+      name: planet.name,
       position: planet.position,
       mass: planet.mass,
       radius: planet.radius,
+      color: planet.color,
+      hasAtmosphere: planet.hasAtmosphere,
+      orbitAxis: planet.orbitAxis,
+      orbit: copyPlanetOrbit(planet.orbit),
+      parentPlanetIndex: planet.parentPlanetIndex,
       handle: planet.handle,
       spawnedTick: planet.spawnedTick,
     });
@@ -110,9 +119,15 @@ function planetToSnapshot(planet: SimWorld["planets"][number]): PlanetSnapshot {
   return {
     handle: planet.handle,
     templateId: planet.templateId,
+    name: planet.name,
     position: planet.position,
     mass: planet.mass,
     radius: planet.radius,
+    color: planet.color,
+    hasAtmosphere: planet.hasAtmosphere,
+    orbitAxis: planet.orbitAxis,
+    orbit: copyPlanetOrbit(planet.orbit),
+    parentPlanetIndex: planet.parentPlanetIndex,
     render: planet.render,
     spawnedTick: planet.spawnedTick,
   };

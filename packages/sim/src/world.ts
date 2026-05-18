@@ -8,6 +8,7 @@ import {
   type CommandBatch,
   type EntityHandle,
   type MatchConfig,
+  type PlanetOrbitConfig,
   type PlayerId,
   type QuaternionData,
   type Vec3Data,
@@ -61,9 +62,15 @@ export type SimPlanet = {
   runtimeEntityId: RuntimeEntityId;
   handle: EntityHandle;
   templateId: number;
+  name: string;
   position: Vec3Data;
   mass: number;
   radius: number;
+  color: string;
+  hasAtmosphere: boolean;
+  orbitAxis: Vec3Data;
+  orbit: PlanetOrbitConfig;
+  parentPlanetIndex: number | null;
   render: {
     meshId: number;
     materialId: number;
@@ -119,9 +126,15 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
     for (const initialPlanet of config.initialPlanets) {
       spawnPlanet(world, {
         templateId: initialPlanet.templateId,
+        name: initialPlanet.name,
         position: initialPlanet.position,
         mass: initialPlanet.mass,
         radius: initialPlanet.radius,
+        color: initialPlanet.color,
+        hasAtmosphere: initialPlanet.hasAtmosphere,
+        orbitAxis: initialPlanet.orbitAxis,
+        orbit: initialPlanet.orbit,
+        parentPlanetIndex: initialPlanet.parentPlanetIndex,
       });
     }
   }
@@ -208,9 +221,15 @@ export function spawnPlanet(
   world: SimWorld,
   options: Readonly<{
     templateId: number;
+    name: string;
     position: Vec3Data;
     mass: number;
     radius: number;
+    color: string;
+    hasAtmosphere: boolean;
+    orbitAxis: Vec3Data;
+    orbit: PlanetOrbitConfig;
+    parentPlanetIndex: number | null;
     handle?: EntityHandle;
     spawnedTick?: number;
   }>
@@ -222,9 +241,15 @@ export function spawnPlanet(
     runtimeEntityId,
     handle,
     templateId: options.templateId,
+    name: options.name,
     position: copyVec3(options.position),
     mass: options.mass,
     radius: options.radius,
+    color: options.color,
+    hasAtmosphere: options.hasAtmosphere,
+    orbitAxis: copyVec3(options.orbitAxis),
+    orbit: copyPlanetOrbit(options.orbit),
+    parentPlanetIndex: options.parentPlanetIndex,
     render: {
       meshId: template.render.meshId,
       materialId: template.render.materialId,
@@ -261,6 +286,15 @@ export function copyVec3(vector: Vec3Data): Vec3Data {
     x: vector.x,
     y: vector.y,
     z: vector.z,
+  };
+}
+
+export function copyPlanetOrbit(orbit: PlanetOrbitConfig): PlanetOrbitConfig {
+  return {
+    center: copyVec3(orbit.center),
+    radius: orbit.radius,
+    phase: orbit.phase,
+    angularSpeed: orbit.angularSpeed,
   };
 }
 

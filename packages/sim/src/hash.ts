@@ -43,7 +43,24 @@ function quantizeSnapshot(snapshot: CompactSimSnapshot): CompactSimSnapshot {
       position: quantizeVec3(planet.position),
       mass: quantize(planet.mass),
       radius: quantize(planet.radius),
+      orbitAxis: quantizeVec3(planet.orbitAxis),
+      orbit: {
+        ...planet.orbit,
+        center: quantizeVec3(planet.orbit.center),
+        radius: quantize(planet.orbit.radius),
+        phase: quantize(planet.orbit.phase),
+        angularSpeed: quantize(planet.orbit.angularSpeed),
+      },
     })),
+    environment: {
+      ...snapshot.environment,
+      sun: {
+        ...snapshot.environment.sun,
+        position: quantizeVec3(snapshot.environment.sun.position),
+        orbitCenter: quantizeVec3(snapshot.environment.sun.orbitCenter),
+        distance: quantize(snapshot.environment.sun.distance),
+      },
+    },
   };
 }
 

@@ -28,6 +28,8 @@ import {
 
 await testCommandSchedulingAndCatchup();
 testDeterministicMathReferenceValues();
+testSeededMatchGeneration();
+testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
@@ -93,6 +95,71 @@ function testDeterministicMathReferenceValues(): void {
   assert.equal(deterministicSqrt(9), 3);
 }
 
+function testSeededMatchGeneration(): void {
+  const first = createMinimalSkirmishConfig({ seed: 4242 });
+  const second = createMinimalSkirmishConfig({ seed: 4242 });
+  const moonsByParent = new Map<number, number>();
+  const moonCount = first.initialPlanets.filter(
+    (planet) => planet.parentPlanetIndex !== null
+  ).length;
+
+  assert.deepEqual(first.initialPlanets, second.initialPlanets);
+  assert.deepEqual(first.environment, second.environment);
+  assert.ok(Number.isFinite(first.environment.sun.orbitCenter.x));
+  assert.ok(first.initialPlanets.length >= 1);
+  assert.ok(first.initialPlanets.length <= 4);
+  assert.ok(moonCount >= 1);
+  assert.ok(moonCount <= 3);
+
+  for (const planet of first.initialPlanets) {
+    assert.match(planet.color, /^#[0-9a-f]{6}$/);
+    assert.ok(planet.radius > 0);
+    assert.ok(planet.mass > 0);
+    assert.ok(planet.orbit.radius > 0);
+    assert.notEqual(planet.orbit.angularSpeed, 0);
+
+    if (planet.parentPlanetIndex !== null) {
+      assert.equal(planet.hasAtmosphere, false);
+      moonsByParent.set(
+        planet.parentPlanetIndex,
+        (moonsByParent.get(planet.parentPlanetIndex) ?? 0) + 1
+      );
+    }
+  }
+
+  for (const count of moonsByParent.values()) {
+    assert.ok(count <= 2);
+  }
+}
+
+function testPlanetaryOrbitMotion(): void {
+  const config = findConfigWithMoon();
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.parentPlanetIndex === null);
+  const moon = world.planets.find((entry) => entry.parentPlanetIndex !== null);
+
+  assert.ok(planet);
+  assert.ok(moon);
+  assert.ok(moon.parentPlanetIndex !== null);
+
+  const initialPlanetPosition = planet.position;
+
+  runBatches(world, [], 45);
+
+  const updatedParent = world.planets[moon.parentPlanetIndex];
+
+  assert.ok(updatedParent);
+  assert.ok(distance(planet.position, initialPlanetPosition) > 0.05);
+  assert.ok(
+    Math.abs(distance(moon.position, updatedParent.position) - moon.orbit.radius) <
+      0.5,
+    "Expected moon orbit to preserve its seeded parent-relative radius"
+  );
+}
+
 function testPlanetGravityVector(): void {
   const planet = {
     position: {
@@ -149,7 +216,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "fbcee6c3");
+  assert.equal(first, "b0c7fb44");
 }
 
 function testDefaultSteeringMovesUnits(): void {
@@ -303,6 +370,22 @@ function createReplayBatches(
       ],
     },
   ];
+}
+
+function findConfigWithMoon(): MatchConfig {
+  for (let seed = 0; seed < 64; seed += 1) {
+    const config = createMinimalSkirmishConfig({ seed });
+
+    if (
+      config.initialPlanets.some(
+        (planet) => planet.parentPlanetIndex !== null
+      )
+    ) {
+      return config;
+    }
+  }
+
+  throw new Error("Expected at least one moon in the first 64 seeded matches");
 }
 
 function runBatches(

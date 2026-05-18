@@ -18,6 +18,7 @@ import {
   integrateUnitMotion,
   steerUnits,
 } from "./steering";
+import { updatePlanetaryOrbits } from "./orbits";
 import {
   SIM_TAU,
   deterministicCos,
@@ -27,6 +28,13 @@ import {
 export const SIM_TICK_RATE = PHASE_ONE_SIM_HZ;
 export const SIM_DT_MS = 1000 / SIM_TICK_RATE;
 export { SIM_DT_SECONDS } from "./steering";
+
+export const PlanetMotionSystem: SimSystem = {
+  name: "PlanetMotionSystem",
+  run(world, tick) {
+    updatePlanetaryOrbits(world, tick);
+  },
+};
 
 export const CommandIntakeSystem: SimSystem = {
   name: "CommandIntakeSystem",
@@ -147,6 +155,7 @@ export const EventFlushSystem: SimSystem = {
 };
 
 export const PHASE_ONE_SYSTEMS: readonly SimSystem[] = [
+  PlanetMotionSystem,
   CommandIntakeSystem,
   FleetCommandSystem,
   ShipOrderSystem,

@@ -112,7 +112,7 @@ export function createMatchCoordinator(
 export class MatchDurableObject {
   private coordinator: MatchCoordinator | null = null;
   private readonly sessions = new Map<string, MatchSession>();
-  private readonly config = createMinimalSkirmishConfig();
+  private config: ReturnType<typeof createMinimalSkirmishConfig> | null = null;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -190,11 +190,12 @@ export class MatchDurableObject {
     this.nextSessionId += 1;
     server.accept();
     this.sessions.set(session.id, session);
+    const config = this.getMatchConfig(url);
     this.send(session, {
       type: "matchStart",
       playerId,
       serverTick: coordinator.tickLoop.currentTick(),
-      config: this.config,
+      config,
     });
     this.broadcastConnectionStatus();
     this.updateTicking();
@@ -213,6 +214,19 @@ export class MatchDurableObject {
       status: 101,
       webSocket: client,
     });
+  }
+
+  private getMatchConfig(url: URL): ReturnType<typeof createMinimalSkirmishConfig> {
+    if (this.config) {
+      return this.config;
+    }
+
+    const matchId = parseMatchIdFromPath(url.pathname) ?? "demo";
+    this.config = createMinimalSkirmishConfig({
+      matchId,
+      seed: parseSeed(url.searchParams.get("seed")) ?? parseSeed(matchId),
+    });
+    return this.config;
   }
 
   private async receiveSocketMessage(
@@ -436,6 +450,21 @@ function parsePlayerId(value: string | null): PlayerId | null {
   const parsed = Number(value);
 
   return parsed === 1 || parsed === 2 ? parsed : null;
+}
+
+function parseSeed(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function parseMatchIdFromPath(pathname: string): string | null {
+  const match = /^\/api\/matches\/([^/]+)(?:\/ws)?$/.exec(pathname);
+
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 function parseClientMessage(data: string): ClientMessage | null {

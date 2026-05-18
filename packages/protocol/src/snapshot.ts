@@ -1,5 +1,11 @@
 import type { EntityHandle, PlayerId } from "./handles";
-import type { PlayerConfig, QuaternionData, Vec3Data } from "./matchConfig";
+import type {
+  MatchEnvironmentConfig,
+  PlayerConfig,
+  PlanetOrbitConfig,
+  QuaternionData,
+  Vec3Data,
+} from "./matchConfig";
 
 export type HealthSnapshot = Readonly<{
   current: number;
@@ -33,9 +39,15 @@ export type UnitSnapshot = Readonly<{
 export type PlanetSnapshot = Readonly<{
   handle: EntityHandle;
   templateId: number;
+  name: string;
   position: Vec3Data;
   mass: number;
   radius: number;
+  color: string;
+  hasAtmosphere: boolean;
+  orbitAxis: Vec3Data;
+  orbit: PlanetOrbitConfig;
+  parentPlanetIndex: number | null;
   render: RenderSnapshot;
   spawnedTick: number;
 }>;
@@ -55,6 +67,7 @@ export type CompactSimSnapshot = Readonly<{
   commandLeadTicks: number;
   nextEntityId: number;
   players: readonly PlayerConfig[];
+  environment: MatchEnvironmentConfig;
   units: readonly UnitSnapshot[];
   planets: readonly PlanetSnapshot[];
   prng: readonly PrngSnapshot[];

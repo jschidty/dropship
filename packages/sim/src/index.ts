@@ -3,6 +3,7 @@ export * from "./hash";
 export * from "./ids";
 export * from "./orbits";
 export * from "./prng";
+export * from "./shipStats";
 export * from "./snapshot";
 export {
   PLANET_GRAVITY_MAX_STRENGTH,

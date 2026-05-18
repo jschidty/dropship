@@ -1,12 +1,65 @@
 {
+  "schemaVersion": 1,
+  "kind": "shipTemplate",
   "id": 1,
   "slug": "scout-ship",
   "displayName": "Scout",
-  "maxHealth": 100,
-  "colliderRadius": 0.9,
-  "defaultVelocity": {
+  "hull": {
+    "maxHealth": 100,
+    "colliderRadius": 0.9,
+    "baseMass": 18,
+    "basePower": 10
+  },
+  "slots": [
+    {
+      "id": "main-engine-1",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-2",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "fuel-1",
+      "type": "fuelTank",
+      "size": "small"
+    },
+    {
+      "id": "cargo-1",
+      "type": "cargo",
+      "size": "small"
+    },
+    {
+      "id": "weapon-1",
+      "type": "weapon",
+      "size": "small",
+      "arc": "front"
+    }
+  ],
+  "defaultLoadout": {
+    "slug": "scout-default",
+    "displayName": "Scout Patrol",
+    "componentsBySlot": {
+      "main-engine-1": 1,
+      "main-engine-2": 1,
+      "fuel-1": 2,
+      "cargo-1": 3,
+      "weapon-1": 4
+    }
+  },
+  "initialVelocity": {
     "x": 0,
     "y": 0,
     "z": 0
+  },
+  "render": {
+    "meshId": 1,
+    "materialIdsByPlayer": {
+      "1": 1,
+      "2": 2
+    },
+    "scaleTier": 1
   }
 }

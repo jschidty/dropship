@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   DEFAULT_CONTENT_REGISTRY,
   createMinimalSkirmishConfig,
+  type ShipStats,
 } from "@drop-ship/content";
 import {
   type ClientMessage,
@@ -42,6 +43,7 @@ export type UnitViewModel = Readonly<{
     current: number;
     max: number;
   }>;
+  stats: ShipStats;
 }>;
 
 export type PlanetViewModel = Readonly<{
@@ -116,6 +118,7 @@ type MutableUnitViewModel = {
     current: number;
     max: number;
   };
+  stats: ShipStats;
 };
 
 type MutablePlanetViewModel = {
@@ -819,6 +822,7 @@ function syncUnitViewModels(
           current: unit.health.current,
           max: unit.health.max,
         },
+        stats: template.stats,
       };
       target[index] = view;
     }
@@ -842,6 +846,7 @@ function syncUnitViewModels(
     );
     view.health.current = unit.health.current;
     view.health.max = unit.health.max;
+    view.stats = template.stats;
   }
 }
 
@@ -941,6 +946,7 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
         current: unit.health.current,
         max: unit.health.max,
       },
+      stats: template.stats,
     };
   });
 }

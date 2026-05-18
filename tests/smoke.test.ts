@@ -216,7 +216,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "b0c7fb44");
+  assert.equal(first, "d4c2e5a9");
 }
 
 function testDefaultSteeringMovesUnits(): void {

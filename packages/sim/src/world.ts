@@ -187,8 +187,8 @@ export function spawnUnit(
   const handle = options.handle ?? allocateHandle(world.ids);
   const runtimeEntityId = allocateRuntimeEntityId(world);
   const health = options.health ?? {
-    current: template.maxHealth,
-    max: template.maxHealth,
+    current: template.stats.maxHealth,
+    max: template.stats.maxHealth,
   };
   const unit: SimUnit = {
     runtimeEntityId,
@@ -197,7 +197,7 @@ export function spawnUnit(
     templateId: options.templateId,
     position: copyVec3(options.position),
     prevPosition: copyVec3(options.position),
-    velocity: copyVec3(options.velocity ?? template.defaultVelocity),
+    velocity: copyVec3(options.velocity ?? template.initialVelocity),
     rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
     moveOrder: copyMoveOrder(options.moveOrder ?? null),
     health: {

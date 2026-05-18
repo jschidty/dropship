@@ -4,6 +4,7 @@ import {
   sameHandle,
   type CommandBatch,
 } from "@drop-ship/protocol";
+import type { ShipStats } from "@drop-ship/content";
 import { findPrngStream, nextFloat01 } from "./prng";
 import {
   capturePrevPositions,
@@ -14,10 +15,10 @@ import {
   yawRotation,
 } from "./world";
 import {
-  UNIT_CRUISE_SPEED,
   integrateUnitMotion,
   steerUnits,
 } from "./steering";
+import { readUnitShipStats } from "./shipStats";
 import { updatePlanetaryOrbits } from "./orbits";
 import {
   SIM_TAU,
@@ -41,6 +42,7 @@ export const CommandIntakeSystem: SimSystem = {
   run(world) {
     const commands = world.commandBatch?.commands ?? [];
     const commandPrng = findPrngStream(world.prngStreams, "command");
+    const shipStats = new Map<number, ShipStats>();
 
     for (const scheduled of commands) {
       if (scheduled.command.type === "randomTurnOwnedUnits") {
@@ -50,11 +52,12 @@ export const CommandIntakeSystem: SimSystem = {
           }
 
           const yaw = nextFloat01(commandPrng) * SIM_TAU;
+          const stats = readUnitShipStats(world, shipStats, unit);
           unit.rotation = yawRotation(yaw);
           unit.velocity = {
-            x: deterministicSin(yaw) * UNIT_CRUISE_SPEED,
+            x: deterministicSin(yaw) * stats.cruiseSpeed,
             y: unit.velocity.y,
-            z: deterministicCos(yaw) * UNIT_CRUISE_SPEED,
+            z: deterministicCos(yaw) * stats.cruiseSpeed,
           };
         }
       }

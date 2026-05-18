@@ -3,6 +3,7 @@ import {
   type PlayerId,
   type Vec3Data,
 } from "@drop-ship/protocol";
+import type { ShipStats } from "@drop-ship/content";
 import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
@@ -21,13 +22,11 @@ import {
   deterministicSquare,
   quantizeSimFloat,
 } from "./deterministicMath";
+import { readShipStats, readUnitShipStats } from "./shipStats";
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
-export const UNIT_CRUISE_SPEED = 22;
 export const PLANET_GRAVITY_MAX_STRENGTH = 14;
 
-const UNIT_MAX_SPEED = 30;
-const UNIT_MAX_ACCELERATION = 54;
 const MOVE_ORDER_ARRIVAL_DISTANCE = 1.8;
 const MOVE_ORDER_SLOW_RADIUS = 24;
 const DEFAULT_ORBIT_WEIGHT = 0.95;
@@ -145,19 +144,20 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const planets = getPlanetsInStableOrder(world);
   const spatialIndex = createUnitSpatialIndex(units);
   const nextVelocities: Vec3Data[] = [];
-  const colliderRadii = new Map<number, number>();
+  const shipStats = new Map<number, ShipStats>();
   const gravityVector = createZero();
 
   for (const unit of units) {
+    const stats = readUnitShipStats(world, shipStats, unit);
     const desiredVelocity = createZero();
-    const orderVelocity = computeMoveOrderVelocity(unit);
+    const orderVelocity = computeMoveOrderVelocity(unit, stats);
 
     if (orderVelocity) {
       addScaled(desiredVelocity, orderVelocity, MOVE_ORDER_WEIGHT);
     } else {
       addScaled(
         desiredVelocity,
-        computeDefaultMotionVelocity(unit, planets, tick),
+        computeDefaultMotionVelocity(unit, planets, tick, stats),
         DEFAULT_ORBIT_WEIGHT
       );
     }
@@ -167,22 +167,22 @@ export function steerUnits(world: SimWorld, tick: number): void {
       computePlanetGravityVector(unit.position, planets, gravityVector),
       GRAVITY_STEERING_WEIGHT
     );
-    addBoidForces(desiredVelocity, unit, spatialIndex);
+    addBoidForces(desiredVelocity, unit, spatialIndex, stats);
     addObjectAvoidance(
       desiredVelocity,
       unit,
       world,
       planets,
       spatialIndex,
-      colliderRadii
+      shipStats
     );
 
-    const limitedDesired = limitLength(desiredVelocity, UNIT_MAX_SPEED);
+    const limitedDesired = limitLength(desiredVelocity, stats.maxSpeed);
     nextVelocities.push(
       approachVelocity(
         unit.velocity,
         limitedDesired,
-        UNIT_MAX_ACCELERATION * SIM_DT_SECONDS
+        stats.maxAcceleration * SIM_DT_SECONDS
       )
     );
   }
@@ -216,7 +216,10 @@ export function integrateUnitMotion(world: SimWorld): void {
   }
 }
 
-function computeMoveOrderVelocity(unit: SimUnit): Vec3Data | null {
+function computeMoveOrderVelocity(
+  unit: SimUnit,
+  stats: ShipStats
+): Vec3Data | null {
   const target = unit.moveOrder?.target;
 
   if (!target) {
@@ -232,7 +235,7 @@ function computeMoveOrderVelocity(unit: SimUnit): Vec3Data | null {
   }
 
   const speed =
-    UNIT_CRUISE_SPEED *
+    stats.cruiseSpeed *
     clamp(distance / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
 
   return scale(normalize(offset), speed);
@@ -241,12 +244,13 @@ function computeMoveOrderVelocity(unit: SimUnit): Vec3Data | null {
 function computeDefaultMotionVelocity(
   unit: SimUnit,
   planets: readonly SimPlanet[],
-  tick: number
+  tick: number,
+  stats: ShipStats
 ): Vec3Data {
   const planet = findNearestPlanet(unit, planets);
 
   if (!planet) {
-    return scale(forwardFromRotation(unit), UNIT_CRUISE_SPEED * 0.55);
+    return scale(forwardFromRotation(unit), stats.cruiseSpeed * 0.55);
   }
 
   const x = unit.position.x - planet.position.x;
@@ -277,13 +281,14 @@ function computeDefaultMotionVelocity(
     z: radialX * orbitSign + radialZ * radialCorrection,
   });
 
-  return scale(direction, UNIT_CRUISE_SPEED * (0.72 + pulse));
+  return scale(direction, stats.cruiseSpeed * (0.72 + pulse));
 }
 
 function addBoidForces(
   desiredVelocity: MutableVec3,
   unit: SimUnit,
-  spatialIndex: UnitSpatialIndex
+  spatialIndex: UnitSpatialIndex,
+  stats: ShipStats
 ): void {
   let separationX = 0;
   let separationY = 0;
@@ -355,21 +360,21 @@ function addBoidForces(
     alignmentX,
     alignmentY,
     alignmentZ,
-    UNIT_CRUISE_SPEED * BOID_ALIGNMENT_WEIGHT
+    stats.cruiseSpeed * BOID_ALIGNMENT_WEIGHT
   );
   addNormalizedScaled(
     desiredVelocity,
     cohesionX / neighborCount - unit.position.x,
     cohesionY / neighborCount - unit.position.y,
     cohesionZ / neighborCount - unit.position.z,
-    UNIT_CRUISE_SPEED * BOID_COHESION_WEIGHT
+    stats.cruiseSpeed * BOID_COHESION_WEIGHT
   );
   addNormalizedScaled(
     desiredVelocity,
     separationX,
     separationY,
     separationZ,
-    UNIT_MAX_SPEED * BOID_SEPARATION_WEIGHT
+    stats.maxSpeed * BOID_SEPARATION_WEIGHT
   );
 }
 
@@ -379,7 +384,7 @@ function addObjectAvoidance(
   world: SimWorld,
   planets: readonly SimPlanet[],
   spatialIndex: UnitSpatialIndex,
-  colliderRadii: Map<number, number>
+  shipStats: Map<number, ShipStats>
 ): void {
   let avoidanceX = 0;
   let avoidanceY = 0;
@@ -410,21 +415,21 @@ function addObjectAvoidance(
     avoidanceZ += offsetZ * scaledStrength;
   }
 
-  const ownRadius = readColliderRadius(world, colliderRadii, unit.templateId);
+  const ownStats = readUnitShipStats(world, shipStats, unit);
 
   spatialIndex.forEachRadius(unit.position, SHIP_AVOIDANCE_RADIUS, (other) => {
     if (other === unit) {
       return;
     }
 
-    const otherRadius = readColliderRadius(
+    const otherStats = readShipStats(
       world,
-      colliderRadii,
+      shipStats,
       other.templateId
     );
     const avoidDistance = Math.max(
       SHIP_AVOIDANCE_RADIUS,
-      ownRadius + otherRadius + 2.4
+      ownStats.colliderRadius + otherStats.colliderRadius + 2.4
     );
     const offsetX = unit.position.x - other.position.x;
     const offsetY = unit.position.y - other.position.y;
@@ -454,7 +459,7 @@ function addObjectAvoidance(
     avoidanceX,
     avoidanceY,
     avoidanceZ,
-    UNIT_MAX_SPEED
+    ownStats.maxSpeed
   );
 }
 
@@ -586,22 +591,6 @@ function forEachCellRadius(
       }
     }
   }
-}
-
-function readColliderRadius(
-  world: SimWorld,
-  cache: Map<number, number>,
-  templateId: number
-): number {
-  const cached = cache.get(templateId);
-
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  const radius = world.content.getUnitTemplate(templateId).colliderRadius;
-  cache.set(templateId, radius);
-  return radius;
 }
 
 function findNearestPlanet(

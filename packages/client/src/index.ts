@@ -13,6 +13,7 @@ import {
   type PlayerId,
   type ScheduledCommand,
   type ServerMessage,
+  type SunConfig,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -49,6 +50,10 @@ export type PlanetViewModel = Readonly<{
   position: THREE.Vector3;
   mass: number;
   radius: number;
+  color: string;
+  hasAtmosphere: boolean;
+  orbitAxis: THREE.Vector3;
+  parentPlanetIndex: number | null;
 }>;
 
 export type LocalGameRuntime = Readonly<{
@@ -93,6 +98,7 @@ export type MountMinimalGameOptions = Readonly<{
   matchId?: string;
   serverUrl?: string;
   network?: boolean;
+  seed?: number;
   stressUnits?: number;
 }>;
 
@@ -118,6 +124,10 @@ type MutablePlanetViewModel = {
   position: THREE.Vector3;
   mass: number;
   radius: number;
+  color: string;
+  hasAtmosphere: boolean;
+  orbitAxis: THREE.Vector3;
+  parentPlanetIndex: number | null;
 };
 
 type ViewModelCache = {
@@ -160,6 +170,8 @@ type PlanetProxy = {
   lastSeenFrame: number;
 };
 
+type TacticalGrid = THREE.GridHelper;
+
 type SkyDome = Readonly<{
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -175,6 +187,11 @@ type FullscreenPass = Readonly<{
   geometry: THREE.PlaneGeometry;
 }>;
 
+type LightingRig = Readonly<{
+  group: THREE.Group;
+  sunLight: THREE.DirectionalLight;
+}>;
+
 type RenderScratch = {
   focus: THREE.Vector3;
   worldUp: THREE.Vector3;
@@ -187,6 +204,8 @@ type RenderScratch = {
   tacticalPlane: THREE.Plane;
   projected: THREE.Vector3;
   sunPosition: THREE.Vector3;
+  sunDirection: THREE.Vector3;
+  sunColor: THREE.Color;
   cameraDirection: THREE.Vector3;
   screenPosition: THREE.Vector2;
   sunScreenPosition: THREE.Vector4;
@@ -247,6 +266,14 @@ type CameraControls = {
   dragDistancePx: number;
 };
 
+type CameraFocusTween = {
+  current: THREE.Vector3;
+  from: THREE.Vector3;
+  activeContextKey: string | null;
+  startAt: number;
+  initialized: boolean;
+};
+
 type CameraPreset = "top" | "left" | "isometric";
 
 const DEFAULT_LOCAL_PLAYER_ID = 1 satisfies PlayerId;
@@ -262,13 +289,15 @@ const MAX_SIM_FRAME_DELTA_MS = 250;
 const INITIAL_INSTANCE_CAPACITY = 64;
 const UNIT_SYMBOL_SCALE = 2.4;
 const SELECTION_RING_SCALE = 4;
+const PLANET_SELECTION_MIN_RADIUS_PX = 10;
+const CAMERA_FOCUS_TWEEN_MS = 720;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
 const GRAVITY_OVERLAY_MIN_STRENGTH = 0.006;
 const GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR = 3;
 const GRAVITY_OVERLAY_VERTICES_PER_VECTOR = GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR * 2;
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
-const SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
-const SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
+const DEFAULT_SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
+const DEFAULT_SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
 const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
   tactical: {
     label: "Tactical",
@@ -308,9 +337,9 @@ const CAMERA_PRESETS: Record<
 
 export function createMinimalLocalGame(
   playerId: PlayerId = DEFAULT_LOCAL_PLAYER_ID,
-  options: { stressUnits?: number } = {}
+  options: { seed?: number; stressUnits?: number } = {}
 ): LocalGameRuntime {
-  const config = createLocalMatchConfig(options.stressUnits);
+  const config = createLocalMatchConfig(options.seed, options.stressUnits);
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -390,9 +419,13 @@ export function createNetworkedGame(options: {
   matchId: string;
   playerId: PlayerId;
   serverUrl?: string;
+  seed?: number;
 }): LocalGameRuntime {
   let world = createWorld({
-    config: createMinimalSkirmishConfig(),
+    config: createMinimalSkirmishConfig({
+      matchId: options.matchId,
+      seed: options.seed,
+    }),
     content: DEFAULT_CONTENT_REGISTRY,
   });
   const queuedBatches = new Map<number, CommandBatch>();
@@ -506,7 +539,12 @@ export function createNetworkedGame(options: {
   return runtime;
 
   function connect(): void {
-    const url = createMatchWebSocketUrl(options.matchId, options.playerId, options.serverUrl);
+    const url = createMatchWebSocketUrl(
+      options.matchId,
+      options.playerId,
+      options.serverUrl,
+      options.seed
+    );
     socket = new WebSocket(url);
     status = {
       ...status,
@@ -671,7 +709,8 @@ export function createNetworkedGame(options: {
 function createMatchWebSocketUrl(
   matchId: string,
   playerId: PlayerId,
-  serverUrl?: string
+  serverUrl?: string,
+  seed?: number
 ): string {
   const base =
     serverUrl ??
@@ -681,11 +720,16 @@ function createMatchWebSocketUrl(
   const url = new URL(`/api/matches/${encodeURIComponent(matchId)}/ws`, base);
   url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
   url.searchParams.set("player", playerId.toString());
+
+  if (seed !== undefined) {
+    url.searchParams.set("seed", seed.toString());
+  }
+
   return url.toString();
 }
 
-function createLocalMatchConfig(stressUnits?: number): MatchConfig {
-  const config = createMinimalSkirmishConfig();
+function createLocalMatchConfig(seed?: number, stressUnits?: number): MatchConfig {
+  const config = createMinimalSkirmishConfig({ seed });
   const totalUnits = Math.max(0, Math.floor(stressUnits ?? 0));
 
   if (totalUnits <= config.initialUnits.length) {
@@ -837,18 +881,26 @@ function syncPlanetViewModels(
     if (!view || view.key !== key) {
       view = {
         key,
-        label: template.displayName,
+        label: planet.name || template.displayName,
         position: new THREE.Vector3(),
         mass: planet.mass,
         radius: planet.radius,
+        color: planet.color,
+        hasAtmosphere: planet.hasAtmosphere,
+        orbitAxis: new THREE.Vector3(),
+        parentPlanetIndex: planet.parentPlanetIndex,
       };
       target[index] = view;
     }
 
-    view.label = template.displayName;
+    view.label = planet.name || template.displayName;
     view.position.set(planet.position.x, planet.position.y, planet.position.z);
     view.mass = planet.mass;
     view.radius = planet.radius;
+    view.color = planet.color;
+    view.hasAtmosphere = planet.hasAtmosphere;
+    view.orbitAxis.set(planet.orbitAxis.x, planet.orbitAxis.y, planet.orbitAxis.z);
+    view.parentPlanetIndex = planet.parentPlanetIndex;
   }
 }
 
@@ -899,10 +951,14 @@ export function readPlanetViewModels(world: SimWorld): readonly PlanetViewModel[
 
     return {
       key: handleKey(planet.handle),
-      label: template.displayName,
+      label: planet.name || template.displayName,
       position: toVector3(planet.position),
       mass: planet.mass,
       radius: planet.radius,
+      color: planet.color,
+      hasAtmosphere: planet.hasAtmosphere,
+      orbitAxis: toVector3(planet.orbitAxis),
+      parentPlanetIndex: planet.parentPlanetIndex,
     };
   });
 }
@@ -918,8 +974,10 @@ export function mountMinimalGame(
           matchId: options.matchId ?? "demo",
           playerId,
           serverUrl: options.serverUrl,
+          seed: options.seed,
         })
       : createMinimalLocalGame(playerId, {
+          seed: options.seed,
           stressUnits: options.stressUnits,
         });
   const scene = new THREE.Scene();
@@ -972,6 +1030,7 @@ export function mountMinimalGame(
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
   const selectedUnitKeys = new Set<string>();
+  let selectedPlanetKey: string | null = null;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
   const cameraPresetControls = createCameraPresetControls(container, (preset) => {
@@ -985,9 +1044,15 @@ export function mountMinimalGame(
   );
   const renderResolution = new THREE.Vector2();
   const scratch = createRenderScratch();
+  const cameraFocusTween = createCameraFocusTween();
 
-  scene.add(createLighting(SUN_DIRECTION));
-  scene.add(createTacticalPlane());
+  const lighting = createLighting(
+    writeSunDirection(scratch.sunDirection, runtime.world.config),
+    writeSunColor(scratch.sunColor, runtime.world.config)
+  );
+  scene.add(lighting.group);
+  const tacticalGrid = createTacticalPlane();
+  scene.add(tacticalGrid);
 
   const startedAt = performance.now();
   let frameId = 0;
@@ -1029,6 +1094,7 @@ export function mountMinimalGame(
 
     if (key === "d") {
       selectedUnitKeys.clear();
+      selectedPlanetKey = null;
       return;
     }
 
@@ -1142,12 +1208,31 @@ export function mountMinimalGame(
     }
 
     if (dragMode === "select" && wasClick) {
+      const selectedPlanet = findPlanetAtPointer(
+        event,
+        renderer.domElement,
+        camera,
+        runtime.readPlanets(),
+        scratch
+      );
+
+      if (selectedPlanet) {
+        selectedPlanetKey = selectedPlanet.key;
+        setGravityOverlayEnabled(
+          gravityOverlay,
+          gravityOverlayControls,
+          true
+        );
+        return;
+      }
+
       issueMoveCommandFromClick(
         event,
         renderer.domElement,
         camera,
         runtime,
         selectedUnitKeys,
+        selectedPlanetKey,
         scratch
       );
     }
@@ -1173,10 +1258,12 @@ export function mountMinimalGame(
       camera,
       cameraControls,
       container,
-      writeCameraFocusPosition(
+      writeResizeCameraFocus(
+        cameraFocusTween,
         scratch.focus,
         runtime.readUnits(),
-        runtime.readPlanets()
+        runtime.readPlanets(),
+        selectedPlanetKey
       ),
       scratch
     );
@@ -1239,8 +1326,26 @@ export function mountMinimalGame(
     const renderStartedAt = performance.now();
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
-    const planetaryContext = getCurrentPlanetaryContext(planets);
-    const focus = writeCameraFocusPosition(scratch.focus, units, planets);
+    selectedPlanetKey = pruneSelectedPlanetKey(selectedPlanetKey, planets);
+    const planetaryContext = getCurrentPlanetaryContext(
+      planets,
+      selectedPlanetKey
+    );
+    const focus = writeCameraFocusPosition(
+      scratch.focus,
+      units,
+      planets,
+      selectedPlanetKey
+    );
+    const displayedFocus = updateCameraFocusTween(
+      cameraFocusTween,
+      planetaryContext?.key ?? null,
+      focus,
+      now
+    );
+    const sunDirection = writeSunDirection(scratch.sunDirection, runtime.world.config);
+    const sunColor = writeSunColor(scratch.sunColor, runtime.world.config);
+    const sunDistance = readSunDistance(runtime.world.config.environment.sun);
     const elapsedSeconds = (now - startedAt) / 1000;
     renderFrameIndex += 1;
 
@@ -1250,12 +1355,14 @@ export function mountMinimalGame(
       worldGroup,
       planetProxies,
       planets,
+      planetaryContext?.key ?? null,
       renderFrameIndex,
       planetGeometry,
       planetMaterial
     );
-    applyCameraControls(camera, cameraControls, container, focus, scratch);
+    applyCameraControls(camera, cameraControls, container, displayedFocus, scratch);
     camera.updateMatrixWorld();
+    updateLighting(lighting, sunDirection, sunColor);
     updateUnitBatches(
       unitBatches,
       units,
@@ -1271,13 +1378,27 @@ export function mountMinimalGame(
       camera,
       renderResolution
     );
-    updatePlanetBillboards(planetProxies, camera, elapsedSeconds, scratch);
-    updateGravityOverlay(gravityOverlay, planetaryContext, planets);
+    updatePlanetBillboards(
+      planetProxies,
+      camera,
+      elapsedSeconds,
+      sunDirection,
+      scratch
+    );
+    updateTacticalGrid(tacticalGrid, planetaryContext);
+    updateGravityOverlay(
+      gravityOverlay,
+      planetaryContext,
+      planetaryContext ? [planetaryContext] : []
+    );
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
-      focus,
+      displayedFocus,
       planets,
+      sunDirection,
+      sunDistance,
+      sunColor,
       renderResolution,
       elapsedSeconds,
       scratch
@@ -1286,6 +1407,7 @@ export function mountMinimalGame(
     if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
       container.dataset.cameraMode = cameraControls.mode;
       container.dataset.cameraFocus = planetaryContext?.label ?? "none";
+      container.dataset.selectedPlanet = planetaryContext?.label ?? "none";
       container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
       container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
       container.dataset.cameraViewHeight =
@@ -1333,7 +1455,9 @@ export function mountMinimalGame(
         observedSimHz,
         estimatedRenderMs,
         renderer.info.render.calls,
-        renderer.getPixelRatio()
+        renderer.getPixelRatio(),
+        planetaryContext?.label ?? "none",
+        selectedUnitKeys.size
       );
       lastPerfDatasetUpdateAt = now;
     }
@@ -1365,10 +1489,12 @@ export function mountMinimalGame(
     camera,
     cameraControls,
     container,
-    writeCameraFocusPosition(
+    writeResizeCameraFocus(
+      cameraFocusTween,
       scratch.focus,
       runtime.readUnits(),
-      runtime.readPlanets()
+      runtime.readPlanets(),
+      selectedPlanetKey
     ),
     scratch
   );
@@ -1440,11 +1566,71 @@ function createRenderScratch(): RenderScratch {
     tacticalPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
     projected: new THREE.Vector3(),
     sunPosition: new THREE.Vector3(),
+    sunDirection: new THREE.Vector3(),
+    sunColor: new THREE.Color(),
     cameraDirection: new THREE.Vector3(),
     screenPosition: new THREE.Vector2(),
     sunScreenPosition: new THREE.Vector4(),
     sunViewDirection: new THREE.Vector3(),
   };
+}
+
+function createCameraFocusTween(): CameraFocusTween {
+  return {
+    current: new THREE.Vector3(),
+    from: new THREE.Vector3(),
+    activeContextKey: null,
+    startAt: 0,
+    initialized: false,
+  };
+}
+
+function writeResizeCameraFocus(
+  tween: CameraFocusTween,
+  target: THREE.Vector3,
+  units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null
+): THREE.Vector3 {
+  if (tween.initialized) {
+    return target.copy(tween.current);
+  }
+
+  return writeCameraFocusPosition(target, units, planets, selectedPlanetKey);
+}
+
+function updateCameraFocusTween(
+  tween: CameraFocusTween,
+  contextKey: string | null,
+  targetFocus: THREE.Vector3,
+  now: number
+): THREE.Vector3 {
+  if (!tween.initialized) {
+    tween.current.copy(targetFocus);
+    tween.from.copy(targetFocus);
+    tween.activeContextKey = contextKey;
+    tween.startAt = now;
+    tween.initialized = true;
+    return tween.current;
+  }
+
+  if (tween.activeContextKey !== contextKey) {
+    tween.from.copy(tween.current);
+    tween.activeContextKey = contextKey;
+    tween.startAt = now;
+  }
+
+  const progress = clamp((now - tween.startAt) / CAMERA_FOCUS_TWEEN_MS, 0, 1);
+
+  if (progress >= 1) {
+    return tween.current.copy(targetFocus);
+  }
+
+  return tween.current.lerpVectors(
+    tween.from,
+    targetFocus,
+    smoothstep(0, 1, progress)
+  );
 }
 
 function applyCameraControls(
@@ -1484,9 +1670,10 @@ function applyCameraControls(
 function writeCameraFocusPosition(
   target: THREE.Vector3,
   units: readonly UnitViewModel[],
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null
 ): THREE.Vector3 {
-  const planet = getCurrentPlanetaryContext(planets);
+  const planet = getCurrentPlanetaryContext(planets, selectedPlanetKey);
 
   if (planet) {
     return target.copy(planet.position);
@@ -1496,8 +1683,17 @@ function writeCameraFocusPosition(
 }
 
 function getCurrentPlanetaryContext(
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null
 ): PlanetViewModel | null {
+  if (selectedPlanetKey) {
+    const selected = planets.find((planet) => planet.key === selectedPlanetKey);
+
+    if (selected) {
+      return selected;
+    }
+  }
+
   return planets.find((planet) => planet.label === "Aurora") ?? planets[0] ?? null;
 }
 
@@ -1516,6 +1712,7 @@ function issueMoveCommandFromClick(
   camera: THREE.Camera,
   runtime: LocalGameRuntime,
   selectedUnitKeys: ReadonlySet<string>,
+  selectedPlanetKey: string | null,
   scratch: RenderScratch
 ): boolean {
   const selectedUnits = runtime
@@ -1534,6 +1731,7 @@ function issueMoveCommandFromClick(
     canvas,
     camera,
     runtime.readPlanets(),
+    selectedPlanetKey,
     scratch
   );
 
@@ -1553,12 +1751,13 @@ function getPointerMoveTarget(
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null,
   scratch: RenderScratch
 ): THREE.Vector3 | null {
   const bounds = canvas.getBoundingClientRect();
   const x = ((event.clientX - bounds.left) / Math.max(bounds.width, 1)) * 2 - 1;
   const y = -(((event.clientY - bounds.top) / Math.max(bounds.height, 1)) * 2 - 1);
-  const context = getCurrentPlanetaryContext(planets);
+  const context = getCurrentPlanetaryContext(planets, selectedPlanetKey);
   const tacticalPlane = scratch.tacticalPlane.set(
     scratch.tacticalPlaneNormal.set(0, 1, 0),
     -(context?.position.y ?? 0)
@@ -1569,6 +1768,54 @@ function getPointerMoveTarget(
   return scratch.raycaster.ray.intersectPlane(tacticalPlane, scratch.rayTarget)
     ? scratch.rayTarget
     : null;
+}
+
+function findPlanetAtPointer(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  planets: readonly PlanetViewModel[],
+  scratch: RenderScratch
+): PlanetViewModel | null {
+  if (!(camera instanceof THREE.OrthographicCamera)) {
+    return null;
+  }
+
+  const bounds = canvas.getBoundingClientRect();
+  const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const pointerX = event.clientX - bounds.left;
+  const pointerY = event.clientY - bounds.top;
+  let bestPlanet: PlanetViewModel | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const planet of planets) {
+    const projected = scratch.projected.copy(planet.position).project(camera);
+
+    if (projected.z < -1 || projected.z > 1) {
+      continue;
+    }
+
+    const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
+    const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
+    const screenRadius = Math.max(
+      (planet.radius * 1.08 * bounds.height) / viewHeight,
+      PLANET_SELECTION_MIN_RADIUS_PX
+    );
+    const screenDistance = Math.hypot(pointerX - screenX, pointerY - screenY);
+
+    if (screenDistance > screenRadius) {
+      continue;
+    }
+
+    const score = screenDistance / screenRadius;
+
+    if (score < bestScore) {
+      bestPlanet = planet;
+      bestScore = score;
+    }
+  }
+
+  return bestPlanet;
 }
 
 function selectOwnedUnitsInBox(
@@ -1616,6 +1863,16 @@ function selectOwnedUnitsInBox(
   }
 }
 
+function pruneSelectedPlanetKey(
+  selectedPlanetKey: string | null,
+  planets: readonly PlanetViewModel[]
+): string | null {
+  return selectedPlanetKey &&
+    planets.some((planet) => planet.key === selectedPlanetKey)
+    ? selectedPlanetKey
+    : null;
+}
+
 function pruneSelectedUnitKeys(
   selectedUnitKeys: Set<string>,
   units: readonly UnitViewModel[]
@@ -1644,6 +1901,7 @@ function updatePlanetProxies(
   worldGroup: THREE.Group,
   proxies: Map<string, PlanetProxy>,
   planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null,
   frameIndex: number,
   geometry: THREE.PlaneGeometry,
   material: THREE.ShaderMaterial
@@ -1660,11 +1918,16 @@ function updatePlanetProxies(
     proxy.lastSeenFrame = frameIndex;
     proxy.body.position.copy(planet.position);
     proxy.body.scale.setScalar(planet.radius * 2.12);
+    proxy.body.material.uniforms.uPlanetColor.value.set(planet.color);
+    proxy.body.material.uniforms.uHasAtmosphere.value = planet.hasAtmosphere ? 1 : 0;
+    proxy.body.material.uniforms.uSelected.value =
+      planet.key === selectedPlanetKey ? 1 : 0;
   }
 
   for (const [key, proxy] of proxies) {
     if (proxy.lastSeenFrame !== frameIndex) {
       worldGroup.remove(proxy.body);
+      proxy.body.material.dispose();
       proxies.delete(key);
     }
   }
@@ -1929,6 +2192,7 @@ function disposePlanetProxies(
 ): void {
   for (const proxy of proxies.values()) {
     worldGroup.remove(proxy.body);
+    proxy.body.material.dispose();
   }
 
   proxies.clear();
@@ -1939,9 +2203,13 @@ function createPlanetProxy(
   geometry: THREE.PlaneGeometry,
   material: THREE.ShaderMaterial
 ): PlanetProxy {
+  const planetMaterial = material.clone();
+  planetMaterial.uniforms.uPlanetColor.value.set(planet.color);
+  planetMaterial.uniforms.uHasAtmosphere.value = planet.hasAtmosphere ? 1 : 0;
+  planetMaterial.uniforms.uSelected.value = 0;
   const body = new THREE.Mesh(
     geometry,
-    material
+    planetMaterial
   );
   body.name = `${planet.label} shaded billboard planet`;
   body.position.copy(planet.position);
@@ -1954,22 +2222,80 @@ function createPlanetProxy(
   };
 }
 
-function createLighting(sunDirection: THREE.Vector3): THREE.Group {
+function writeSunDirection(
+  target: THREE.Vector3,
+  config: MatchConfig
+): THREE.Vector3 {
+  const { position } = config.environment.sun;
+  target.set(position.x, position.y, position.z);
+
+  if (target.lengthSq() <= 0.000001) {
+    return target.copy(DEFAULT_SUN_DIRECTION);
+  }
+
+  return target.normalize();
+}
+
+function writeSunColor(target: THREE.Color, config: MatchConfig): THREE.Color {
+  return target.set(config.environment.sun.color);
+}
+
+function readSunDistance(sun: SunConfig): number {
+  return Math.max(sun.distance, 1);
+}
+
+function createLighting(
+  sunDirection: THREE.Vector3,
+  sunColor: THREE.Color
+): LightingRig {
   const group = new THREE.Group();
 
-  const sunLight = new THREE.DirectionalLight(SUN_COLOR, 1.65);
+  const sunLight = new THREE.DirectionalLight(sunColor, 1.65);
   sunLight.position.copy(sunDirection).multiplyScalar(1000);
   group.add(sunLight);
   group.add(sunLight.target);
   group.add(new THREE.AmbientLight(0xdbe7ff, 0.42));
 
-  return group;
+  return {
+    group,
+    sunLight,
+  };
 }
 
-function createTacticalPlane(): THREE.Object3D {
+function updateLighting(
+  lighting: LightingRig,
+  sunDirection: THREE.Vector3,
+  sunColor: THREE.Color
+): void {
+  lighting.sunLight.color.copy(sunColor);
+  lighting.sunLight.position.copy(sunDirection).multiplyScalar(1000);
+}
+
+function createTacticalPlane(): TacticalGrid {
   const grid = new THREE.GridHelper(180, 36, 0x293044, 0x151b29);
-  grid.position.y = -0.85;
+  grid.name = "selected-planet-tactical-grid";
+  grid.renderOrder = 2;
   return grid;
+}
+
+function updateTacticalGrid(
+  grid: TacticalGrid,
+  context: PlanetViewModel | null
+): void {
+  grid.visible = !!context;
+
+  if (!context) {
+    return;
+  }
+
+  const scale = Math.max(context.radius * 0.016, 0.8);
+
+  grid.position.set(
+    context.position.x,
+    context.position.y + 0.55,
+    context.position.z
+  );
+  grid.scale.setScalar(scale);
 }
 
 function createGravityOverlay(): GravityOverlay {
@@ -2214,7 +2540,7 @@ function createSunFlarePass(): FullscreenPass {
     uniforms: {
       uResolution: { value: new THREE.Vector2(1, 1) },
       uSunPosition: { value: new THREE.Vector2(0.5, 0.5) },
-      uSunColor: { value: SUN_COLOR.clone() },
+      uSunColor: { value: DEFAULT_SUN_COLOR.clone() },
       uVisibility: { value: 1 },
       uTime: { value: 0 },
     },
@@ -2243,8 +2569,11 @@ function createSunFlarePass(): FullscreenPass {
 function createPlanetBillboardMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
-      uSunDirection: { value: SUN_DIRECTION.clone() },
-      uSunColor: { value: SUN_COLOR.clone() },
+      uSunDirection: { value: DEFAULT_SUN_DIRECTION.clone() },
+      uSunColor: { value: DEFAULT_SUN_COLOR.clone() },
+      uPlanetColor: { value: new THREE.Color(0x376fae) },
+      uHasAtmosphere: { value: 1 },
+      uSelected: { value: 0 },
       uTime: { value: 0 },
     },
     vertexShader: PLANET_BILLBOARD_VERTEX_SHADER,
@@ -2274,18 +2603,21 @@ function updateSunFlarePass(
   camera: THREE.Camera,
   focus: THREE.Vector3,
   planets: readonly PlanetViewModel[],
+  sunDirection: THREE.Vector3,
+  sunDistance: number,
+  sunColor: THREE.Color,
   resolution: THREE.Vector2,
   elapsedSeconds: number,
   scratch: RenderScratch
 ): THREE.Vector4 {
   const projectedSun = scratch.sunPosition
     .copy(focus)
-    .addScaledVector(SUN_DIRECTION, 2600)
+    .addScaledVector(sunDirection, sunDistance)
     .project(camera);
   camera.getWorldDirection(scratch.cameraDirection);
   const visibility =
     projectedSun.z >= -1 && projectedSun.z <= 1
-      ? clamp(scratch.cameraDirection.dot(SUN_DIRECTION), 0, 1)
+      ? clamp(scratch.cameraDirection.dot(sunDirection), 0, 1)
       : 0;
   const screenPosition = scratch.screenPosition.set(
     0.5 + projectedSun.x * 0.5,
@@ -2306,6 +2638,7 @@ function updateSunFlarePass(
 
   pass.material.uniforms.uResolution.value.copy(resolution);
   pass.material.uniforms.uSunPosition.value.copy(screenPosition);
+  pass.material.uniforms.uSunColor.value.copy(sunColor);
   pass.material.uniforms.uVisibility.value = visibleSun;
   pass.material.uniforms.uTime.value = elapsedSeconds;
 
@@ -2360,22 +2693,18 @@ function updatePlanetBillboards(
   proxies: Map<string, PlanetProxy>,
   camera: THREE.Camera,
   elapsedSeconds: number,
+  sunDirection: THREE.Vector3,
   scratch: RenderScratch
 ): void {
   const sunViewDirection = scratch.sunViewDirection
-    .copy(SUN_DIRECTION)
+    .copy(sunDirection)
     .transformDirection(camera.matrixWorldInverse)
     .normalize();
-  let updatedSharedMaterial = false;
 
   for (const proxy of proxies.values()) {
     proxy.body.quaternion.copy(camera.quaternion);
-
-    if (!updatedSharedMaterial) {
-      proxy.body.material.uniforms.uSunDirection.value.copy(sunViewDirection);
-      proxy.body.material.uniforms.uTime.value = elapsedSeconds;
-      updatedSharedMaterial = true;
-    }
+    proxy.body.material.uniforms.uSunDirection.value.copy(sunViewDirection);
+    proxy.body.material.uniforms.uTime.value = elapsedSeconds;
   }
 }
 
@@ -2474,9 +2803,11 @@ function updateStatsLayer(
   observedSimHz: number,
   estimatedRenderMs: number,
   drawCalls: number,
-  pixelRatio: number
+  pixelRatio: number,
+  selectedPlanetLabel: string,
+  selectedUnitCount: number
 ): void {
-  statsLayer.textContent = `Tick ${runtime.world.tick
+  statsLayer.textContent = `Planet ${selectedPlanetLabel} / Units ${runtime.world.units.length} / Selected ${selectedUnitCount} / Tick ${runtime.world.tick
     .toString()
     .padStart(5, "0")} / ${estimatedFps.toFixed(0)} fps / ${observedSimHz.toFixed(1)} sim / ${drawCalls} calls / ${estimatedRenderMs.toFixed(2)} ms / ${pixelRatio.toFixed(2)}x / Hash ${runtime.readHash()}`;
 }
@@ -2892,6 +3223,9 @@ void main() {
 const PLANET_BILLBOARD_FRAGMENT_SHADER = `
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
+uniform vec3 uPlanetColor;
+uniform float uHasAtmosphere;
+uniform float uSelected;
 uniform float uTime;
 
 varying vec2 vUv;
@@ -2913,7 +3247,7 @@ void main() {
   vec2 centered = vUv * 2.0 - 1.0;
   float radius = length(centered);
   const float solidRadius = 0.925;
-  const float atmosphereRadius = 0.968;
+  float atmosphereRadius = mix(solidRadius, 0.968, uHasAtmosphere);
 
   if (radius > atmosphereRadius) {
     discard;
@@ -2939,30 +3273,36 @@ void main() {
     betaR * phaseR * vec3(0.72, 1.08, 1.85) * 210000.0 +
     betaM * phaseM * vec3(1.16, 0.92, 0.74) * 52000.0;
   vec3 forwardSun = uSunColor * pow(max(mu, 0.0), 18.0) * 0.82;
-  vec3 ocean = vec3(0.05, 0.23, 0.58);
-  vec3 land = vec3(0.12, 0.42, 0.30);
-  vec3 earth = vec3(0.34, 0.25, 0.16);
+  vec3 lowColor = uPlanetColor * 0.58;
+  vec3 highColor = mix(uPlanetColor * 1.24, vec3(0.72), 0.18);
+  vec3 earth = mix(uPlanetColor * 0.68, vec3(0.34, 0.25, 0.16), 0.16);
   float continent = smoothstep(
     -0.24,
     0.58,
     sin(centered.x * 7.4 + centered.y * 2.2) +
       0.5 * sin(centered.y * 8.6 - centered.x * 3.1)
   );
-  vec3 surface = mix(ocean, land, continent * 0.22);
+  vec3 surface = mix(lowColor, highColor, continent * 0.26);
   surface = mix(surface, earth, continent * smoothstep(-0.15, 0.65, centered.y) * 0.08);
   float limbShade = 1.0 - smoothstep(0.24, solidRadius, radius) * 0.34;
   float lightShade = 0.36 + 0.62 * sunSide;
   vec3 planetColor = surface * limbShade * lightShade;
   planetColor += vec3(0.10, 0.19, 0.36) * (1.0 - sunSide) * 0.42;
 
-  vec3 atmosphericVeil = scatter * innerAir * vec3(0.72, 0.88, 1.25);
-  atmosphericVeil += vec3(0.10, 0.32, 0.95) * innerAir * (0.55 + 0.45 * sunSide);
+  vec3 atmosphereTint = mix(vec3(0.14, 0.34, 0.95), uPlanetColor * 1.18, 0.42);
+  vec3 atmosphericVeil = scatter * innerAir * vec3(0.72, 0.88, 1.25) * uHasAtmosphere;
+  atmosphericVeil += atmosphereTint * innerAir * (0.55 + 0.45 * sunSide) * uHasAtmosphere;
   vec3 atmosphereColor = (scatter * (0.34 + sunSide * 1.72) + forwardSun) * horizonColumn;
-  atmosphereColor += vec3(0.18, 0.42, 1.0) * horizonColumn * (0.35 + 0.65 * sunSide);
+  atmosphereColor += atmosphereTint * horizonColumn * (0.35 + 0.65 * sunSide) * uHasAtmosphere;
   atmosphereColor += atmosphericVeil;
-  vec3 color = planetColor * solidMask * 0.12 + atmosphereColor;
+  vec3 color = mix(planetColor * solidMask, planetColor * solidMask * 0.38 + atmosphereColor, uHasAtmosphere);
+  float selectedRing = uSelected *
+    smoothstep(solidRadius + 0.012, solidRadius + 0.022, radius) *
+    (1.0 - smoothstep(atmosphereRadius - 0.014, atmosphereRadius, radius));
+  color = mix(color, vec3(1.0, 0.84, 0.22), selectedRing);
 
-  float alpha = max(solidMask, clamp(shell * (0.14 + sunSide * 0.36) + innerAir, 0.0, 0.42));
+  float atmosphereAlpha = clamp(shell * (0.14 + sunSide * 0.36) + innerAir, 0.0, 0.42);
+  float alpha = max(max(solidMask, atmosphereAlpha * uHasAtmosphere), selectedRing);
   gl_FragColor = vec4(color, alpha);
 }
 `;

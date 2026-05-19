@@ -164,58 +164,65 @@ canvas {
   z-index: 4;
   width: min(240px, calc(100vw - 28px));
   transform: translateY(-50%);
-  border: 1px solid rgb(131 247 255 / 24%);
-  border-radius: 6px;
+  border: 1px solid rgb(252 61 33 / 72%);
+  border-radius: 0;
   background: rgb(5 8 18 / 58%);
-  color: rgb(230 251 255 / 86%);
+  color: rgb(252 61 33 / 92%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 1.2;
 }
 
 .command-menu-content {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 0;
+  padding: 0;
 }
 
 .command-menu-title,
 .command-menu-subtitle {
-  color: rgb(255 244 188 / 90%);
+  color: rgb(252 61 33 / 96%);
   font-size: 11px;
   font-weight: 700;
+  padding: 8px 9px;
   text-transform: uppercase;
 }
 
 .command-menu-empty {
-  color: rgb(230 251 255 / 58%);
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  color: rgb(252 61 33 / 66%);
+  padding: 8px 9px;
 }
 
 .command-menu-group {
-  border-top: 1px solid rgb(131 247 255 / 14%);
-  padding-top: 6px;
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  padding-top: 0;
 }
 
 .command-menu-group summary {
   cursor: pointer;
-  color: rgb(230 251 255 / 78%);
+  color: rgb(252 61 33 / 90%);
   font-weight: 700;
+  padding: 8px 9px;
   list-style-position: outside;
 }
 
 .command-menu-list,
 .command-menu-commands {
   display: grid;
-  gap: 5px;
-  margin-top: 6px;
+  gap: 0;
+  margin-top: 0;
 }
 
 .command-menu-unit,
 .command-menu-command {
+  width: 100%;
   min-height: 26px;
-  border: 1px solid rgb(131 247 255 / 18%);
-  border-radius: 5px;
+  border: 0;
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  border-radius: 0;
   background: rgb(8 14 26 / 62%);
-  color: rgb(238 246 255 / 82%);
+  color: rgb(252 61 33 / 88%);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -232,12 +239,50 @@ canvas {
 .command-menu-unit:hover,
 .command-menu-unit[aria-pressed="true"],
 .command-menu-command:hover:not(:disabled) {
-  border-color: rgb(131 247 255 / 62%);
-  background: rgb(15 29 36 / 78%);
-  color: #dffcff;
+  background: rgb(252 61 33 / 16%);
+  color: rgb(255 106 72 / 100%);
 }
 
 .command-menu-command:disabled {
   cursor: default;
   opacity: 0.44;
+}
+
+.selected-leader-arrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  width: 20px;
+  height: 30px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.selected-leader-arrow::before {
+  position: absolute;
+  top: 0;
+  left: 9px;
+  width: 2px;
+  height: 18px;
+  background: #fc3d21;
+  box-shadow: 0 0 8px rgb(252 61 33 / 78%);
+  content: "";
+}
+
+.selected-leader-arrow::after {
+  position: absolute;
+  top: 17px;
+  left: 3px;
+  width: 0;
+  height: 0;
+  border-right: 7px solid transparent;
+  border-left: 7px solid transparent;
+  border-top: 11px solid #fc3d21;
+  filter: drop-shadow(0 0 5px rgb(252 61 33 / 78%));
+  content: "";
+}
+
+.selected-leader-arrow[hidden] {
+  display: none;
 }

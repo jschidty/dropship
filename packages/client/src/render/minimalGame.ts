@@ -382,6 +382,7 @@ export function mountMinimalGame(
   );
   createRandomSeedControl(topLeftControls);
   createRenderModeControl(topLeftControls, renderQuality.mode);
+  const leaderArrow = createSelectedLeaderArrow(container);
   const commandMenu = createCommandMenu(container, {
     onSelectLeader(unitKey) {
       commandMenuLeaderKey = unitKey;
@@ -633,7 +634,8 @@ export function mountMinimalGame(
         scratch.focus,
         runtime.readUnits(),
         runtime.readPlanets(),
-        selectedPlanetKey
+        selectedPlanetKey,
+        selectedUnitKeys
       ),
       scratch
     );
@@ -697,20 +699,22 @@ export function mountMinimalGame(
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
     selectedPlanetKey = pruneSelectedPlanetKey(selectedPlanetKey, planets);
-    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
-    const planetaryContext = getCurrentPlanetaryContext(
-      planets,
-      selectedPlanetKey
+    pruneSelectedUnitKeys(selectedUnitKeys, units);
+    commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+      commandMenuLeaderKey,
+      selectedUnitKeys
     );
+    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
     const focus = writeCameraFocusPosition(
       scratch.focus,
       units,
       planets,
-      selectedPlanetKey
+      selectedPlanetKey,
+      selectedUnitKeys
     );
     const displayedFocus = updateCameraFocusTween(
       cameraFocusTween,
-      planetaryContext?.key ?? null,
+      readCameraFocusContextKey(selectedPlanetKey, selectedUnitKeys),
       focus,
       now
     );
@@ -719,12 +723,6 @@ export function mountMinimalGame(
     const sunDistance = readSunDistance(runtime.world.config.environment.sun);
     const elapsedSeconds = (now - startedAt) / 1000;
     renderFrameIndex += 1;
-
-    pruneSelectedUnitKeys(selectedUnitKeys, units);
-    commandMenuLeaderKey = pruneCommandMenuLeaderKey(
-      commandMenuLeaderKey,
-      selectedUnitKeys
-    );
 
     updatePlanetProxies(
       worldGroup,
@@ -740,6 +738,13 @@ export function mountMinimalGame(
     );
     applyCameraControls(camera, cameraControls, container, displayedFocus, scratch);
     camera.updateMatrixWorld();
+    updateSelectedLeaderArrow(
+      leaderArrow,
+      units.find((unit) => unit.key === commandMenuLeaderKey) ?? null,
+      camera,
+      container,
+      scratch
+    );
     updateLighting(lighting, sunDirection, sunColor);
     updateUnitBatches(
       unitBatches,
@@ -791,7 +796,7 @@ export function mountMinimalGame(
 
     if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
       container.dataset.cameraMode = cameraControls.mode;
-      container.dataset.cameraFocus = planetaryContext?.label ?? "none";
+      container.dataset.cameraFocus = selectedPlanet?.label ?? "units";
       container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
       container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
       container.dataset.cameraViewHeight =
@@ -887,7 +892,8 @@ export function mountMinimalGame(
       scratch.focus,
       runtime.readUnits(),
       runtime.readPlanets(),
-      selectedPlanetKey
+      selectedPlanetKey,
+      selectedUnitKeys
     ),
     scratch
   );
@@ -938,6 +944,40 @@ function getPreferredRenderPixelRatio(
   );
 }
 
+function createSelectedLeaderArrow(container: HTMLElement): HTMLElement {
+  const arrow = document.createElement("div");
+  arrow.className = "selected-leader-arrow";
+  arrow.hidden = true;
+  container.appendChild(arrow);
+  return arrow;
+}
+
+function updateSelectedLeaderArrow(
+  arrow: HTMLElement,
+  leader: UnitViewModel | null,
+  camera: THREE.Camera,
+  container: HTMLElement,
+  scratch: RenderScratch
+): void {
+  if (!leader) {
+    arrow.hidden = true;
+    return;
+  }
+
+  const projected = scratch.projected.copy(leader.position).project(camera);
+
+  if (projected.z < -1 || projected.z > 1) {
+    arrow.hidden = true;
+    return;
+  }
+
+  const x = (projected.x * 0.5 + 0.5) * container.clientWidth;
+  const y = (-projected.y * 0.5 + 0.5) * container.clientHeight - 24;
+
+  arrow.hidden = false;
+  arrow.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+}
+
 function createRenderScratch(): RenderScratch {
   return {
     focus: new THREE.Vector3(),
@@ -977,13 +1017,20 @@ function writeResizeCameraFocus(
   target: THREE.Vector3,
   units: readonly UnitViewModel[],
   planets: readonly PlanetViewModel[],
-  selectedPlanetKey: string | null
+  selectedPlanetKey: string | null,
+  selectedUnitKeys: ReadonlySet<string>
 ): THREE.Vector3 {
   if (tween.initialized) {
     return target.copy(tween.current);
   }
 
-  return writeCameraFocusPosition(target, units, planets, selectedPlanetKey);
+  return writeCameraFocusPosition(
+    target,
+    units,
+    planets,
+    selectedPlanetKey,
+    selectedUnitKeys
+  );
 }
 
 function updateCameraFocusTween(
@@ -1058,15 +1105,21 @@ function writeCameraFocusPosition(
   target: THREE.Vector3,
   units: readonly UnitViewModel[],
   planets: readonly PlanetViewModel[],
-  selectedPlanetKey: string | null
+  selectedPlanetKey: string | null,
+  selectedUnitKeys: ReadonlySet<string>
 ): THREE.Vector3 {
-  const planet = getCurrentPlanetaryContext(planets, selectedPlanetKey);
+  const planet = getSelectedPlanet(planets, selectedPlanetKey);
 
   if (planet) {
     return target.copy(planet.position);
   }
 
-  return writeLocalFocusPosition(target, units, DEFAULT_LOCAL_PLAYER_ID);
+  const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+
+  return writeUnitCentroidFocus(
+    target,
+    selectedUnits.length > 0 ? selectedUnits : units
+  );
 }
 
 function getCurrentPlanetaryContext(
@@ -1091,13 +1144,34 @@ function getSelectedPlanet(
     : null;
 }
 
-function writeLocalFocusPosition(
+function readCameraFocusContextKey(
+  selectedPlanetKey: string | null,
+  selectedUnitKeys: ReadonlySet<string>
+): string {
+  if (selectedPlanetKey) {
+    return `planet:${selectedPlanetKey}`;
+  }
+
+  return selectedUnitKeys.size > 0
+    ? `units:${[...selectedUnitKeys].sort().join(",")}`
+    : "units:all";
+}
+
+function writeUnitCentroidFocus(
   target: THREE.Vector3,
-  units: readonly UnitViewModel[],
-  playerId: PlayerId
+  units: readonly UnitViewModel[]
 ): THREE.Vector3 {
-  const localUnit = units.find((unit) => unit.owner === playerId) ?? units[0];
-  return localUnit ? target.copy(localUnit.position) : target.set(0, 0, 0);
+  if (units.length === 0) {
+    return target.set(0, 0, 0);
+  }
+
+  target.set(0, 0, 0);
+
+  for (const unit of units) {
+    target.add(unit.position);
+  }
+
+  return target.multiplyScalar(1 / units.length);
 }
 
 function issueMoveCommandFromClick(

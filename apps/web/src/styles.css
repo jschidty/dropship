@@ -92,7 +92,8 @@ canvas {
 }
 
 .tactical-toggle,
-.random-seed-button {
+.random-seed-button,
+.render-mode-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -118,9 +119,16 @@ canvas {
   padding: 0 10px;
 }
 
+.render-mode-button {
+  min-width: 88px;
+  padding: 0 10px;
+}
+
 .tactical-toggle:hover,
 .tactical-toggle:has(input:checked),
-.random-seed-button:hover {
+.random-seed-button:hover,
+.render-mode-button:hover,
+.render-mode-button[aria-pressed="true"] {
   border-color: rgb(131 247 255 / 62%);
   background: rgb(15 29 36 / 76%);
   color: #dffcff;

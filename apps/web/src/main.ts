@@ -1,6 +1,6 @@
 import "./styles.css";
 import type { PlayerId } from "@drop-ship/protocol";
-import { mountMinimalGame } from "@drop-ship/client";
+import { mountMinimalGame, type RenderQualityMode } from "@drop-ship/client";
 
 const app = document.querySelector<HTMLElement>("#app");
 
@@ -18,6 +18,9 @@ const matchId =
 const stressUnits = parsePositiveInteger(
   params.get("stressUnits") ?? params.get("units")
 );
+const renderMode = parseRenderMode(
+  params.get("render") ?? params.get("renderMode") ?? params.get("quality")
+);
 
 mountMinimalGame(app, {
   playerId,
@@ -26,6 +29,7 @@ mountMinimalGame(app, {
   network: wantsNetwork || Boolean(matchId),
   seed,
   stressUnits,
+  renderMode,
 });
 
 function parsePlayerId(value: string | null): PlayerId {
@@ -48,4 +52,8 @@ function parseInteger(value: string | null): number | undefined {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function parseRenderMode(value: string | null): RenderQualityMode | undefined {
+  return value === "cinematic" || value === "interactive" ? value : undefined;
 }

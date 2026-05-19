@@ -74,7 +74,7 @@ scene
 `-- env            skybox, stars, ambient lighting
 ```
 
-HUD, command panels, minimap, cockpit UI, and resource counters are DOM/canvas overlays.
+HUD, command panels, minimap, and resource counters are DOM/canvas overlays.
 
 ## Floating origin
 
@@ -159,9 +159,8 @@ Modes:
 - Free fly
 - Follow entity/fleet
 - Cinematic replay/spectator
-- FirstPerson for piloted ships
 
-Camera transitions are presentation only. Possess/release control changes happen on the sim tick where the command executes; the camera animation can hide the lockstep delay.
+Camera transitions are presentation only. The first capture demo uses tactical-view UI and controls only; first-person piloting is outside its scope.
 
 ## Input system
 
@@ -199,11 +198,20 @@ Visual effects are event-driven and presentation-only.
 Example:
 
 1. `CombatSystem` emits `WeaponFired`.
-2. Effects manager spawns beam or muzzle flash.
+2. Effects manager spawns a pooled energy projectile, impact flash, or muzzle flash.
 3. Effect updates on render time.
 4. Effect expires and disposes.
 
 Effect randomness is allowed if it never affects sim. Use object pools for frequent effects.
+
+Energy projectile particles:
+
+- are visual-only particles created from sim combat events
+- use cyan for Player 1 and magenta for Player 2
+- should be pooled billboards or instanced quads in interactive mode
+- may add a small emissive glow or halo in cinematic mode
+- must stay cheap enough for many simultaneous shots
+- never determine whether a weapon hit
 
 ## Audio
 
@@ -235,8 +243,9 @@ Phase 1 UI:
 - command buttons
 - minimap at 4-10 Hz
 - match timer/objective/winner
-- cockpit HUD in FirstPerson mode
 - desync/resync notice for debugging
+
+The first capture demo implements all player-facing controls in tactical view. Cockpit HUD and first-person piloting UI are reserved for a later milestone.
 
 UI click handlers produce command intents. They do not write ECS state.
 
@@ -275,6 +284,7 @@ The network client may call explicit sim runtime APIs for command delivery and r
 ## Performance notes
 
 - Use instancing for repeated ship/projectile meshes.
+- Use pooled billboard or instanced-quad particles for energy projectile visuals.
 - Avoid per-frame allocation.
 - Pool vectors, matrices, particles, and effect objects.
 - Update UI and minimap slower than render frames.
@@ -286,4 +296,4 @@ The network client may call explicit sim runtime APIs for command delivery and r
 - Live multiplayer, replay, spectator, and single-player share the same sim path.
 - The renderer can be replaced without changing gameplay.
 - Snapshot/resync can reload sim state without caring about three.js objects.
-- First-person piloting remains presentation plus commands, not a second gameplay model.
+- Tactical-view UI can grow without becoming gameplay authority.

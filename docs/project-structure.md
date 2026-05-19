@@ -49,8 +49,10 @@ drop-ship/
     |-- art-direction.md
     |-- cloudflare-architecture.md
     |-- command-hierarchy.md
+    |-- deploy-demo.md
     |-- determinism.md
     |-- ecs.md
+    |-- gameplay-demo.md
     |-- piloting.md
     |-- project-structure.md
     `-- rendering.md

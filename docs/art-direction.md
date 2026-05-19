@@ -26,8 +26,16 @@ Space should feel readable, massive, and hostile without making Phase 1 simulati
 
 - Volumetric dust and debris vary by map.
 - Low-detail dust fields should be broadly deterministic from map seed, enough for players to share the same tactical readability.
-- FirstPerson/cockpit dust detail can be more presentational and does not need exact particle-level determinism.
 - Dust should support scattering, occlusion, and depth cues without hiding critical RTS information.
+
+## Faction and projectile color
+
+- Player 1 uses cyan.
+- Player 2 uses magenta, replacing the previous orange identity.
+- Energy weapon projectile particles should inherit the firing player's color.
+- Interactive mode should render projectiles as cheap pooled billboards or instanced quads.
+- Cinematic mode can add a small emissive glow or bloom-friendly halo.
+- Projectile glow is visual-only and must not reduce tactical readability.
 
 ## Scale language
 
@@ -78,5 +86,5 @@ Space should feel readable, massive, and hostile without making Phase 1 simulati
 - No sun gameplay effects.
 - No ship recoil from massive weapons.
 - No non-planetary gravity.
-- No particle-level determinism requirement for cockpit dust.
+- No first-person or cockpit-specific visual layer in the first capture demo.
 - No visual effect may obscure command readability for long.

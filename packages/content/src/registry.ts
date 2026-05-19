@@ -1,5 +1,7 @@
 import {
+  createCaptureDemoConfig,
   createMinimalSkirmishConfig,
+  type ShipClassId,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -7,6 +9,7 @@ import {
   MATERIAL_IDS,
   MESH_IDS,
   SCALE_TIERS,
+  SHIP_CLASS_IDS,
   SHIP_COMPONENT_IDS,
   TEMPLATE_IDS,
 } from "./numericIds";
@@ -101,6 +104,7 @@ export type ShipTemplateDefinition = Readonly<{
   id: number;
   slug: string;
   displayName: string;
+  shipClassId: ShipClassId;
   hull: ShipHull;
   slots: readonly ShipSlot[];
   defaultLoadout: ShipLoadout;
@@ -196,7 +200,8 @@ const PULSE_LASER_SMALL: ShipWeaponComponent = {
 const SCOUT_SHIP_TEMPLATE: ShipTemplateDefinition = {
   id: TEMPLATE_IDS.scoutShip,
   slug: "scout-ship",
-  displayName: "Scout",
+  displayName: "Fighter",
+  shipClassId: SHIP_CLASS_IDS.fighter,
   hull: {
     maxHealth: 100,
     colliderRadius: 0.9,
@@ -232,6 +237,90 @@ const SCOUT_SHIP_TEMPLATE: ShipTemplateDefinition = {
   },
 };
 
+const DROP_SHIP_TEMPLATE: ShipTemplateDefinition = {
+  id: TEMPLATE_IDS.dropShip,
+  slug: "drop-ship",
+  displayName: "Drop Ship",
+  shipClassId: SHIP_CLASS_IDS.dropShip,
+  hull: {
+    maxHealth: 180,
+    colliderRadius: 1.45,
+    baseMass: 44,
+    basePower: 12,
+  },
+  slots: [
+    { id: "main-engine-1", type: "engine", size: "small" },
+    { id: "main-engine-2", type: "engine", size: "small" },
+    { id: "fuel-1", type: "fuelTank", size: "small" },
+    { id: "cargo-1", type: "cargo", size: "small" },
+    { id: "cargo-2", type: "cargo", size: "small" },
+  ],
+  defaultLoadout: {
+    slug: "drop-ship-default",
+    displayName: "Capture Lander",
+    componentsBySlot: {
+      "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
+      "cargo-1": SHIP_COMPONENT_IDS.cargoBaySmall,
+      "cargo-2": SHIP_COMPONENT_IDS.cargoBaySmall,
+    },
+  },
+  initialVelocity: { x: 0, y: 0, z: 0 },
+  render: {
+    meshId: MESH_IDS.scoutShip,
+    materialIdsByPlayer: {
+      1: MATERIAL_IDS.playerOneHull,
+      2: MATERIAL_IDS.playerTwoHull,
+    },
+    scaleTier: SCALE_TIERS.ship,
+  },
+};
+
+const BATTLESHIP_TEMPLATE: ShipTemplateDefinition = {
+  id: TEMPLATE_IDS.battleship,
+  slug: "battleship",
+  displayName: "Battleship",
+  shipClassId: SHIP_CLASS_IDS.battleship,
+  hull: {
+    maxHealth: 360,
+    colliderRadius: 2.4,
+    baseMass: 116,
+    basePower: 22,
+  },
+  slots: [
+    { id: "main-engine-1", type: "engine", size: "small" },
+    { id: "main-engine-2", type: "engine", size: "small" },
+    { id: "fuel-1", type: "fuelTank", size: "small" },
+    { id: "weapon-1", type: "weapon", size: "small", arc: "turret" },
+    { id: "weapon-2", type: "weapon", size: "small", arc: "turret" },
+    { id: "weapon-3", type: "weapon", size: "small", arc: "turret" },
+    { id: "weapon-4", type: "weapon", size: "small", arc: "turret" },
+  ],
+  defaultLoadout: {
+    slug: "battleship-default",
+    displayName: "Heavy Battery",
+    componentsBySlot: {
+      "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
+      "weapon-1": SHIP_COMPONENT_IDS.pulseLaserSmall,
+      "weapon-2": SHIP_COMPONENT_IDS.pulseLaserSmall,
+      "weapon-3": SHIP_COMPONENT_IDS.pulseLaserSmall,
+      "weapon-4": SHIP_COMPONENT_IDS.pulseLaserSmall,
+    },
+  },
+  initialVelocity: { x: 0, y: 0, z: 0 },
+  render: {
+    meshId: MESH_IDS.scoutShip,
+    materialIdsByPlayer: {
+      1: MATERIAL_IDS.playerOneHull,
+      2: MATERIAL_IDS.playerTwoHull,
+    },
+    scaleTier: SCALE_TIERS.ship,
+  },
+};
+
 const BILLBOARD_PLANET_TEMPLATE: PlanetTemplate = {
   id: TEMPLATE_IDS.billboardPlanet,
   slug: "billboard-planet",
@@ -252,7 +341,7 @@ export const DEFAULT_CONTENT_REGISTRY: ContentRegistry = createContentRegistry({
     CARGO_BAY_SMALL,
     PULSE_LASER_SMALL,
   ],
-  unitTemplates: [SCOUT_SHIP_TEMPLATE],
+  unitTemplates: [SCOUT_SHIP_TEMPLATE, DROP_SHIP_TEMPLATE, BATTLESHIP_TEMPLATE],
   planetTemplates: [BILLBOARD_PLANET_TEMPLATE],
 });
 
@@ -402,4 +491,4 @@ function quantizeStat(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export { createMinimalSkirmishConfig };
+export { createCaptureDemoConfig, createMinimalSkirmishConfig };

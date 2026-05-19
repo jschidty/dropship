@@ -40,6 +40,10 @@ export function validateContentRegistry(
       errors.push(`Unit template ${template.slug} must have positive health`);
     }
 
+    if (template.shipClassId <= 0) {
+      errors.push(`Unit template ${template.slug} must have a positive ship class`);
+    }
+
     if (template.hull.colliderRadius <= 0) {
       errors.push(`Unit template ${template.slug} must have a positive collider radius`);
     }

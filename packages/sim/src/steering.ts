@@ -207,7 +207,7 @@ export function integrateUnitMotion(world: SimWorld): void {
     }
 
     if (
-      unit.moveOrder &&
+      unit.moveOrder?.type === "moveTo" &&
       distanceSquared(unit.position, unit.moveOrder.target) <=
         MOVE_ORDER_ARRIVAL_DISTANCE * MOVE_ORDER_ARRIVAL_DISTANCE
     ) {
@@ -220,7 +220,7 @@ function computeMoveOrderVelocity(
   unit: SimUnit,
   stats: ShipStats
 ): Vec3Data | null {
-  const target = unit.moveOrder?.target;
+  const target = unit.moveOrder?.type === "moveTo" ? unit.moveOrder.target : null;
 
   if (!target) {
     return null;

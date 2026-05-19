@@ -11,7 +11,39 @@ export type MoveUnitsCommand = Readonly<{
   target: Vec3Data;
 }>;
 
-export type CommandIntent = RandomTurnOwnedUnitsCommand | MoveUnitsCommand;
+export type UnitOrderIntent =
+  | Readonly<{
+      type: "moveTo";
+      target: Vec3Data;
+    }>
+  | Readonly<{
+      type: "attackTarget";
+      target: EntityHandle;
+    }>
+  | Readonly<{
+      type: "capturePlanet";
+      planet: EntityHandle;
+    }>
+  | Readonly<{
+      type: "guardPlanet";
+      planet: EntityHandle;
+    }>
+  | Readonly<{
+      type: "escort";
+      target: EntityHandle;
+    }>;
+
+export type IssueUnitOrderCommand = Readonly<{
+  type: "issueUnitOrder";
+  unitHandles: readonly EntityHandle[];
+  order: UnitOrderIntent;
+  queueMode: "replace" | "append";
+}>;
+
+export type CommandIntent =
+  | RandomTurnOwnedUnitsCommand
+  | MoveUnitsCommand
+  | IssueUnitOrderCommand;
 
 export type ScheduledCommand = Readonly<{
   playerId: PlayerId;

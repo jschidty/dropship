@@ -12,6 +12,7 @@ import {
   type PlanetOrbitConfig,
   type PlayerId,
   type QuaternionData,
+  type UnitOrderIntent,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -32,25 +33,61 @@ export type SimUnitMoveOrder = {
   target: Vec3Data;
 };
 
-export type SimEvent = Readonly<{
-  type: "stub";
-  tick: number;
-}>;
+export type SimUnitOrder = UnitOrderIntent;
+
+export type SimFighterSpawnState = {
+  nextSpawnTick: number;
+  spawnedFighters: EntityHandle[];
+};
+
+export type SimEvent =
+  | Readonly<{
+      type: "weaponFired";
+      tick: number;
+      source: EntityHandle;
+      target: EntityHandle;
+      owner: PlayerId;
+      weaponId: number;
+      start: Vec3Data;
+      end: Vec3Data;
+    }>
+  | Readonly<{
+      type: "unitDestroyed";
+      tick: number;
+      unit: EntityHandle;
+      owner: PlayerId;
+    }>
+  | Readonly<{
+      type: "unitSpawned";
+      tick: number;
+      unit: EntityHandle;
+      owner: PlayerId;
+      parent: EntityHandle | null;
+    }>
+  | Readonly<{
+      type: "planetCaptured";
+      tick: number;
+      planet: EntityHandle;
+      owner: PlayerId;
+    }>;
 
 export type SimUnit = {
   runtimeEntityId: RuntimeEntityId;
   handle: EntityHandle;
   owner: PlayerId;
   templateId: number;
+  shipClassId: number;
   position: Vec3Data;
   prevPosition: Vec3Data;
   velocity: Vec3Data;
   rotation: QuaternionData;
-  moveOrder: SimUnitMoveOrder | null;
+  moveOrder: SimUnitOrder | null;
   health: {
     current: number;
     max: number;
   };
+  weaponCooldownTicks: number;
+  fighterSpawn: SimFighterSpawnState | null;
   render: {
     meshId: number;
     materialId: number;
@@ -73,6 +110,15 @@ export type SimPlanet = {
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;
+  control: {
+    capturable: boolean;
+    owner: PlayerId | 0;
+    capturingPlayer: PlayerId | 0;
+    capturingDropShip: EntityHandle | null;
+    captureTicks: number;
+    contested: boolean;
+    breakTicks: number;
+  };
   render: {
     meshId: number;
     materialId: number;
@@ -98,6 +144,11 @@ export type SimWorld = {
   commandBatch: CommandBatch | null;
   systems: readonly SimSystem[];
   prngStreams: readonly PrngStream[];
+  matchResult: {
+    winner: PlayerId | 0;
+    completedTick: number;
+    reason: "allPlanetsCaptured";
+  } | null;
 };
 
 export type CreateWorldOptions = Readonly<{
@@ -138,6 +189,8 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
         orbitAxis: initialPlanet.orbitAxis,
         orbit: initialPlanet.orbit,
         parentPlanetIndex: initialPlanet.parentPlanetIndex,
+        capturable: initialPlanet.capturable,
+        initialOwner: initialPlanet.initialOwner,
       });
     }
   }
@@ -165,6 +218,7 @@ export function createEmptyWorld(options: {
       createPrngStream(options.config.seed, "command"),
       createPrngStream(options.config.seed, "spawn"),
     ],
+    matchResult: null,
   };
 }
 
@@ -181,8 +235,10 @@ export function spawnUnit(
     handle?: EntityHandle;
     velocity?: Vec3Data;
     rotation?: QuaternionData;
-    moveOrder?: SimUnitMoveOrder | null;
+    moveOrder?: SimUnitOrder | null;
     health?: { current: number; max: number };
+    weaponCooldownTicks?: number;
+    fighterSpawn?: SimFighterSpawnState | null;
     spawnedTick?: number;
   }>
 ): SimUnit {
@@ -198,15 +254,18 @@ export function spawnUnit(
     handle,
     owner: options.owner,
     templateId: options.templateId,
+    shipClassId: template.shipClassId,
     position: copyVec3(options.position),
     prevPosition: copyVec3(options.position),
     velocity: copyVec3(options.velocity ?? template.initialVelocity),
     rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
-    moveOrder: copyMoveOrder(options.moveOrder ?? null),
+    moveOrder: copyUnitOrder(options.moveOrder ?? null),
     health: {
       current: health.current,
       max: health.max,
     },
+    weaponCooldownTicks: options.weaponCooldownTicks ?? 0,
+    fighterSpawn: copyFighterSpawnState(options.fighterSpawn ?? null),
     render: {
       meshId: template.render.meshId,
       materialId: template.render.materialIdsByPlayer[options.owner],
@@ -234,6 +293,9 @@ export function spawnPlanet(
     orbitAxis: Vec3Data;
     orbit: PlanetOrbitConfig;
     parentPlanetIndex: number | null;
+    capturable?: boolean;
+    initialOwner?: PlayerId | 0;
+    control?: SimPlanet["control"];
     handle?: EntityHandle;
     spawnedTick?: number;
   }>
@@ -257,6 +319,17 @@ export function spawnPlanet(
     orbitAxis: copyVec3(options.orbitAxis),
     orbit: copyPlanetOrbit(options.orbit),
     parentPlanetIndex: options.parentPlanetIndex,
+    control: copyPlanetControl(
+      options.control ?? {
+        capturable: options.capturable ?? options.parentPlanetIndex === null,
+        owner: options.initialOwner ?? 0,
+        capturingPlayer: 0,
+        capturingDropShip: null,
+        captureTicks: 0,
+        contested: false,
+        breakTicks: 0,
+      }
+    ),
     render: {
       meshId: template.render.meshId,
       materialId: template.render.materialId,
@@ -317,15 +390,60 @@ function createFallbackPlanetAppearance(
   };
 }
 
-export function copyMoveOrder(
-  moveOrder: SimUnitMoveOrder | null
-): SimUnitMoveOrder | null {
-  return moveOrder
+export function copyMoveOrder(moveOrder: SimUnitOrder | null): SimUnitOrder | null {
+  return copyUnitOrder(moveOrder);
+}
+
+export function copyUnitOrder(order: SimUnitOrder | null): SimUnitOrder | null {
+  if (!order) {
+    return null;
+  }
+
+  if (order.type === "moveTo") {
+    return {
+      type: order.type,
+      target: copyVec3(order.target),
+    };
+  }
+
+  if (order.type === "attackTarget" || order.type === "escort") {
+    return {
+      type: order.type,
+      target: order.target,
+    };
+  }
+
+  return {
+    type: order.type,
+    planet: order.planet,
+  };
+}
+
+export function copyFighterSpawnState(
+  state: SimFighterSpawnState | null
+): SimFighterSpawnState | null {
+  return state
     ? {
-        type: moveOrder.type,
-        target: copyVec3(moveOrder.target),
+        nextSpawnTick: state.nextSpawnTick,
+        spawnedFighters: state.spawnedFighters.map((handle) => ({ ...handle })),
       }
     : null;
+}
+
+export function copyPlanetControl(
+  control: SimPlanet["control"]
+): SimPlanet["control"] {
+  return {
+    capturable: control.capturable,
+    owner: control.owner,
+    capturingPlayer: control.capturingPlayer,
+    capturingDropShip: control.capturingDropShip
+      ? { ...control.capturingDropShip }
+      : null,
+    captureTicks: control.captureTicks,
+    contested: control.contested,
+    breakTicks: control.breakTicks,
+  };
 }
 
 function allocateRuntimeEntityId(world: SimWorld): RuntimeEntityId {

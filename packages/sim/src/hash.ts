@@ -31,12 +31,7 @@ function quantizeSnapshot(snapshot: CompactSimSnapshot): CompactSimSnapshot {
         z: quantize(unit.rotation.z),
         w: quantize(unit.rotation.w),
       },
-      moveOrder: unit.moveOrder
-        ? {
-            ...unit.moveOrder,
-            target: quantizeVec3(unit.moveOrder.target),
-          }
-        : null,
+      moveOrder: quantizeUnitOrder(unit.moveOrder),
     })),
     planets: snapshot.planets.map((planet) => ({
       ...planet,
@@ -70,6 +65,19 @@ function quantizeVec3(vector: { x: number; y: number; z: number }) {
     y: quantize(vector.y),
     z: quantize(vector.z),
   };
+}
+
+function quantizeUnitOrder<T extends CompactSimSnapshot["units"][number]["moveOrder"]>(
+  order: T
+): T {
+  if (!order || order.type !== "moveTo") {
+    return order;
+  }
+
+  return {
+    ...order,
+    target: quantizeVec3(order.target),
+  } as T;
 }
 
 function quantize(value: number): number {

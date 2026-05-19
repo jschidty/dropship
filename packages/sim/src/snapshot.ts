@@ -13,6 +13,7 @@ import {
   createEmptyWorld,
   copyMoveOrder,
   copyPlanetOrbit,
+  copyPlanetControl,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   spawnPlanet,
@@ -30,12 +31,15 @@ export function serializeWorld(world: SimWorld): CompactSimSnapshot {
     protocolVersion: world.config.protocolVersion,
     contentVersion: world.config.contentVersion,
     commandLeadTicks: world.config.commandLeadTicks,
+    gameMode: world.config.gameMode,
+    captureDemoRules: world.config.captureDemoRules,
     nextEntityId: world.ids.nextId,
     players: world.config.players,
     environment: world.config.environment,
     units: getUnitsInStableOrder(world).map(unitToSnapshot),
     planets: getPlanetsInStableOrder(world).map(planetToSnapshot),
     prng: snapshotPrngStreams(world.prngStreams),
+    matchResult: world.matchResult,
   };
 }
 
@@ -49,6 +53,8 @@ export function hydrateWorldFromSnapshot(
     protocolVersion: snapshot.protocolVersion,
     contentVersion: snapshot.contentVersion,
     commandLeadTicks: snapshot.commandLeadTicks ?? DEFAULT_COMMAND_LEAD_TICKS,
+    gameMode: snapshot.gameMode,
+    captureDemoRules: snapshot.captureDemoRules,
     players: snapshot.players,
     environment: snapshot.environment,
     initialUnits: [],
@@ -62,6 +68,7 @@ export function hydrateWorldFromSnapshot(
 
   world.tick = snapshot.tick;
   world.prngStreams = restorePrngStreams(snapshot.prng);
+  world.matchResult = snapshot.matchResult ?? null;
 
   for (const unit of snapshot.units) {
     spawnUnit(world, {
@@ -73,6 +80,15 @@ export function hydrateWorldFromSnapshot(
       rotation: unit.rotation,
       moveOrder: copyMoveOrder(unit.moveOrder),
       health: unit.health,
+      weaponCooldownTicks: unit.weaponCooldownTicks,
+      fighterSpawn: unit.fighterSpawn
+        ? {
+            nextSpawnTick: unit.fighterSpawn.nextSpawnTick,
+            spawnedFighters: unit.fighterSpawn.spawnedFighters.map((handle) => ({
+              ...handle,
+            })),
+          }
+        : null,
       spawnedTick: unit.spawnedTick,
     });
   }
@@ -90,6 +106,7 @@ export function hydrateWorldFromSnapshot(
       orbitAxis: planet.orbitAxis,
       orbit: copyPlanetOrbit(planet.orbit),
       parentPlanetIndex: planet.parentPlanetIndex,
+      control: copyPlanetControl(planet.control),
       handle: planet.handle,
       spawnedTick: planet.spawnedTick,
     });
@@ -103,6 +120,7 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     handle: unit.handle,
     owner: unit.owner,
     templateId: unit.templateId,
+    shipClassId: unit.shipClassId,
     position: unit.position,
     velocity: unit.velocity,
     rotation: unit.rotation,
@@ -111,6 +129,15 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
       current: unit.health.current,
       max: unit.health.max,
     },
+    weaponCooldownTicks: unit.weaponCooldownTicks,
+    fighterSpawn: unit.fighterSpawn
+      ? {
+          nextSpawnTick: unit.fighterSpawn.nextSpawnTick,
+          spawnedFighters: unit.fighterSpawn.spawnedFighters.map((handle) => ({
+            ...handle,
+          })),
+        }
+      : null,
     render: unit.render,
     spawnedTick: unit.spawnedTick,
   };
@@ -130,6 +157,7 @@ function planetToSnapshot(planet: SimWorld["planets"][number]): PlanetSnapshot {
     orbitAxis: planet.orbitAxis,
     orbit: copyPlanetOrbit(planet.orbit),
     parentPlanetIndex: planet.parentPlanetIndex,
+    control: copyPlanetControl(planet.control),
     render: planet.render,
     spawnedTick: planet.spawnedTick,
   };

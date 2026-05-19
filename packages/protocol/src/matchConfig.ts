@@ -7,8 +7,20 @@ export const PHASE_ONE_SIM_HZ = 30;
 
 export const TEMPLATE_IDS = {
   scoutShip: 1,
+  fighterShip: 1,
+  dropShip: 2,
+  battleship: 3,
   billboardPlanet: 100,
 } as const;
+
+export const SHIP_CLASS_IDS = {
+  fighter: 1,
+  dropShip: 2,
+  battleship: 3,
+} as const;
+
+export type ShipClassId =
+  (typeof SHIP_CLASS_IDS)[keyof typeof SHIP_CLASS_IDS];
 
 export type Vec3Data = Readonly<{
   x: number;
@@ -73,7 +85,33 @@ export type InitialPlanetConfig = Readonly<{
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;
+  capturable?: boolean;
+  initialOwner?: PlayerId | 0;
 }>;
+
+export type GameMode = "minimalSkirmish" | "captureDemo";
+
+export type CaptureDemoRules = Readonly<{
+  planetCaptureSeconds: number;
+  captureOrbitMinRadiusMultiplier: number;
+  captureOrbitMaxRadiusMultiplier: number;
+  captureBreakGraceTicks: number;
+  fighterSpawnIntervalTicks: number;
+  fighterSpawnCapPerDropShip: number;
+  npcThinkIntervalTicks: number;
+  npcAggroRange: number;
+}>;
+
+export const DEFAULT_CAPTURE_DEMO_RULES: CaptureDemoRules = {
+  planetCaptureSeconds: 25,
+  captureOrbitMinRadiusMultiplier: 1.55,
+  captureOrbitMaxRadiusMultiplier: 3.4,
+  captureBreakGraceTicks: 30,
+  fighterSpawnIntervalTicks: 180,
+  fighterSpawnCapPerDropShip: 4,
+  npcThinkIntervalTicks: 15,
+  npcAggroRange: 130,
+};
 
 export type MatchConfig = Readonly<{
   matchId: string;
@@ -81,6 +119,8 @@ export type MatchConfig = Readonly<{
   protocolVersion: number;
   contentVersion: number;
   commandLeadTicks: number;
+  gameMode?: GameMode;
+  captureDemoRules?: CaptureDemoRules;
   players: readonly PlayerConfig[];
   environment: MatchEnvironmentConfig;
   initialUnits: readonly InitialUnitConfig[];
@@ -119,11 +159,97 @@ export function createMinimalSkirmishConfig(
     protocolVersion: PROTOCOL_VERSION,
     contentVersion: CONTENT_VERSION,
     commandLeadTicks: DEFAULT_COMMAND_LEAD_TICKS,
+    gameMode: "minimalSkirmish",
     players,
     environment: generated.environment,
     initialUnits,
     initialPlanets: generated.planets,
   };
+}
+
+export function createCaptureDemoConfig(
+  options: CreateMinimalSkirmishConfigOptions | number = {}
+): MatchConfig {
+  const base = createMinimalSkirmishConfig(options);
+  const primaryPlanet = base.initialPlanets.find(
+    (planet) => planet.parentPlanetIndex === null
+  ) ?? base.initialPlanets[0];
+  const center = primaryPlanet?.position ?? { x: 0, y: 0, z: 0 };
+  const initialUnits = createCaptureDemoUnits(center);
+
+  return {
+    ...base,
+    matchId: base.matchId.replace("minimal-skirmish", "capture-demo"),
+    gameMode: "captureDemo",
+    captureDemoRules: DEFAULT_CAPTURE_DEMO_RULES,
+    initialUnits,
+    initialPlanets: base.initialPlanets.map((planet, index) => ({
+      ...planet,
+      capturable: planet.parentPlanetIndex === null,
+      initialOwner: index === 0 ? 0 : undefined,
+    })),
+  };
+}
+
+function createCaptureDemoUnits(
+  primaryPlanetPosition: Vec3Data
+): readonly InitialUnitConfig[] {
+  const offsets: readonly InitialUnitConfig[] = [
+    {
+      owner: 1,
+      templateId: TEMPLATE_IDS.dropShip,
+      position: { x: -82, y: 4, z: 92 },
+    },
+    {
+      owner: 1,
+      templateId: TEMPLATE_IDS.fighterShip,
+      position: { x: -102, y: 8, z: 88 },
+    },
+    {
+      owner: 1,
+      templateId: TEMPLATE_IDS.fighterShip,
+      position: { x: -94, y: -5, z: 112 },
+    },
+    {
+      owner: 1,
+      templateId: TEMPLATE_IDS.battleship,
+      position: { x: -132, y: 0, z: 126 },
+    },
+    {
+      owner: 2,
+      templateId: TEMPLATE_IDS.fighterShip,
+      position: { x: 66, y: 6, z: 72 },
+    },
+    {
+      owner: 2,
+      templateId: TEMPLATE_IDS.fighterShip,
+      position: { x: 86, y: -4, z: 92 },
+    },
+    {
+      owner: 2,
+      templateId: TEMPLATE_IDS.fighterShip,
+      position: { x: 58, y: 8, z: 114 },
+    },
+    {
+      owner: 2,
+      templateId: TEMPLATE_IDS.battleship,
+      position: { x: 116, y: 0, z: 96 },
+    },
+    {
+      owner: 2,
+      templateId: TEMPLATE_IDS.battleship,
+      position: { x: 142, y: 2, z: 126 },
+    },
+  ];
+
+  return offsets.map((unit) => ({
+    ...unit,
+    position: {
+      x: quantize(primaryPlanetPosition.x + unit.position.x),
+      y: quantize(primaryPlanetPosition.y + unit.position.y),
+      z: quantize(primaryPlanetPosition.z + unit.position.z),
+    },
+  }));
 }
 
 function generatePlanetarySystem(seed: number): {

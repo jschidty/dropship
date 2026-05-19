@@ -1,5 +1,8 @@
 import type { EntityHandle, PlayerId } from "./handles";
+import type { UnitOrderIntent } from "./commands";
 import type {
+  CaptureDemoRules,
+  GameMode,
   MatchEnvironmentConfig,
   PlayerConfig,
   PlanetAppearanceConfig,
@@ -24,17 +27,37 @@ export type UnitMoveOrderSnapshot = Readonly<{
   target: Vec3Data;
 }>;
 
+export type UnitOrderSnapshot = UnitOrderIntent;
+
+export type UnitFighterSpawnSnapshot = Readonly<{
+  nextSpawnTick: number;
+  spawnedFighters: readonly EntityHandle[];
+}>;
+
 export type UnitSnapshot = Readonly<{
   handle: EntityHandle;
   owner: PlayerId;
   templateId: number;
+  shipClassId: number;
   position: Vec3Data;
   velocity: Vec3Data;
   rotation: QuaternionData;
-  moveOrder: UnitMoveOrderSnapshot | null;
+  moveOrder: UnitOrderSnapshot | null;
   health: HealthSnapshot;
+  weaponCooldownTicks: number;
+  fighterSpawn: UnitFighterSpawnSnapshot | null;
   render: RenderSnapshot;
   spawnedTick: number;
+}>;
+
+export type PlanetControlSnapshot = Readonly<{
+  capturable: boolean;
+  owner: PlayerId | 0;
+  capturingPlayer: PlayerId | 0;
+  capturingDropShip: EntityHandle | null;
+  captureTicks: number;
+  contested: boolean;
+  breakTicks: number;
 }>;
 
 export type PlanetSnapshot = Readonly<{
@@ -50,6 +73,7 @@ export type PlanetSnapshot = Readonly<{
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;
+  control: PlanetControlSnapshot;
   render: RenderSnapshot;
   spawnedTick: number;
 }>;
@@ -67,10 +91,17 @@ export type CompactSimSnapshot = Readonly<{
   protocolVersion: number;
   contentVersion: number;
   commandLeadTicks: number;
+  gameMode?: GameMode;
+  captureDemoRules?: CaptureDemoRules;
   nextEntityId: number;
   players: readonly PlayerConfig[];
   environment: MatchEnvironmentConfig;
   units: readonly UnitSnapshot[];
   planets: readonly PlanetSnapshot[];
   prng: readonly PrngSnapshot[];
+  matchResult?: Readonly<{
+    winner: PlayerId | 0;
+    completedTick: number;
+    reason: "allPlanetsCaptured";
+  }> | null;
 }>;

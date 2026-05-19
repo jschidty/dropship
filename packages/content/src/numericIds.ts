@@ -1,4 +1,8 @@
-export { CONTENT_VERSION, TEMPLATE_IDS } from "@drop-ship/protocol";
+export {
+  CONTENT_VERSION,
+  SHIP_CLASS_IDS,
+  TEMPLATE_IDS,
+} from "@drop-ship/protocol";
 
 export const SHIP_COMPONENT_IDS = {
   ionEngineSmall: 1,

@@ -10,6 +10,7 @@ import {
   capturePrevPositions,
   getUnitsInStableOrder,
   installSystems,
+  copyUnitOrder,
   type SimSystem,
   type SimWorld,
   yawRotation,
@@ -83,6 +84,21 @@ export const CommandIntakeSystem: SimSystem = {
           };
         }
       }
+
+      if (scheduled.command.type === "issueUnitOrder") {
+        for (const unit of getUnitsInStableOrder(world)) {
+          if (
+            unit.owner !== scheduled.playerId ||
+            !scheduled.command.unitHandles.some((handle) =>
+              sameHandle(handle, unit.handle)
+            )
+          ) {
+            continue;
+          }
+
+          unit.moveOrder = copyUnitOrder(scheduled.command.order);
+        }
+      }
     }
   },
 };
@@ -152,8 +168,8 @@ export const LifecycleSystem: SimSystem = {
 
 export const EventFlushSystem: SimSystem = {
   name: "EventFlushSystem",
-  run(world) {
-    world.events = [];
+  run() {
+    // Events remain available to presentation until the next sim tick begins.
   },
 };
 
@@ -185,6 +201,7 @@ export function runTick(
   }
 
   capturePrevPositions(world);
+  world.events = [];
   world.commandBatch = batch;
 
   for (const system of world.systems) {

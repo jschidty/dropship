@@ -12,6 +12,16 @@ Space should feel readable, massive, and hostile without making Phase 1 simulati
 - Some maps can stage it visually closer, others farther, but it remains non-interactive.
 - Lighting, silhouettes, lens response, and color temperature should use the sun to help players understand facing and map direction.
 
+## Render modes and asset scalability
+
+- Render mode should be selectable per entity or entity class, not only as a global renderer switch.
+- Each important entity should be able to choose between cinematic shaders/assets and cheaper interactive shaders/assets based on device class, camera distance, gameplay readability, and performance budget.
+- Asset swaps can include shader variants, geometry LOD, impostors, particle proxies, texture sets, glow/atmosphere layers, animation detail, and UI-style tactical icons.
+- Low-end and battery-constrained devices should get intentionally authored playable representations, not merely degraded high-end assets.
+- High-cost visual features should be optional layers on the entity, so interactive modes can remove them while cinematic modes keep them for screenshots, trailers, close camera work, and high-end hardware.
+- Swapping render modes or assets must not change simulation state, collision, targeting, selection, or command readability.
+- The same entity should preserve its tactical identity across all representations through silhouette, faction color, scale cues, and motion language.
+
 ## Dust and debris
 
 - Volumetric dust and debris vary by map.

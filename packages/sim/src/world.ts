@@ -83,6 +83,7 @@ export type SimUnit = {
   position: Vec3Data;
   prevPosition: Vec3Data;
   velocity: Vec3Data;
+  desiredVelocity: Vec3Data | null;
   rotation: QuaternionData;
   moveOrder: SimUnitOrder | null;
   health: {
@@ -269,6 +270,7 @@ export function spawnUnit(
     position,
     prevPosition: copyVec3(position),
     velocity: copyVec3(options.velocity ?? template.initialVelocity),
+    desiredVelocity: null,
     rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
     moveOrder: copyUnitOrder(options.moveOrder ?? null),
     health: {

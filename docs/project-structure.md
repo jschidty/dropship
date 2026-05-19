@@ -103,12 +103,14 @@ Pure TypeScript simulation. No browser APIs, no three.js, no Worker-specific API
 sim/src/
 |-- components/         fixed-size numeric bitECS components
 |-- stores/             deterministic side stores for orders, cargo, fleets
-|-- systems/            registered fixed-order systems
-|-- orders/             order interpreters
+|-- systems/            registered fixed-order systems, one feature/system per file
+|-- orders/             order interpreters that produce transient sim intent
 |-- events/             deterministic sim events
 |-- ids.ts              stable handle to runtime eid mapping
 |-- world.ts            world creation and system registration
 |-- tick.ts             fixed timestep loop
+|-- movement.ts         shared deterministic movement/vector helpers
+|-- steering.ts         gravity, formation, avoidance, and physics integration helpers
 |-- hash.ts             stable state hashing
 |-- snapshot.ts         serialize/deserialize compact snapshots
 |-- prng.ts             seeded per-system PRNG streams
@@ -123,7 +125,7 @@ Browser-only code: three.js, React or DOM UI, input, audio, network client, and 
 
 ```text
 client/src/
-|-- render/
+|-- render/             three.js orchestration, render quality, batching, effects
 |-- camera/
 |-- input/
 |-- effects/
@@ -137,6 +139,8 @@ client/src/
 ```
 
 The client may import `sim`, `protocol`, and `content`. It must write to sim state only through command intake or explicit resync APIs.
+
+Renderer modules should stay split by responsibility. The mount loop may orchestrate scene setup, input wiring, and frame scheduling, while reusable render mechanisms such as unit instancing, projectile particles, shader materials, quality presets, and render math live in separate files under `client/src/render/`.
 
 ### `packages/server`
 

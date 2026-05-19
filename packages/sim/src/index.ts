@@ -1,6 +1,7 @@
 export * from "./deterministicMath";
 export * from "./hash";
 export * from "./ids";
+export * from "./movement";
 export * from "./orbits";
 export * from "./prng";
 export * from "./shipStats";

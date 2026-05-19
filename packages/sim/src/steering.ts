@@ -8,39 +8,44 @@ import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   findPlanetByHandle,
-  findUnitByHandle,
   type SimPlanet,
   type SimUnit,
   type SimWorld,
   yawRotation,
 } from "./world";
 import {
-  SIM_TAU,
   deterministicAtan2,
-  deterministicCos,
   deterministicFloor,
-  deterministicSin,
   deterministicSqrt,
   deterministicSquare,
   quantizeSimFloat,
 } from "./deterministicMath";
 import {
+  MOVE_ORDER_ARRIVAL_DISTANCE,
+  SIM_EPSILON as EPSILON,
+  addNormalizedScaled,
+  addScaled,
+  approachVelocity,
+  clamp,
+  computeOrbitVelocityAroundPlanet,
+  createZero,
+  distanceSquared,
+  findNearestPlanet,
+  forwardFromRotation,
+  lengthSquared,
+  limitLength,
+  scale,
+  unitScalar,
+  type MutableVec3,
+} from "./movement";
+import {
   readShipStats,
   readUnitShipStats,
-  readUnitWeaponProfile,
-  type UnitWeaponProfile,
 } from "./shipStats";
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
 export const PLANET_GRAVITY_MAX_STRENGTH = 14;
 
-const MOVE_ORDER_ARRIVAL_DISTANCE = 1.8;
-const MOVE_ORDER_SLOW_RADIUS = 24;
-const ESCORT_DESIRED_RANGE = 24;
-const ESCORT_INNER_RANGE_MULTIPLIER = 0.72;
-const ESCORT_OUTER_RANGE_MULTIPLIER = 1.28;
-const ESCORT_MATCH_VELOCITY_WEIGHT = 0.82;
-const ESCORT_CORRECTION_SPEED_RATIO = 0.34;
 const DEFAULT_ORBIT_WEIGHT = 0.95;
 const MOVE_ORDER_WEIGHT = 1.35;
 const GRAVITY_STEERING_WEIGHT = 1.15;
@@ -59,13 +64,6 @@ const PLANET_AVOIDANCE_WEIGHT = 1.9;
 const SHIP_AVOIDANCE_RADIUS = 5.5;
 const SHIP_AVOIDANCE_WEIGHT = 0.85;
 const SPATIAL_INDEX_MIN_UNITS = 48;
-const EPSILON = 0.000001;
-
-type MutableVec3 = {
-  x: number;
-  y: number;
-  z: number;
-};
 
 export type GravitySource = Readonly<{
   position: Vec3Data;
@@ -157,19 +155,12 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const spatialIndex = createUnitSpatialIndex(units);
   const nextVelocities: Vec3Data[] = [];
   const shipStats = new Map<number, ShipStats>();
-  const weaponProfiles = new Map<number, UnitWeaponProfile>();
   const gravityVector = createZero();
 
   for (const unit of units) {
     const stats = readUnitShipStats(world, shipStats, unit);
     const desiredVelocity = createZero();
-    const orderVelocity = computeOrderVelocity(
-      unit,
-      world,
-      tick,
-      stats,
-      readUnitWeaponProfile(world, weaponProfiles, unit)
-    );
+    const orderVelocity = unit.desiredVelocity;
 
     if (orderVelocity) {
       addScaled(desiredVelocity, orderVelocity, MOVE_ORDER_WEIGHT);
@@ -247,156 +238,6 @@ export function integrateUnitMotion(world: SimWorld): void {
   }
 }
 
-function computeOrderVelocity(
-  unit: SimUnit,
-  world: SimWorld,
-  tick: number,
-  stats: ShipStats,
-  weaponProfile: UnitWeaponProfile | null
-): Vec3Data | null {
-  const order = unit.moveOrder;
-
-  if (!order) {
-    return null;
-  }
-
-  if (order.type === "attackTarget") {
-    const target = findUnitByHandle(world, order.target);
-
-    if (!target || target.health.current <= 0) {
-      unit.moveOrder = null;
-      return null;
-    }
-
-    return computeApproachVelocity(
-      unit,
-      target.position,
-      stats,
-      Math.max((weaponProfile?.range ?? 42) * 0.78, 12)
-    );
-  }
-
-  if (
-    order.type === "capturePlanet" ||
-    order.type === "guardPlanet" ||
-    order.type === "orbitPlanet"
-  ) {
-    const planet = findPlanetByHandle(world, order.planet);
-
-    if (!planet) {
-      unit.moveOrder = null;
-      return null;
-    }
-
-    let targetRadius = planet.radius * 3.05;
-
-    if (order.type === "capturePlanet") {
-      targetRadius = planet.radius * 2.25;
-    } else if (order.type === "orbitPlanet") {
-      targetRadius =
-        planet.radius * (2.62 + unitScalar(unit, 0x85ebca6b) * 0.32);
-    }
-
-    return computeOrbitVelocityAroundPlanet(
-      unit,
-      planet,
-      tick,
-      stats,
-      targetRadius
-    );
-  }
-
-  if (order.type === "escort") {
-    const target = findUnitByHandle(world, order.target);
-
-    if (!target || target.health.current <= 0) {
-      unit.moveOrder = null;
-      return null;
-    }
-
-    return computeEscortVelocity(unit, target, stats);
-  }
-
-  const target = order.target;
-
-  if (!target) {
-    return null;
-  }
-
-  const offset = subtract(target, unit.position);
-  const distance = length(offset);
-
-  if (distance <= MOVE_ORDER_ARRIVAL_DISTANCE) {
-    unit.moveOrder = null;
-    return null;
-  }
-
-  const speed =
-    stats.cruiseSpeed *
-    clamp(distance / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
-
-  return scale(normalize(offset), speed);
-}
-
-function computeApproachVelocity(
-  unit: SimUnit,
-  target: Vec3Data,
-  stats: ShipStats,
-  desiredRange: number
-): Vec3Data | null {
-  const offset = subtract(target, unit.position);
-  const distance = length(offset);
-
-  if (distance <= Math.max(desiredRange, MOVE_ORDER_ARRIVAL_DISTANCE)) {
-    return scale(normalize(offset), stats.cruiseSpeed * 0.12);
-  }
-
-  const remaining = distance - desiredRange;
-  const speed =
-    stats.cruiseSpeed *
-    clamp(remaining / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
-
-  return scale(normalize(offset), speed);
-}
-
-function computeEscortVelocity(
-  unit: SimUnit,
-  target: SimUnit,
-  stats: ShipStats
-): Vec3Data | null {
-  const offset = subtract(target.position, unit.position);
-  const distance = length(offset);
-  const desiredRange =
-    ESCORT_DESIRED_RANGE + target.health.max / Math.max(unit.health.max, 1);
-  const innerRange = desiredRange * ESCORT_INNER_RANGE_MULTIPLIER;
-  const outerRange = desiredRange * ESCORT_OUTER_RANGE_MULTIPLIER;
-  const velocity = scale(target.velocity, ESCORT_MATCH_VELOCITY_WEIGHT);
-
-  if (distance <= EPSILON) {
-    return velocity;
-  }
-
-  if (distance > outerRange) {
-    addScaled(
-      velocity,
-      normalize(offset),
-      stats.cruiseSpeed *
-        clamp((distance - desiredRange) / MOVE_ORDER_SLOW_RADIUS, 0.28, 1)
-    );
-    return velocity;
-  }
-
-  if (distance < innerRange) {
-    addScaled(
-      velocity,
-      normalize(offset),
-      -stats.cruiseSpeed * ESCORT_CORRECTION_SPEED_RATIO
-    );
-  }
-
-  return velocity;
-}
-
 function computeDefaultMotionVelocity(
   unit: SimUnit,
   planets: readonly SimPlanet[],
@@ -416,42 +257,6 @@ function computeDefaultMotionVelocity(
     stats,
     planet.radius * (2.65 + unitScalar(unit, 0x9e3779b9) * 1.15)
   );
-}
-
-function computeOrbitVelocityAroundPlanet(
-  unit: SimUnit,
-  planet: SimPlanet,
-  tick: number,
-  stats: ShipStats,
-  targetRadius: number
-): Vec3Data {
-  const x = unit.position.x - planet.position.x;
-  const z = unit.position.z - planet.position.z;
-  const radius = Math.max(deterministicSqrt(x * x + z * z), 1);
-  const radialX = x / radius;
-  const radialZ = z / radius;
-  const orbitSign = unit.owner === 1 ? 1 : -1;
-  const radialError = radius - targetRadius;
-  const radialCorrection =
-    -clamp(radialError / Math.max(planet.radius, 1), -0.95, 0.95) * 0.58;
-  const targetY =
-    planet.position.y +
-    planet.radius * ((unitScalar(unit, 0xc2b2ae35) - 0.5) * 0.28);
-  const verticalCorrection = clamp(
-    (targetY - unit.position.y) / Math.max(planet.radius * 0.5, 1),
-    -0.42,
-    0.42
-  );
-  const pulse =
-    deterministicSin(tick * 0.037 + unitScalar(unit, 0x41c64e6d) * SIM_TAU) *
-    0.08;
-  const direction = normalize({
-    x: -radialZ * orbitSign + radialX * radialCorrection,
-    y: verticalCorrection + pulse * 0.25,
-    z: radialX * orbitSign + radialZ * radialCorrection,
-  });
-
-  return scale(direction, stats.cruiseSpeed * (0.72 + pulse));
 }
 
 function addBoidForces(
@@ -761,159 +566,4 @@ function forEachCellRadius(
       }
     }
   }
-}
-
-function findNearestPlanet(
-  unit: SimUnit,
-  planets: readonly SimPlanet[]
-): SimPlanet | null {
-  let nearest: SimPlanet | null = null;
-  let nearestDistance = Infinity;
-
-  for (const planet of planets) {
-    const distance = distanceSquared(unit.position, planet.position);
-
-    if (distance < nearestDistance) {
-      nearest = planet;
-      nearestDistance = distance;
-    }
-  }
-
-  return nearest;
-}
-
-function approachVelocity(
-  current: Vec3Data,
-  target: Vec3Data,
-  maxDelta: number
-): Vec3Data {
-  const delta = {
-    x: target.x - current.x,
-    y: target.y - current.y,
-    z: target.z - current.z,
-  };
-  const limitedDelta = limitLength(delta, maxDelta);
-
-  return {
-    x: quantizeSimFloat(current.x + limitedDelta.x),
-    y: quantizeSimFloat(current.y + limitedDelta.y),
-    z: quantizeSimFloat(current.z + limitedDelta.z),
-  };
-}
-
-function forwardFromRotation(unit: SimUnit): Vec3Data {
-  const yaw = deterministicAtan2(
-    2 * (unit.rotation.w * unit.rotation.y),
-    1 - 2 * unit.rotation.y * unit.rotation.y
-  );
-
-  return {
-    x: deterministicSin(yaw),
-    y: 0,
-    z: deterministicCos(yaw),
-  };
-}
-
-function createZero(): MutableVec3 {
-  return {
-    x: 0,
-    y: 0,
-    z: 0,
-  };
-}
-
-function addScaled(target: MutableVec3, vector: Vec3Data, scalar: number): void {
-  target.x += vector.x * scalar;
-  target.y += vector.y * scalar;
-  target.z += vector.z * scalar;
-}
-
-function addNormalizedScaled(
-  target: MutableVec3,
-  x: number,
-  y: number,
-  z: number,
-  scalar: number
-): void {
-  const vectorLengthSquared = x * x + y * y + z * z;
-
-  if (vectorLengthSquared <= EPSILON) {
-    return;
-  }
-
-  const scaled = scalar / deterministicSqrt(vectorLengthSquared);
-  target.x += x * scaled;
-  target.y += y * scaled;
-  target.z += z * scaled;
-}
-
-function subtract(a: Vec3Data, b: Vec3Data): Vec3Data {
-  return {
-    x: a.x - b.x,
-    y: a.y - b.y,
-    z: a.z - b.z,
-  };
-}
-
-function scale(vector: Vec3Data, scalar: number): Vec3Data {
-  return {
-    x: vector.x * scalar,
-    y: vector.y * scalar,
-    z: vector.z * scalar,
-  };
-}
-
-function normalize(vector: Vec3Data): Vec3Data {
-  const vectorLength = length(vector);
-
-  if (vectorLength <= EPSILON) {
-    return createZero();
-  }
-
-  return scale(vector, 1 / vectorLength);
-}
-
-function limitLength(vector: Vec3Data, maxLength: number): Vec3Data {
-  const vectorLength = length(vector);
-
-  if (vectorLength <= maxLength || vectorLength <= EPSILON) {
-    return {
-      x: vector.x,
-      y: vector.y,
-      z: vector.z,
-    };
-  }
-
-  return scale(vector, maxLength / vectorLength);
-}
-
-function length(vector: Vec3Data): number {
-  return deterministicSqrt(lengthSquared(vector));
-}
-
-function lengthSquared(vector: Vec3Data): number {
-  return vector.x * vector.x + vector.y * vector.y + vector.z * vector.z;
-}
-
-function distanceSquared(a: Vec3Data, b: Vec3Data): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const dz = a.z - b.z;
-  return dx * dx + dy * dy + dz * dz;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
-}
-
-function unitScalar(unit: SimUnit, salt: number): number {
-  let value =
-    (Math.imul(unit.handle.id, 374761393) ^
-      Math.imul(unit.owner, 668265263) ^
-      salt) >>>
-    0;
-  value ^= value >>> 13;
-  value = Math.imul(value, 1274126177) >>> 0;
-  value ^= value >>> 16;
-  return (value >>> 0) / 0x1_0000_0000;
 }

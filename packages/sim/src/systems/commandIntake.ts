@@ -1,0 +1,76 @@
+import type { ShipStats } from "@drop-ship/content";
+import { sameHandle } from "@drop-ship/protocol";
+import { deterministicCos, deterministicSin, SIM_TAU } from "../deterministicMath";
+import { findPrngStream, nextFloat01 } from "../prng";
+import { readUnitShipStats } from "../shipStats";
+import {
+  copyUnitOrder,
+  getUnitsInStableOrder,
+  yawRotation,
+  type SimSystem,
+} from "../world";
+
+export const CommandIntakeSystem: SimSystem = {
+  name: "CommandIntakeSystem",
+  run(world) {
+    const commands = world.commandBatch?.commands ?? [];
+    const commandPrng = findPrngStream(world.prngStreams, "command");
+    const shipStats = new Map<number, ShipStats>();
+
+    for (const scheduled of commands) {
+      if (scheduled.command.type === "randomTurnOwnedUnits") {
+        for (const unit of getUnitsInStableOrder(world)) {
+          if (unit.owner !== scheduled.playerId) {
+            continue;
+          }
+
+          const yaw = nextFloat01(commandPrng) * SIM_TAU;
+          const stats = readUnitShipStats(world, shipStats, unit);
+          unit.rotation = yawRotation(yaw);
+          unit.velocity = {
+            x: deterministicSin(yaw) * stats.cruiseSpeed,
+            y: unit.velocity.y,
+            z: deterministicCos(yaw) * stats.cruiseSpeed,
+          };
+        }
+      }
+
+      if (scheduled.command.type === "moveUnits") {
+        for (const unit of getUnitsInStableOrder(world)) {
+          if (
+            unit.owner !== scheduled.playerId ||
+            !scheduled.command.unitHandles.some((handle) =>
+              sameHandle(handle, unit.handle)
+            )
+          ) {
+            continue;
+          }
+
+          unit.moveOrder = {
+            type: "moveTo",
+            target: {
+              x: scheduled.command.target.x,
+              y: scheduled.command.target.y,
+              z: scheduled.command.target.z,
+            },
+          };
+        }
+      }
+
+      if (scheduled.command.type === "issueUnitOrder") {
+        for (const unit of getUnitsInStableOrder(world)) {
+          if (
+            unit.owner !== scheduled.playerId ||
+            !scheduled.command.unitHandles.some((handle) =>
+              sameHandle(handle, unit.handle)
+            )
+          ) {
+            continue;
+          }
+
+          unit.moveOrder = copyUnitOrder(scheduled.command.order);
+        }
+      }
+    }
+  },
+};

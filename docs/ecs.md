@@ -174,6 +174,8 @@ Responsibilities:
 - `LifecycleSystem`: spawn/despawn and handle-map updates.
 - `EventFlushSystem`: publish deterministic events to clients/tools after sim state has advanced.
 
+Current scaffold note: before the full bitECS component split lands, ship order intent is stored as a transient `desiredVelocity` field on each `SimUnit`. It is recomputed every tick by `ShipOrderSystem`, consumed by `SteeringSystem`, and excluded from snapshots and hashes.
+
 ## Tick loop
 
 ```ts

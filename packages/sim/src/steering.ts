@@ -36,6 +36,11 @@ export const PLANET_GRAVITY_MAX_STRENGTH = 14;
 
 const MOVE_ORDER_ARRIVAL_DISTANCE = 1.8;
 const MOVE_ORDER_SLOW_RADIUS = 24;
+const ESCORT_DESIRED_RANGE = 24;
+const ESCORT_INNER_RANGE_MULTIPLIER = 0.72;
+const ESCORT_OUTER_RANGE_MULTIPLIER = 1.28;
+const ESCORT_MATCH_VELOCITY_WEIGHT = 0.82;
+const ESCORT_CORRECTION_SPEED_RATIO = 0.34;
 const DEFAULT_ORBIT_WEIGHT = 0.95;
 const MOVE_ORDER_WEIGHT = 1.35;
 const GRAVITY_STEERING_WEIGHT = 1.15;
@@ -281,7 +286,7 @@ function computeOrderVelocity(
       return null;
     }
 
-    return computeApproachVelocity(unit, target.position, stats, 16);
+    return computeEscortVelocity(unit, target, stats);
   }
 
   const target = order.target;
@@ -324,6 +329,44 @@ function computeApproachVelocity(
     clamp(remaining / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
 
   return scale(normalize(offset), speed);
+}
+
+function computeEscortVelocity(
+  unit: SimUnit,
+  target: SimUnit,
+  stats: ShipStats
+): Vec3Data | null {
+  const offset = subtract(target.position, unit.position);
+  const distance = length(offset);
+  const desiredRange =
+    ESCORT_DESIRED_RANGE + target.health.max / Math.max(unit.health.max, 1);
+  const innerRange = desiredRange * ESCORT_INNER_RANGE_MULTIPLIER;
+  const outerRange = desiredRange * ESCORT_OUTER_RANGE_MULTIPLIER;
+  const velocity = scale(target.velocity, ESCORT_MATCH_VELOCITY_WEIGHT);
+
+  if (distance <= EPSILON) {
+    return velocity;
+  }
+
+  if (distance > outerRange) {
+    addScaled(
+      velocity,
+      normalize(offset),
+      stats.cruiseSpeed *
+        clamp((distance - desiredRange) / MOVE_ORDER_SLOW_RADIUS, 0.28, 1)
+    );
+    return velocity;
+  }
+
+  if (distance < innerRange) {
+    addScaled(
+      velocity,
+      normalize(offset),
+      -stats.cruiseSpeed * ESCORT_CORRECTION_SPEED_RATIO
+    );
+  }
+
+  return velocity;
 }
 
 function computeDefaultMotionVelocity(

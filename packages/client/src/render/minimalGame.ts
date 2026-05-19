@@ -235,8 +235,8 @@ const INITIAL_INSTANCE_CAPACITY = 64;
 const UNIT_SYMBOL_SIZE_PX = 20.7;
 const UNIT_SYMBOL_SCALE_BY_CLASS: Readonly<Record<number, number>> = {
   [SHIP_CLASS_IDS.fighter]: 0.75,
-  [SHIP_CLASS_IDS.dropShip]: 1.2,
-  [SHIP_CLASS_IDS.battleship]: 1.1,
+  [SHIP_CLASS_IDS.dropShip]: 1.3,
+  [SHIP_CLASS_IDS.battleship]: 1.2,
 };
 const SELECTION_RING_SIZE_PX = 26.1;
 const PROJECTILE_PARTICLE_DURATION_MS = 240;
@@ -673,7 +673,7 @@ export function mountMinimalGame(
         event.clientX,
         event.clientY,
         scratch,
-        isSelectionRemoveModifier(event) ? "remove" : "add"
+        readSelectionBoxMode(event)
       );
       commandMenuLeaderKey = pruneCommandMenuLeaderKey(
         commandMenuLeaderKey,
@@ -1638,13 +1638,17 @@ function selectOwnedUnitsInBox(
   endClientX: number,
   endClientY: number,
   scratch: RenderScratch,
-  mode: "add" | "remove"
+  mode: "add" | "remove" | "replace"
 ): void {
   const bounds = canvas.getBoundingClientRect();
   const minX = Math.min(startClientX, endClientX);
   const maxX = Math.max(startClientX, endClientX);
   const minY = Math.min(startClientY, endClientY);
   const maxY = Math.max(startClientY, endClientY);
+
+  if (mode === "replace") {
+    selectedUnitKeys.clear();
+  }
 
   for (const unit of units) {
     if (unit.owner !== playerId) {
@@ -1677,6 +1681,16 @@ function selectOwnedUnitsInBox(
 
 function isSelectionRemoveModifier(event: PointerEvent): boolean {
   return event.ctrlKey || event.metaKey;
+}
+
+function readSelectionBoxMode(
+  event: PointerEvent
+): "add" | "remove" | "replace" {
+  if (isSelectionRemoveModifier(event)) {
+    return "remove";
+  }
+
+  return event.shiftKey ? "add" : "replace";
 }
 
 function pruneSelectedPlanetKey(

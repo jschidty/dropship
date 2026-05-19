@@ -341,6 +341,10 @@ export const DropShipSpawnSystem: SimSystem = {
         owner: dropShip.owner,
         templateId: TEMPLATE_IDS.fighterShip,
         position: computeSpawnPosition(dropShip, tick),
+        moveOrder: {
+          type: "escort",
+          target: dropShip.handle,
+        },
         spawnedTick: tick,
       });
       dropShip.fighterSpawn.spawnedFighters.push(fighter.handle);
@@ -361,6 +365,23 @@ export const MatchEndSystem: SimSystem = {
   name: "MatchEndSystem",
   run(world, tick) {
     if (world.config.gameMode !== "captureDemo" || world.matchResult) {
+      return;
+    }
+
+    const playerOneHasDropShip = hasLivingDropShip(world, 1);
+    const playerTwoHasDropShip = hasLivingDropShip(world, 2);
+
+    if (!playerOneHasDropShip || !playerTwoHasDropShip) {
+      world.matchResult = {
+        winner:
+          playerOneHasDropShip === playerTwoHasDropShip
+            ? 0
+            : playerOneHasDropShip
+              ? 1
+              : 2,
+        completedTick: tick,
+        reason: "dropShipsDestroyed",
+      };
       return;
     }
 
@@ -500,6 +521,15 @@ function readOrderedAttackTarget(world: SimWorld, unit: SimUnit): SimUnit | null
   }
 
   return null;
+}
+
+function hasLivingDropShip(world: SimWorld, playerId: PlayerId): boolean {
+  return getUnitsInStableOrder(world).some(
+    (unit) =>
+      unit.owner === playerId &&
+      unit.shipClassId === SHIP_CLASS_IDS.dropShip &&
+      unit.health.current > 0
+  );
 }
 
 function updatePlanetCapture(

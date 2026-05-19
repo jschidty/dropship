@@ -42,6 +42,7 @@ import {
 } from "./shaders";
 import {
   createCameraPresetControls,
+  createDebugInfoControl,
   createRandomSeedControl,
   createRenderModeControl,
   createSelectionBox,
@@ -89,6 +90,9 @@ type UnitBatchRenderer = {
   iconQuaternion: THREE.Quaternion;
   localRotation: THREE.Quaternion;
   instancePosition: THREE.Vector3;
+  directionPosition: THREE.Vector3;
+  projectedPosition: THREE.Vector3;
+  projectedDirection: THREE.Vector3;
   scale: THREE.Vector3;
 };
 
@@ -169,6 +173,10 @@ type ProjectileParticleRenderer = {
   position: THREE.Vector3;
   scale: THREE.Vector3;
   billboardQuaternion: THREE.Quaternion;
+  projectileQuaternion: THREE.Quaternion;
+  localRotation: THREE.Quaternion;
+  projectedStart: THREE.Vector3;
+  projectedEnd: THREE.Vector3;
 };
 
 type RenderScratch = {
@@ -217,11 +225,13 @@ const PIXEL_RATIO_ADJUST_INTERVAL_MS = 1500;
 const MAX_SIM_STEPS_PER_FRAME = 5;
 const MAX_SIM_FRAME_DELTA_MS = 250;
 const INITIAL_INSTANCE_CAPACITY = 64;
-const UNIT_SYMBOL_SCALE = 2.4;
-const SELECTION_RING_SCALE = 4;
+const UNIT_SYMBOL_SIZE_PX = 34;
+const SELECTION_RING_SIZE_PX = 44;
 const PROJECTILE_PARTICLE_DURATION_MS = 240;
-const PROJECTILE_PARTICLE_SCALE = 1.8;
-const CINEMATIC_PROJECTILE_PARTICLE_SCALE = 2.45;
+const PROJECTILE_PARTICLE_LENGTH_PX = 20;
+const PROJECTILE_PARTICLE_WIDTH_PX = 2.4;
+const CINEMATIC_PROJECTILE_PARTICLE_LENGTH_PX = 24;
+const CINEMATIC_PROJECTILE_PARTICLE_WIDTH_PX = 3;
 const PLANET_SELECTION_MIN_RADIUS_PX = 10;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
@@ -364,12 +374,17 @@ export function mountMinimalGame(
   let selectedPlanetKey: string | null = null;
   let commandMenuLeaderKey: string | null = null;
   let tacticalOverlayEnabled = false;
+  let debugInfoEnabled = false;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
   const cameraPresetControls = createCameraPresetControls(container, (preset) => {
     applyCameraPreset(cameraControls, preset);
   });
   const topLeftControls = createTopLeftControls(container);
+  createDebugInfoControl(topLeftControls, (enabled) => {
+    debugInfoEnabled = enabled;
+    statsLayer.hidden = !enabled;
+  });
   const tacticalOverlayControls = createTacticalOverlayControls(
     topLeftControls,
     (enabled) => {
@@ -427,6 +442,8 @@ export function mountMinimalGame(
 
     if (key === "r") {
       runtime.enqueueRandomTurn();
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -439,6 +456,8 @@ export function mountMinimalGame(
         }
       }
 
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -446,6 +465,8 @@ export function mountMinimalGame(
       selectedUnitKeys.clear();
       selectedPlanetKey = null;
       commandMenuLeaderKey = null;
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -470,11 +491,15 @@ export function mountMinimalGame(
         tacticalOverlayControls,
         tacticalOverlayEnabled
       );
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
     if (key === "2") {
       setCameraMode(cameraControls, "strategic");
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -484,6 +509,7 @@ export function mountMinimalGame(
         cameraControls,
         cameraControls.mode === "tactical" ? "strategic" : "tactical"
       );
+      event.stopPropagation();
     }
   };
   const handlePointerDown = (event: PointerEvent) => {
@@ -753,6 +779,7 @@ export function mountMinimalGame(
       units,
       selectedUnitKeys,
       camera,
+      container,
       interpolationAlpha
     );
     addProjectileEvents(projectileParticles, runtime.drainEvents(), now);
@@ -760,6 +787,7 @@ export function mountMinimalGame(
       projectileParticles,
       now,
       camera,
+      container,
       renderQuality
     );
     adjustRenderPixelRatio(now);
@@ -813,6 +841,7 @@ export function mountMinimalGame(
       container.dataset.tacticalOverlay = tacticalOverlayEnabled ? "on" : "off";
       container.dataset.gravityOverlay = tacticalOverlayEnabled ? "on" : "off";
       container.dataset.renderMode = renderQuality.mode;
+      container.dataset.debugInfo = debugInfoEnabled ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
       container.dataset.connectionState = runtime.readConnectionStatus().state;
       container.dataset.simHz = observedSimHz.toFixed(1);
@@ -878,7 +907,7 @@ export function mountMinimalGame(
   };
 
   window.addEventListener("resize", resize);
-  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keydown", handleKeyDown, { capture: true });
   renderer.domElement.addEventListener("pointerdown", handlePointerDown);
   renderer.domElement.addEventListener("pointermove", handlePointerMove);
   renderer.domElement.addEventListener("pointerup", handlePointerUp);
@@ -909,7 +938,7 @@ export function mountMinimalGame(
       disposed = true;
       cancelAnimationFrame(frameId);
       window.removeEventListener("resize", resize);
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
       renderer.domElement.removeEventListener("pointerup", handlePointerUp);
@@ -1604,6 +1633,9 @@ function createUnitBatchRenderer(): UnitBatchRenderer {
     iconQuaternion: new THREE.Quaternion(),
     localRotation: new THREE.Quaternion(),
     instancePosition: new THREE.Vector3(),
+    directionPosition: new THREE.Vector3(),
+    projectedPosition: new THREE.Vector3(),
+    projectedDirection: new THREE.Vector3(),
     scale: new THREE.Vector3(),
   };
 }
@@ -1613,6 +1645,7 @@ function updateUnitBatches(
   units: readonly UnitViewModel[],
   selectedUnitKeys: ReadonlySet<string>,
   camera: THREE.Camera,
+  container: HTMLElement,
   interpolationAlpha: number
 ): void {
   for (const key of batches.symbolCounts.keys()) {
@@ -1636,6 +1669,9 @@ function updateUnitBatches(
 
   ensureSelectionMeshCapacity(batches, selectedUnitKeys.size);
   batches.billboardQuaternion.copy(camera.quaternion);
+  const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, container);
+  const symbolScale = UNIT_SYMBOL_SIZE_PX * worldUnitsPerPixel;
+  const selectionScale = SELECTION_RING_SIZE_PX * worldUnitsPerPixel;
 
   for (const key of batches.symbolCounts.keys()) {
     batches.symbolCounts.set(key, 0);
@@ -1660,9 +1696,9 @@ function updateUnitBatches(
     writeUnitInstanceMatrix(
       batches,
       position,
-      UNIT_SYMBOL_SCALE,
+      symbolScale,
       unit.shipClassId === SHIP_CLASS_IDS.fighter
-        ? yawFromQuaternion(unit.rotation)
+        ? readUnitScreenRotation(batches, unit, position, camera)
         : 0
     );
     symbolMesh.setMatrixAt(symbolIndex, batches.matrix);
@@ -1672,7 +1708,7 @@ function updateUnitBatches(
       writeUnitInstanceMatrix(
         batches,
         position,
-        SELECTION_RING_SCALE,
+        selectionScale,
         0
       );
       batches.selectionMesh.setMatrixAt(selectedCount, batches.matrix);
@@ -1792,6 +1828,46 @@ function writeUnitInstanceMatrix(
   batches.matrix.compose(position, batches.iconQuaternion, batches.scale);
 }
 
+function readUnitScreenRotation(
+  batches: UnitBatchRenderer,
+  unit: UnitViewModel,
+  position: THREE.Vector3,
+  camera: THREE.Camera
+): number {
+  const yaw = yawFromQuaternion(unit.rotation);
+
+  batches.directionPosition.set(
+    position.x + Math.sin(yaw),
+    position.y,
+    position.z + Math.cos(yaw)
+  );
+  batches.projectedPosition.copy(position).project(camera);
+  batches.projectedDirection
+    .copy(batches.directionPosition)
+    .project(camera)
+    .sub(batches.projectedPosition);
+
+  const dx = batches.projectedDirection.x;
+  const dy = batches.projectedDirection.y;
+
+  if (dx * dx + dy * dy < 0.000001) {
+    return 0;
+  }
+
+  return Math.atan2(dy, dx) - Math.PI / 2;
+}
+
+function readWorldUnitsPerPixel(
+  camera: THREE.Camera,
+  container: HTMLElement
+): number {
+  if (camera instanceof THREE.OrthographicCamera) {
+    return (camera.top - camera.bottom) / Math.max(container.clientHeight, 1);
+  }
+
+  return 1;
+}
+
 function getUnitSymbolBatchKey(unit: UnitViewModel): string {
   return `${unit.owner}:${unit.shipClassId}`;
 }
@@ -1853,6 +1929,10 @@ function createProjectileParticleRenderer(
     position: new THREE.Vector3(),
     scale: new THREE.Vector3(),
     billboardQuaternion: new THREE.Quaternion(),
+    projectileQuaternion: new THREE.Quaternion(),
+    localRotation: new THREE.Quaternion(),
+    projectedStart: new THREE.Vector3(),
+    projectedEnd: new THREE.Vector3(),
   };
 }
 
@@ -1860,15 +1940,60 @@ function createProjectileParticleMaterial(
   color: number,
   renderQuality: RenderQualityConfig
 ): THREE.MeshBasicMaterial {
+  const map = createProjectileParticleTexture(color, renderQuality);
+
   return new THREE.MeshBasicMaterial({
-    color,
+    map,
     transparent: true,
-    opacity: renderQuality.mode === "cinematic" ? 0.92 : 0.78,
+    opacity: renderQuality.mode === "cinematic" ? 0.96 : 0.9,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     depthTest: true,
     side: THREE.DoubleSide,
   });
+}
+
+function createProjectileParticleTexture(
+  color: number,
+  renderQuality: RenderQualityConfig
+): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    throw new Error("Unable to create projectile particle canvas");
+  }
+
+  const projectileColor = new THREE.Color(color);
+  const r = Math.round(projectileColor.r * 255);
+  const g = Math.round(projectileColor.g * 255);
+  const b = Math.round(projectileColor.b * 255);
+  const alpha = renderQuality.mode === "cinematic" ? 0.92 : 0.76;
+  const glowAlpha = renderQuality.mode === "cinematic" ? 0.22 : 0.1;
+  const gradient = context.createLinearGradient(0, 16, 256, 16);
+
+  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0)`);
+  gradient.addColorStop(0.18, `rgba(${r}, ${g}, ${b}, ${alpha * 0.42})`);
+  gradient.addColorStop(0.5, `rgba(255, 255, 255, ${alpha})`);
+  gradient.addColorStop(0.82, `rgba(${r}, ${g}, ${b}, ${alpha * 0.42})`);
+  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+
+  context.clearRect(0, 0, 256, 32);
+  context.fillStyle = `rgba(${r}, ${g}, ${b}, ${glowAlpha})`;
+  context.fillRect(24, 10, 208, 12);
+  context.fillStyle = gradient;
+  context.fillRect(0, 13, 256, 6);
+  context.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+  context.fillRect(80, 14, 96, 4);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
 }
 
 function addProjectileEvents(
@@ -1895,6 +2020,7 @@ function updateProjectileParticles(
   renderer: ProjectileParticleRenderer,
   now: number,
   camera: THREE.Camera,
+  container: HTMLElement,
   renderQuality: RenderQualityConfig
 ): void {
   renderer.particles = renderer.particles.filter(
@@ -1919,6 +2045,15 @@ function updateProjectileParticles(
   }
 
   renderer.billboardQuaternion.copy(camera.quaternion);
+  const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, container);
+  const projectileLengthPx =
+    renderQuality.mode === "cinematic"
+      ? CINEMATIC_PROJECTILE_PARTICLE_LENGTH_PX
+      : PROJECTILE_PARTICLE_LENGTH_PX;
+  const projectileWidthPx =
+    renderQuality.mode === "cinematic"
+      ? CINEMATIC_PROJECTILE_PARTICLE_WIDTH_PX
+      : PROJECTILE_PARTICLE_WIDTH_PX;
 
   for (const key of renderer.counts.keys()) {
     renderer.counts.set(key, 0);
@@ -1937,16 +2072,22 @@ function updateProjectileParticles(
       1
     );
     const index = renderer.counts.get(particle.owner) ?? 0;
-    const scale =
-      renderQuality.mode === "cinematic"
-        ? CINEMATIC_PROJECTILE_PARTICLE_SCALE
-        : PROJECTILE_PARTICLE_SCALE;
+    const fadeScale = 1 - age * 0.35;
+    const screenRotation = readProjectileScreenRotation(renderer, particle, camera);
 
     renderer.position.lerpVectors(particle.start, particle.end, age);
-    renderer.scale.setScalar(scale * (1 - age * 0.35));
+    renderer.localRotation.setFromAxisAngle(Z_AXIS, screenRotation);
+    renderer.projectileQuaternion
+      .copy(renderer.billboardQuaternion)
+      .multiply(renderer.localRotation);
+    renderer.scale.set(
+      projectileLengthPx * worldUnitsPerPixel * fadeScale,
+      projectileWidthPx * worldUnitsPerPixel * fadeScale,
+      1
+    );
     renderer.matrix.compose(
       renderer.position,
-      renderer.billboardQuaternion,
+      renderer.projectileQuaternion,
       renderer.scale
     );
     mesh.setMatrixAt(index, renderer.matrix);
@@ -1957,6 +2098,24 @@ function updateProjectileParticles(
     mesh.count = renderer.counts.get(owner) ?? 0;
     mesh.instanceMatrix.needsUpdate = mesh.count > 0;
   }
+}
+
+function readProjectileScreenRotation(
+  renderer: ProjectileParticleRenderer,
+  particle: ProjectileParticle,
+  camera: THREE.Camera
+): number {
+  renderer.projectedStart.copy(particle.start).project(camera);
+  renderer.projectedEnd.copy(particle.end).project(camera);
+
+  const dx = renderer.projectedEnd.x - renderer.projectedStart.x;
+  const dy = renderer.projectedEnd.y - renderer.projectedStart.y;
+
+  if (dx * dx + dy * dy < 0.000001) {
+    return 0;
+  }
+
+  return Math.atan2(dy, dx);
 }
 
 function ensureProjectileParticleCapacity(
@@ -2007,6 +2166,7 @@ function disposeProjectileParticleRenderer(
   }
 
   for (const material of renderer.materials.values()) {
+    material.map?.dispose();
     material.dispose();
   }
 

@@ -47,6 +47,8 @@ testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
 testDropShipCapturesPlanet();
 testDropShipSpawnsFighters();
+testSpawnedFightersEscortParentDropShip();
+testDropShipEliminationEndsMatch();
 testNpcDefenderIssuesAttackOrders();
 testDeterministicReplayHash();
 testSnapshotRoundTrip();
@@ -388,6 +390,12 @@ function testCaptureDemoConfig(): void {
 
   assert.equal(config.gameMode, "captureDemo");
   assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip));
+  assert.equal(
+    world.units.filter(
+      (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+    ).length,
+    1
+  );
   assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship));
   assert.ok(world.planets.some((planet) => planet.control.capturable));
 }
@@ -487,6 +495,77 @@ function testDropShipSpawnsFighters(): void {
   ).length - initialFighters;
 
   assert.equal(spawnedFighters, 2);
+}
+
+function testSpawnedFightersEscortParentDropShip(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      fighterSpawnIntervalTicks: 2,
+      fighterSpawnCapPerDropShip: 1,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const dropShip = world.units.find(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(dropShip);
+
+  runBatches(world, [], 4);
+
+  const spawnedFighterHandle = dropShip.fighterSpawn?.spawnedFighters[0];
+
+  assert.ok(spawnedFighterHandle);
+
+  const spawnedFighter = world.units.find((unit) =>
+    sameHandle(unit.handle, spawnedFighterHandle)
+  );
+
+  assert.ok(spawnedFighter);
+  assert.equal(spawnedFighter.moveOrder?.type, "escort");
+  assert.ok(
+    spawnedFighter.moveOrder?.type === "escort" &&
+      sameHandle(spawnedFighter.moveOrder.target, dropShip.handle)
+  );
+}
+
+function testDropShipEliminationEndsMatch(): void {
+  const playerOneLost = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  for (const unit of playerOneLost.units) {
+    if (unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip) {
+      unit.health.current = 0;
+    }
+  }
+
+  runBatches(playerOneLost, [], 1);
+
+  assert.equal(playerOneLost.matchResult?.winner, 2);
+  assert.equal(playerOneLost.matchResult?.reason, "dropShipsDestroyed");
+
+  const playerTwoLost = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  for (const unit of playerTwoLost.units) {
+    if (unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip) {
+      unit.health.current = 0;
+    }
+  }
+
+  runBatches(playerTwoLost, [], 1);
+
+  assert.equal(playerTwoLost.matchResult?.winner, 1);
+  assert.equal(playerTwoLost.matchResult?.reason, "dropShipsDestroyed");
 }
 
 function testNpcDefenderIssuesAttackOrders(): void {

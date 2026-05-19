@@ -217,6 +217,11 @@ function createCaptureDemoUnits(
     },
     {
       owner: 2,
+      templateId: TEMPLATE_IDS.dropShip,
+      position: { x: 74, y: 5, z: 52 },
+    },
+    {
+      owner: 2,
       templateId: TEMPLATE_IDS.fighterShip,
       position: { x: 66, y: 6, z: 72 },
     },

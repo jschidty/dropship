@@ -11,8 +11,8 @@ export function createUnitSymbolTexture(
   shipClassId: ShipClassId | number
 ): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
+  canvas.width = 256;
+  canvas.height = 256;
 
   const context = canvas.getContext("2d");
 
@@ -21,12 +21,6 @@ export function createUnitSymbolTexture(
   }
 
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "rgba(4, 8, 16, 0.76)";
-  context.fillRect(20, 20, 88, 88);
-
-  context.strokeStyle = colorValue;
-  context.lineWidth = 8;
-  context.strokeRect(20, 20, 88, 88);
 
   if (shipClassId === SHIP_CLASS_IDS.battleship) {
     drawBattleshipSymbol(context, colorValue);
@@ -38,6 +32,9 @@ export function createUnitSymbolTexture(
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
   return texture;
 }
 
@@ -48,32 +45,35 @@ function drawScoutSymbol(
 ): void {
   context.fillStyle = colorValue;
   context.beginPath();
-
-  if (owner === 1) {
-    context.moveTo(64, 30);
-    context.lineTo(94, 96);
-    context.lineTo(64, 82);
-    context.lineTo(34, 96);
-  } else {
-    context.moveTo(64, 30);
-    context.lineTo(96, 64);
-    context.lineTo(64, 98);
-    context.lineTo(32, 64);
-  }
-
+  context.moveTo(128, 35);
+  context.lineTo(212, 205);
+  context.lineTo(128, 166);
+  context.lineTo(44, 205);
   context.closePath();
   context.fill();
+
+  context.strokeStyle = colorValue;
+  context.lineJoin = "miter";
+  context.lineWidth = owner === 1 ? 10 : 8;
+  context.stroke();
 }
 
 function drawBattleshipSymbol(
   context: CanvasRenderingContext2D,
   colorValue: string
 ): void {
-  context.fillStyle = colorValue;
-  context.font = "700 68px Georgia, serif";
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText("β", 64, 67);
+  context.strokeStyle = colorValue;
+  context.lineCap = "square";
+  context.lineJoin = "round";
+  context.lineWidth = 22;
+  context.beginPath();
+  context.moveTo(83, 33);
+  context.lineTo(83, 223);
+  context.moveTo(83, 51);
+  context.bezierCurveTo(189, 48, 206, 108, 111, 126);
+  context.moveTo(83, 126);
+  context.bezierCurveTo(214, 130, 204, 215, 83, 207);
+  context.stroke();
 }
 
 function drawDropShipSymbol(
@@ -81,8 +81,9 @@ function drawDropShipSymbol(
   colorValue: string
 ): void {
   context.fillStyle = colorValue;
-  context.fillRect(58, 30, 12, 70);
-  context.fillRect(38, 48, 52, 12);
+  context.fillRect(116, 35, 24, 186);
+  context.fillRect(72, 76, 112, 24);
+  context.fillRect(92, 197, 72, 24);
 }
 
 export function createSelectionRingTexture(): THREE.CanvasTexture {

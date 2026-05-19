@@ -12,6 +12,10 @@ export type TacticalOverlayControls = Readonly<{
   input: HTMLInputElement;
 }>;
 
+export type DebugInfoControls = Readonly<{
+  button: HTMLButtonElement;
+}>;
+
 export type CommandMenuControls = Readonly<{
   root: HTMLElement;
   content: HTMLElement;
@@ -76,6 +80,7 @@ const COMMAND_UNIT_GROUPS: readonly CommandUnitGroupDefinition[] = [
 export function createStatsLayer(container: HTMLElement): HTMLElement {
   const statsLayer = document.createElement("div");
   statsLayer.className = "game-stats";
+  statsLayer.hidden = true;
   container.appendChild(statsLayer);
   return statsLayer;
 }
@@ -120,6 +125,7 @@ export function createCameraPresetControls(
       event.stopPropagation();
       onSelect(preset);
       updateCameraPresetControls({ root, buttons }, preset);
+      button.blur();
     });
     buttons[preset] = button;
     root.appendChild(button);
@@ -148,6 +154,35 @@ export function createTopLeftControls(container: HTMLElement): HTMLElement {
   return root;
 }
 
+export function createDebugInfoControl(
+  container: HTMLElement,
+  onChange: (enabled: boolean) => void
+): DebugInfoControls {
+  const button = document.createElement("button");
+  let enabled = false;
+
+  button.type = "button";
+  button.className = "debug-toggle-button";
+  button.textContent = "Debug";
+  button.setAttribute("aria-pressed", "false");
+  button.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    enabled = !enabled;
+    button.setAttribute("aria-pressed", String(enabled));
+    onChange(enabled);
+    button.blur();
+  });
+  container.appendChild(button);
+
+  return {
+    button,
+  };
+}
+
 export function createTacticalOverlayControls(
   container: HTMLElement,
   onChange: (enabled: boolean) => void
@@ -164,6 +199,7 @@ export function createTacticalOverlayControls(
   });
   input.addEventListener("change", () => {
     onChange(input.checked);
+    input.blur();
   });
   label.textContent = "Tactical";
   root.append(input, label);
@@ -187,6 +223,7 @@ export function createRandomSeedControl(container: HTMLElement): HTMLButtonEleme
     event.preventDefault();
     event.stopPropagation();
     navigateToRandomSeed();
+    button.blur();
   });
   container.appendChild(button);
   return button;
@@ -210,6 +247,7 @@ export function createRenderModeControl(
     navigateToRenderMode(
       renderMode === "cinematic" ? "interactive" : "cinematic"
     );
+    button.blur();
   });
   container.appendChild(button);
   return button;
@@ -257,6 +295,7 @@ export function createCommandMenu(
     event.preventDefault();
     event.stopPropagation();
     options.onEscortLeader();
+    escortButton.blur();
   });
   commandsBody.appendChild(escortButton);
   commandsPanel.append(commandsSummary, commandsBody);
@@ -423,6 +462,8 @@ function syncUnitButtons(
         if (unitKey) {
           onSelectLeader(unitKey);
         }
+
+        button.blur();
       });
       groupControls.buttons.set(unit.key, button);
     }

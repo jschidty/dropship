@@ -150,7 +150,7 @@ export type SimWorld = {
   matchResult: {
     winner: PlayerId | 0;
     completedTick: number;
-    reason: "allPlanetsCaptured";
+    reason: "allPlanetsCaptured" | "dropShipsDestroyed";
   } | null;
 };
 

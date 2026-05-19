@@ -102,6 +102,6 @@ export type CompactSimSnapshot = Readonly<{
   matchResult?: Readonly<{
     winner: PlayerId | 0;
     completedTick: number;
-    reason: "allPlanetsCaptured";
+    reason: "allPlanetsCaptured" | "dropShipsDestroyed";
   }> | null;
 }>;

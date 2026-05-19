@@ -106,7 +106,8 @@ canvas {
 .debug-toggle-button:focus-visible,
 .random-seed-button:focus-visible,
 .render-mode-button:focus-visible,
-.command-menu-unit:focus-visible,
+.command-menu-unit-select:focus-visible,
+.command-menu-unit-remove:focus-visible,
 .command-menu-command:focus-visible,
 .command-menu-panel-summary:focus-visible {
   outline: 1px solid rgb(252 61 33 / 100%);
@@ -247,32 +248,54 @@ canvas {
   background: rgb(252 61 33 / 82%);
 }
 
-.command-menu-unit,
+.command-menu-unit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  width: 100%;
+  min-height: 26px;
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  background: rgb(8 14 26 / 62%);
+}
+
+.command-menu-unit-select,
+.command-menu-unit-remove,
 .command-menu-command {
   width: 100%;
   min-height: 26px;
   border: 0;
-  border-top: 1px solid rgb(252 61 33 / 42%);
   border-radius: 0;
-  background: rgb(8 14 26 / 62%);
+  background: transparent;
   color: rgb(252 61 33 / 88%);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.command-menu-unit {
+.command-menu-unit-select {
   padding: 0 8px;
 }
 
+.command-menu-unit-remove {
+  border-left: 1px solid rgb(252 61 33 / 42%);
+  padding: 0;
+  text-align: center;
+}
+
 .command-menu-command {
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  background: rgb(8 14 26 / 62%);
   padding: 0 9px;
 }
 
 .command-menu-unit:hover,
-.command-menu-unit[aria-pressed="true"],
+.command-menu-unit[aria-selected="true"],
 .command-menu-command:hover:not(:disabled) {
   background: rgb(252 61 33 / 16%);
+  color: rgb(255 106 72 / 100%);
+}
+
+.command-menu-unit-select:hover,
+.command-menu-unit-remove:hover {
   color: rgb(255 106 72 / 100%);
 }
 

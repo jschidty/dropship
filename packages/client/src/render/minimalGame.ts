@@ -22,6 +22,7 @@ import {
   CAMERA_PRESETS,
   applyCameraPreset,
   setCameraMode,
+  type CameraPreset,
   type CameraControls,
   type CameraFocusTween,
 } from "../camera/config";
@@ -92,6 +93,7 @@ type UnitBatchRenderer = {
   instancePosition: THREE.Vector3;
   directionPosition: THREE.Vector3;
   projectedPosition: THREE.Vector3;
+  projectedOccluder: THREE.Vector3;
   projectedDirection: THREE.Vector3;
   scale: THREE.Vector3;
 };
@@ -216,7 +218,6 @@ type GravityOverlay = {
   side: THREE.Vector3;
   headLeft: THREE.Vector3;
   headRight: THREE.Vector3;
-  enabled: boolean;
 };
 
 const HUD_UPDATE_INTERVAL_MS = 500;
@@ -284,7 +285,10 @@ const GAS_GIANT_PALETTE_THEMES: readonly GasGiantPaletteTheme[] = [
   [0x10241d, 0x4f7e5d, 0xd8d19b, 0x95b75e],
   [0x172232, 0x5d7287, 0xe4d4b6, 0xd09352],
 ];
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const TACTICAL_BASIS_MATRIX = new THREE.Matrix4();
 const PLANET_RING_AXIS_SCRATCH = new THREE.Vector3(0, 1, 0);
 const GAS_GIANT_BASE_COLOR_SCRATCH = new THREE.Color();
 const GAS_GIANT_PALETTE_COLOR_SCRATCH = new THREE.Color();
@@ -390,7 +394,6 @@ export function mountMinimalGame(
     (enabled) => {
       tacticalOverlayEnabled = enabled;
       setTacticalOverlayEnabled(
-        gravityOverlay,
         tacticalOverlayControls,
         enabled
       );
@@ -402,6 +405,13 @@ export function mountMinimalGame(
   const commandMenu = createCommandMenu(container, {
     onSelectLeader(unitKey) {
       commandMenuLeaderKey = unitKey;
+    },
+    onDeselectUnit(unitKey) {
+      selectedUnitKeys.delete(unitKey);
+
+      if (commandMenuLeaderKey === unitKey) {
+        commandMenuLeaderKey = null;
+      }
     },
     onEscortLeader() {
       issueEscortLeaderOrder(runtime, selectedUnitKeys, commandMenuLeaderKey);
@@ -487,7 +497,6 @@ export function mountMinimalGame(
     if (key === "t") {
       tacticalOverlayEnabled = !tacticalOverlayEnabled;
       setTacticalOverlayEnabled(
-        gravityOverlay,
         tacticalOverlayControls,
         tacticalOverlayEnabled
       );
@@ -778,6 +787,7 @@ export function mountMinimalGame(
       unitBatches,
       units,
       selectedUnitKeys,
+      planets,
       camera,
       container,
       interpolationAlpha
@@ -805,11 +815,18 @@ export function mountMinimalGame(
       sunDirection,
       scratch
     );
-    updateTacticalGrid(tacticalGrid, selectedPlanet, tacticalOverlayEnabled);
+    updateTacticalGrid(
+      tacticalGrid,
+      selectedPlanet,
+      tacticalOverlayEnabled,
+      cameraControls.preset
+    );
     updateGravityOverlay(
       gravityOverlay,
       selectedPlanet,
-      selectedPlanet ? [selectedPlanet] : []
+      selectedPlanet ? [selectedPlanet] : [],
+      tacticalOverlayEnabled,
+      cameraControls.preset
     );
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
@@ -839,7 +856,9 @@ export function mountMinimalGame(
       container.dataset.selectedUnitCount = selectedUnitKeys.size.toString();
       container.dataset.selectedPlanet = selectedPlanet?.label ?? "none";
       container.dataset.tacticalOverlay = tacticalOverlayEnabled ? "on" : "off";
-      container.dataset.gravityOverlay = tacticalOverlayEnabled ? "on" : "off";
+      container.dataset.gravityOverlay = gravityOverlay.root.visible
+        ? "on"
+        : "off";
       container.dataset.renderMode = renderQuality.mode;
       container.dataset.debugInfo = debugInfoEnabled ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
@@ -1635,6 +1654,7 @@ function createUnitBatchRenderer(): UnitBatchRenderer {
     instancePosition: new THREE.Vector3(),
     directionPosition: new THREE.Vector3(),
     projectedPosition: new THREE.Vector3(),
+    projectedOccluder: new THREE.Vector3(),
     projectedDirection: new THREE.Vector3(),
     scale: new THREE.Vector3(),
   };
@@ -1644,25 +1664,43 @@ function updateUnitBatches(
   batches: UnitBatchRenderer,
   units: readonly UnitViewModel[],
   selectedUnitKeys: ReadonlySet<string>,
+  planets: readonly PlanetViewModel[],
   camera: THREE.Camera,
   container: HTMLElement,
   interpolationAlpha: number
 ): void {
+  const symbolUnits = new Map<string, UnitViewModel>();
+  const symbolOcclusion = new Map<string, boolean>();
+
   for (const key of batches.symbolCounts.keys()) {
     batches.symbolCounts.set(key, 0);
   }
 
   for (const unit of units) {
-    const key = getUnitSymbolBatchKey(unit);
+    const position = batches.instancePosition.lerpVectors(
+      unit.prevPosition,
+      unit.position,
+      interpolationAlpha
+    );
+    const occluded = isUnitSymbolOccludedByPlanet(
+      batches,
+      position,
+      planets,
+      camera
+    );
+    const key = getUnitSymbolBatchKey(unit, occluded);
     batches.symbolCounts.set(key, (batches.symbolCounts.get(key) ?? 0) + 1);
+    symbolUnits.set(key, unit);
+    symbolOcclusion.set(key, occluded);
   }
 
   for (const [key, count] of batches.symbolCounts) {
     if (count > 0) {
-      const unit = units.find((entry) => getUnitSymbolBatchKey(entry) === key);
+      const unit = symbolUnits.get(key);
+      const occluded = symbolOcclusion.get(key) ?? false;
 
       if (unit) {
-        ensureSymbolMeshCapacity(batches, key, unit, count);
+        ensureSymbolMeshCapacity(batches, key, unit, count, occluded);
       }
     }
   }
@@ -1680,29 +1718,30 @@ function updateUnitBatches(
   let selectedCount = 0;
 
   for (const unit of units) {
-    const key = getUnitSymbolBatchKey(unit);
-    const symbolMesh = batches.symbolMeshes.get(key);
-    const symbolIndex = batches.symbolCounts.get(key) ?? 0;
-
-    if (!symbolMesh) {
-      continue;
-    }
-
     const position = batches.instancePosition.lerpVectors(
       unit.prevPosition,
       unit.position,
       interpolationAlpha
     );
-    writeUnitInstanceMatrix(
-      batches,
-      position,
-      symbolScale,
-      unit.shipClassId === SHIP_CLASS_IDS.fighter
-        ? readUnitScreenRotation(batches, unit, position, camera)
-        : 0
+    const key = getUnitSymbolBatchKey(
+      unit,
+      isUnitSymbolOccludedByPlanet(batches, position, planets, camera)
     );
-    symbolMesh.setMatrixAt(symbolIndex, batches.matrix);
-    batches.symbolCounts.set(key, symbolIndex + 1);
+    const symbolMesh = batches.symbolMeshes.get(key);
+    const symbolIndex = batches.symbolCounts.get(key) ?? 0;
+
+    if (symbolMesh) {
+      writeUnitInstanceMatrix(
+        batches,
+        position,
+        symbolScale,
+        unit.shipClassId === SHIP_CLASS_IDS.fighter
+          ? readUnitScreenRotation(batches, unit, position, camera)
+          : 0
+      );
+      symbolMesh.setMatrixAt(symbolIndex, batches.matrix);
+      batches.symbolCounts.set(key, symbolIndex + 1);
+    }
 
     if (selectedUnitKeys.has(unit.key) && batches.selectionMesh) {
       writeUnitInstanceMatrix(
@@ -1731,7 +1770,8 @@ function ensureSymbolMeshCapacity(
   batches: UnitBatchRenderer,
   key: string,
   unit: UnitViewModel,
-  requiredCount: number
+  requiredCount: number,
+  occluded: boolean
 ): void {
   const capacity = batches.symbolCapacities.get(key) ?? 0;
 
@@ -1739,7 +1779,7 @@ function ensureSymbolMeshCapacity(
     return;
   }
 
-  const material = getUnitSymbolMaterial(batches, key, unit);
+  const material = getUnitSymbolMaterial(batches, key, unit, occluded);
   const nextCapacity = nextInstanceCapacity(requiredCount);
   const previousMesh = batches.symbolMeshes.get(key);
 
@@ -1796,7 +1836,8 @@ function ensureSelectionMeshCapacity(
 function getUnitSymbolMaterial(
   batches: UnitBatchRenderer,
   key: string,
-  unit: UnitViewModel
+  unit: UnitViewModel,
+  occluded: boolean
 ): THREE.MeshBasicMaterial {
   let material = batches.symbolMaterials.get(key);
 
@@ -1806,6 +1847,7 @@ function getUnitSymbolMaterial(
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      opacity: occluded ? 0.24 : 0.96,
       side: THREE.DoubleSide,
     });
     batches.symbolMaterials.set(key, material);
@@ -1868,8 +1910,64 @@ function readWorldUnitsPerPixel(
   return 1;
 }
 
-function getUnitSymbolBatchKey(unit: UnitViewModel): string {
-  return `${unit.owner}:${unit.shipClassId}`;
+function isUnitSymbolOccludedByPlanet(
+  batches: UnitBatchRenderer,
+  position: THREE.Vector3,
+  planets: readonly PlanetViewModel[],
+  camera: THREE.Camera
+): boolean {
+  if (!(camera instanceof THREE.OrthographicCamera)) {
+    return false;
+  }
+
+  const viewWidth = Math.max(camera.right - camera.left, 1);
+  const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const projectedUnit = batches.projectedPosition.copy(position).project(camera);
+
+  if (projectedUnit.z < -1 || projectedUnit.z > 1) {
+    return false;
+  }
+
+  for (const planet of planets) {
+    const projectedPlanet = batches.projectedOccluder
+      .copy(planet.position)
+      .project(camera);
+
+    if (projectedPlanet.z < -1 || projectedPlanet.z > 1) {
+      continue;
+    }
+
+    if (projectedPlanet.z >= projectedUnit.z - 0.002) {
+      continue;
+    }
+
+    const radiusX = (planet.radius * 2.06) / viewWidth;
+    const radiusY = (planet.radius * 2.06) / viewHeight;
+
+    if (radiusX <= 0 || radiusY <= 0) {
+      continue;
+    }
+
+    const normalizedDistance = Math.hypot(
+      (projectedUnit.x - projectedPlanet.x) / radiusX,
+      (projectedUnit.y - projectedPlanet.y) / radiusY
+    );
+
+    if (normalizedDistance <= 1) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getUnitSymbolBatchKey(
+  unit: UnitViewModel,
+  occluded: boolean
+): string {
+  const visibility = occluded ? "occluded" : "visible";
+
+  return `${unit.owner}:${unit.shipClassId}:${visibility}`;
 }
 
 function nextInstanceCapacity(requiredCount: number): number {
@@ -2614,7 +2712,8 @@ function createTacticalIntersectionGeometry(): THREE.BufferGeometry {
 function updateTacticalGrid(
   tacticalGrid: TacticalGrid,
   context: PlanetViewModel | null,
-  enabled: boolean
+  enabled: boolean,
+  cameraPreset: CameraPreset | null
 ): void {
   tacticalGrid.root.visible = enabled && !!context;
 
@@ -2627,7 +2726,34 @@ function updateTacticalGrid(
     context.position.y,
     context.position.z
   );
+  writeTacticalPlaneQuaternion(tacticalGrid.root.quaternion, cameraPreset);
   tacticalGrid.root.scale.setScalar(context.radius);
+}
+
+function writeTacticalPlaneQuaternion(
+  target: THREE.Quaternion,
+  cameraPreset: CameraPreset | null
+): THREE.Quaternion {
+  if (cameraPreset !== "left") {
+    return target.identity();
+  }
+
+  TACTICAL_BASIS_MATRIX.makeBasis(Z_AXIS, X_AXIS, Y_AXIS);
+  return target.setFromRotationMatrix(TACTICAL_BASIS_MATRIX);
+}
+
+function writeTacticalPlaneSample(
+  target: THREE.Vector3,
+  center: THREE.Vector3,
+  x: number,
+  z: number,
+  cameraPreset: CameraPreset | null
+): THREE.Vector3 {
+  if (cameraPreset === "left") {
+    return target.set(center.x, center.y + z, center.z + x);
+  }
+
+  return target.set(center.x + x, center.y, center.z + z);
 }
 
 function disposeTacticalGrid(tacticalGrid: TacticalGrid): void {
@@ -2688,16 +2814,17 @@ function createGravityOverlay(): GravityOverlay {
     side: new THREE.Vector3(),
     headLeft: new THREE.Vector3(),
     headRight: new THREE.Vector3(),
-    enabled: true,
   };
 }
 
 function updateGravityOverlay(
   overlay: GravityOverlay,
   context: PlanetViewModel | null,
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  enabled: boolean,
+  cameraPreset: CameraPreset | null
 ): void {
-  overlay.root.visible = overlay.enabled && !!context && planets.length > 0;
+  overlay.root.visible = enabled && !!context && planets.length > 0;
 
   if (!overlay.root.visible || !context) {
     clearGravityOverlay(overlay);
@@ -2714,10 +2841,12 @@ function updateGravityOverlay(
       arrowIndex += 1;
       const x = (xIndex - halfGrid) * spacing;
       const z = (zIndex - halfGrid) * spacing;
-      const sample = overlay.sample.set(
-        context.position.x + x,
-        context.position.y,
-        context.position.z + z
+      const sample = writeTacticalPlaneSample(
+        overlay.sample,
+        context.position,
+        x,
+        z,
+        cameraPreset
       );
       const surfaceDistance = sample.distanceTo(context.position);
 

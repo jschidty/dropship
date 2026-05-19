@@ -26,6 +26,7 @@ export type CommandMenuControls = Readonly<{
   unitList: HTMLElement;
   unitGroups: ReadonlyMap<CommandUnitGroupId, CommandUnitGroupControls>;
   onSelectLeader: (unitKey: string) => void;
+  onDeselectUnit: (unitKey: string) => void;
   onEscortLeader: () => void;
 }>;
 
@@ -36,7 +37,13 @@ type CommandUnitGroupControls = Readonly<{
   root: HTMLDetailsElement;
   summary: HTMLElement;
   list: HTMLElement;
-  buttons: Map<string, HTMLButtonElement>;
+  rows: Map<string, CommandUnitRowControls>;
+}>;
+
+type CommandUnitRowControls = Readonly<{
+  root: HTMLElement;
+  selectButton: HTMLButtonElement;
+  removeButton: HTMLButtonElement;
 }>;
 
 type CommandUnitGroup = Readonly<{
@@ -50,11 +57,6 @@ type CommandUnitGroupDefinition = Readonly<{
   shipClassId: ShipClassId;
   sortIndex: number;
 }>;
-
-type TacticalOverlayTarget = {
-  enabled: boolean;
-  root: { visible: boolean };
-};
 
 const COMMAND_UNIT_GROUPS: readonly CommandUnitGroupDefinition[] = [
   {
@@ -257,6 +259,7 @@ export function createCommandMenu(
   container: HTMLElement,
   options: Readonly<{
     onSelectLeader: (unitKey: string) => void;
+    onDeselectUnit: (unitKey: string) => void;
     onEscortLeader: () => void;
   }>
 ): CommandMenuControls {
@@ -325,6 +328,7 @@ export function createCommandMenu(
     unitList,
     unitGroups,
     onSelectLeader: options.onSelectLeader,
+    onDeselectUnit: options.onDeselectUnit,
     onEscortLeader: options.onEscortLeader,
   };
 }
@@ -368,7 +372,8 @@ export function updateCommandMenu(
       groupControls,
       group.units,
       leaderKey,
-      controls.onSelectLeader
+      controls.onSelectLeader,
+      controls.onDeselectUnit
     );
     controls.unitList.appendChild(groupControls.root);
   }
@@ -380,7 +385,13 @@ export function updateCommandMenu(
 
     groupControls.root.hidden = true;
     groupControls.summary.textContent = `${groupControls.definition.label} [0]`;
-    syncUnitButtons(groupControls, [], leaderKey, controls.onSelectLeader);
+    syncUnitButtons(
+      groupControls,
+      [],
+      leaderKey,
+      controls.onSelectLeader,
+      controls.onDeselectUnit
+    );
 
     if (groupControls.root.parentElement === controls.unitList) {
       groupControls.root.remove();
@@ -425,7 +436,7 @@ function createCommandUnitGroupControls(
     root,
     summary,
     list,
-    buttons: new Map(),
+    rows: new Map(),
   };
 }
 
@@ -433,7 +444,13 @@ function clearUnitGroups(controls: CommandMenuControls): void {
   for (const groupControls of controls.unitGroups.values()) {
     groupControls.root.hidden = true;
     groupControls.summary.textContent = `${groupControls.definition.label} [0]`;
-    syncUnitButtons(groupControls, [], null, controls.onSelectLeader);
+    syncUnitButtons(
+      groupControls,
+      [],
+      null,
+      controls.onSelectLeader,
+      controls.onDeselectUnit
+    );
     groupControls.root.remove();
   }
 }
@@ -442,46 +459,79 @@ function syncUnitButtons(
   groupControls: CommandUnitGroupControls,
   units: readonly UnitViewModel[],
   leaderKey: string | null,
-  onSelectLeader: (unitKey: string) => void
+  onSelectLeader: (unitKey: string) => void,
+  onDeselectUnit: (unitKey: string) => void
 ): void {
   const visibleUnitKeys = new Set<string>();
 
   for (const unit of units) {
-    let button = groupControls.buttons.get(unit.key);
+    let row = groupControls.rows.get(unit.key);
 
-    if (!button) {
-      button = document.createElement("button");
-      button.type = "button";
-      button.className = "command-menu-unit";
-      button.addEventListener("click", (event) => {
+    if (!row) {
+      const root = document.createElement("div");
+      const selectButton = document.createElement("button");
+      const removeButton = document.createElement("button");
+
+      root.className = "command-menu-unit";
+      selectButton.type = "button";
+      selectButton.className = "command-menu-unit-select";
+      removeButton.type = "button";
+      removeButton.className = "command-menu-unit-remove";
+      removeButton.setAttribute("aria-label", "Deselect unit");
+      removeButton.textContent = "x";
+      selectButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
 
-        const unitKey = button?.dataset.unitKey;
+        const unitKey = selectButton.dataset.unitKey;
 
         if (unitKey) {
           onSelectLeader(unitKey);
         }
 
-        button.blur();
+        selectButton.blur();
       });
-      groupControls.buttons.set(unit.key, button);
+      removeButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const unitKey = removeButton.dataset.unitKey;
+
+        if (unitKey) {
+          onDeselectUnit(unitKey);
+        }
+
+        removeButton.blur();
+      });
+      root.append(selectButton, removeButton);
+      row = {
+        root,
+        selectButton,
+        removeButton,
+      };
+      groupControls.rows.set(unit.key, row);
     }
 
     visibleUnitKeys.add(unit.key);
-    button.dataset.unitKey = unit.key;
-    button.textContent = `${unit.label} #${unit.handle.id}`;
-    button.setAttribute("aria-pressed", String(unit.key === leaderKey));
-    groupControls.list.appendChild(button);
+    row.root.dataset.unitKey = unit.key;
+    row.root.setAttribute("aria-selected", String(unit.key === leaderKey));
+    row.selectButton.dataset.unitKey = unit.key;
+    row.selectButton.textContent = `${unit.label} #${unit.handle.id}`;
+    row.selectButton.setAttribute(
+      "aria-pressed",
+      String(unit.key === leaderKey)
+    );
+    row.removeButton.dataset.unitKey = unit.key;
+    groupControls.list.appendChild(row.root);
   }
 
-  for (const [unitKey, button] of groupControls.buttons) {
+  for (const [unitKey, row] of groupControls.rows) {
     if (visibleUnitKeys.has(unitKey)) {
       continue;
     }
 
-    button.remove();
-    groupControls.buttons.delete(unitKey);
+    row.root.remove();
+    groupControls.rows.delete(unitKey);
   }
 }
 
@@ -508,12 +558,9 @@ function navigateToRenderMode(renderMode: RenderQualityMode): void {
 }
 
 export function setTacticalOverlayEnabled(
-  overlay: TacticalOverlayTarget,
   controls: TacticalOverlayControls,
   enabled: boolean
 ): void {
-  overlay.enabled = enabled;
-  overlay.root.visible = enabled;
   controls.input.checked = enabled;
 }
 

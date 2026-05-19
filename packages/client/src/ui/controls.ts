@@ -283,6 +283,7 @@ export function createCommandMenu(
   const unitGroups = new Map<CommandUnitGroupId, CommandUnitGroupControls>();
 
   root.className = "command-menu";
+  root.hidden = true;
   root.setAttribute("aria-label", "Command menu");
   root.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
@@ -323,7 +324,7 @@ export function createCommandMenu(
   commandsPanel.append(commandsSummary, commandsBody);
 
   emptyPanel.className = "command-menu-panel command-menu-empty";
-  emptyPanel.textContent = "No units selected";
+  emptyPanel.hidden = true;
 
   unitList.className = "command-menu-unit-list";
   unitList.hidden = true;
@@ -373,12 +374,14 @@ export function updateCommandMenu(
   );
 
   if (selectedUnits.length === 0) {
-    controls.emptyPanel.hidden = false;
+    controls.root.hidden = true;
+    controls.emptyPanel.hidden = true;
     controls.unitList.hidden = true;
     clearUnitGroups(controls);
     return;
   }
 
+  controls.root.hidden = false;
   controls.emptyPanel.hidden = true;
   controls.unitList.hidden = false;
 

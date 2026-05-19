@@ -7,6 +7,7 @@ import {
   createEmptyCommandBatch,
   createCaptureDemoConfig,
   createMinimalSkirmishConfig,
+  sameHandle,
   type CatchupMessage,
   type CommandBatch,
   type MatchConfig,
@@ -37,6 +38,7 @@ testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
+testEscortOrderCommand();
 testCaptureDemoConfig();
 testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
@@ -306,6 +308,44 @@ function testMoveOrderInfluencesSteering(): void {
   assert.ok(
     distance(unit.position, target) < initialDistance,
     "Expected move command intent to pull the selected unit toward its target"
+  );
+}
+
+function testEscortOrderCommand(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const playerUnits = world.units.filter((unit) => unit.owner === 1);
+  const leader = playerUnits[0];
+  const escort = playerUnits[1];
+
+  assert.ok(leader);
+  assert.ok(escort);
+
+  runTick(world, {
+    tick: 0,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 42,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [escort.handle],
+          order: {
+            type: "escort",
+            target: leader.handle,
+          },
+          queueMode: "replace",
+        },
+      },
+    ],
+  });
+
+  assert.equal(escort.moveOrder?.type, "escort");
+  assert.ok(
+    escort.moveOrder?.type === "escort" &&
+      sameHandle(escort.moveOrder.target, leader.handle)
   );
 }
 

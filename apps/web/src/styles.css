@@ -156,3 +156,88 @@ canvas {
 .selection-box[hidden] {
   display: none;
 }
+
+.command-menu {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  z-index: 4;
+  width: min(240px, calc(100vw - 28px));
+  transform: translateY(-50%);
+  border: 1px solid rgb(131 247 255 / 24%);
+  border-radius: 6px;
+  background: rgb(5 8 18 / 58%);
+  color: rgb(230 251 255 / 86%);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.command-menu-content {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.command-menu-title,
+.command-menu-subtitle {
+  color: rgb(255 244 188 / 90%);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.command-menu-empty {
+  color: rgb(230 251 255 / 58%);
+}
+
+.command-menu-group {
+  border-top: 1px solid rgb(131 247 255 / 14%);
+  padding-top: 6px;
+}
+
+.command-menu-group summary {
+  cursor: pointer;
+  color: rgb(230 251 255 / 78%);
+  font-weight: 700;
+  list-style-position: outside;
+}
+
+.command-menu-list,
+.command-menu-commands {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.command-menu-unit,
+.command-menu-command {
+  min-height: 26px;
+  border: 1px solid rgb(131 247 255 / 18%);
+  border-radius: 5px;
+  background: rgb(8 14 26 / 62%);
+  color: rgb(238 246 255 / 82%);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-menu-unit {
+  padding: 0 8px;
+}
+
+.command-menu-command {
+  padding: 0 9px;
+}
+
+.command-menu-unit:hover,
+.command-menu-unit[aria-pressed="true"],
+.command-menu-command:hover:not(:disabled) {
+  border-color: rgb(131 247 255 / 62%);
+  background: rgb(15 29 36 / 78%);
+  color: #dffcff;
+}
+
+.command-menu-command:disabled {
+  cursor: default;
+  opacity: 0.44;
+}

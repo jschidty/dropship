@@ -4,6 +4,7 @@ import gasGiantNoiseTextureUrl from "../../../../content/images/red-gas-giant/no
 import {
   DEFAULT_CAPTURE_DEMO_RULES,
   PHASE_ONE_SIM_HZ,
+  SHIP_CLASS_IDS,
   type MatchConfig,
   type PlanetClass,
   type PlayerId,
@@ -46,13 +47,16 @@ import {
   createSelectionBox,
   createStatsLayer,
   createTacticalOverlayControls,
+  createCommandMenu,
   createTopLeftControls,
   hideSelectionBox,
   setTacticalOverlayEnabled,
+  updateCommandMenu,
   updateCameraPresetControls,
   updateSelectionBox,
   updateStatsLayer,
   type CameraPresetControls,
+  type CommandMenuControls,
   type TacticalOverlayControls,
 } from "../ui/controls";
 import { createMinimalLocalGame } from "../runtime/localGame";
@@ -72,13 +76,13 @@ type UnitBatchRenderer = {
   selectionMaterial: THREE.MeshBasicMaterial;
   selectionMesh: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null;
   selectionCapacity: number;
-  symbolMaterials: Map<PlayerId, THREE.MeshBasicMaterial>;
+  symbolMaterials: Map<string, THREE.MeshBasicMaterial>;
   symbolMeshes: Map<
-    PlayerId,
+    string,
     THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   >;
-  symbolCapacities: Map<PlayerId, number>;
-  symbolCounts: Map<PlayerId, number>;
+  symbolCapacities: Map<string, number>;
+  symbolCounts: Map<string, number>;
   matrix: THREE.Matrix4;
   billboardQuaternion: THREE.Quaternion;
   iconQuaternion: THREE.Quaternion;
@@ -357,6 +361,7 @@ export function mountMinimalGame(
   worldGroup.add(gravityOverlay.root);
   const selectedUnitKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
+  let commandMenuLeaderKey: string | null = null;
   let tacticalOverlayEnabled = false;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
@@ -377,6 +382,14 @@ export function mountMinimalGame(
   );
   createRandomSeedControl(topLeftControls);
   createRenderModeControl(topLeftControls, renderQuality.mode);
+  const commandMenu = createCommandMenu(container, {
+    onSelectLeader(unitKey) {
+      commandMenuLeaderKey = unitKey;
+    },
+    onEscortLeader() {
+      issueEscortLeaderOrder(runtime, selectedUnitKeys, commandMenuLeaderKey);
+    },
+  });
   const renderResolution = new THREE.Vector2();
   const scratch = createRenderScratch();
   const cameraFocusTween = createCameraFocusTween();
@@ -430,6 +443,7 @@ export function mountMinimalGame(
     if (key === "d") {
       selectedUnitKeys.clear();
       selectedPlanetKey = null;
+      commandMenuLeaderKey = null;
       return;
     }
 
@@ -553,6 +567,10 @@ export function mountMinimalGame(
         event.clientX,
         event.clientY,
         scratch
+      );
+      commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+        commandMenuLeaderKey,
+        selectedUnitKeys
       );
       return;
     }
@@ -703,6 +721,10 @@ export function mountMinimalGame(
     renderFrameIndex += 1;
 
     pruneSelectedUnitKeys(selectedUnitKeys, units);
+    commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+      commandMenuLeaderKey,
+      selectedUnitKeys
+    );
 
     updatePlanetProxies(
       worldGroup,
@@ -789,6 +811,11 @@ export function mountMinimalGame(
       container.dataset.simHz = observedSimHz.toFixed(1);
       container.dataset.simInterpolationAlpha = interpolationAlpha.toFixed(3);
       updateCameraPresetControls(cameraPresetControls, cameraControls.preset);
+      updateCommandMenu(
+        commandMenu,
+        units.filter((unit) => selectedUnitKeys.has(unit.key)),
+        commandMenuLeaderKey
+      );
       lastHudUpdateAt = now;
     }
 
@@ -1152,6 +1179,43 @@ function issuePlanetOrderFromSelection(
   return true;
 }
 
+function issueEscortLeaderOrder(
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  leaderKey: string | null
+): boolean {
+  if (!leaderKey || selectedUnitKeys.size < 2) {
+    return false;
+  }
+
+  const selectedUnits = runtime
+    .readUnits()
+    .filter(
+      (unit) =>
+        unit.owner === runtime.playerId && selectedUnitKeys.has(unit.key)
+    );
+  const leader = selectedUnits.find((unit) => unit.key === leaderKey);
+
+  if (!leader) {
+    return false;
+  }
+
+  const escortUnits = selectedUnits.filter((unit) => unit.key !== leader.key);
+
+  if (escortUnits.length === 0) {
+    return false;
+  }
+
+  runtime.enqueueUnitOrder(
+    escortUnits.map((unit) => unit.handle),
+    {
+      type: "escort",
+      target: leader.handle,
+    }
+  );
+  return true;
+}
+
 function formatSelectedPlanetStatus(
   runtime: LocalGameRuntime,
   planet: PlanetViewModel | null
@@ -1341,6 +1405,13 @@ function pruneSelectedUnitKeys(
   }
 }
 
+function pruneCommandMenuLeaderKey(
+  leaderKey: string | null,
+  selectedUnitKeys: ReadonlySet<string>
+): string | null {
+  return leaderKey && selectedUnitKeys.has(leaderKey) ? leaderKey : null;
+}
+
 function updatePlanetProxies(
   worldGroup: THREE.Group,
   proxies: Map<string, PlanetProxy>,
@@ -1512,7 +1583,9 @@ function updateUnitBatches(
       batches,
       position,
       UNIT_SYMBOL_SCALE,
-      yawFromQuaternion(unit.rotation)
+      unit.shipClassId === SHIP_CLASS_IDS.fighter
+        ? yawFromQuaternion(unit.rotation)
+        : 0
     );
     symbolMesh.setMatrixAt(symbolIndex, batches.matrix);
     batches.symbolCounts.set(key, symbolIndex + 1);
@@ -1542,7 +1615,7 @@ function updateUnitBatches(
 
 function ensureSymbolMeshCapacity(
   batches: UnitBatchRenderer,
-  key: PlayerId,
+  key: string,
   unit: UnitViewModel,
   requiredCount: number
 ): void {
@@ -1608,14 +1681,14 @@ function ensureSelectionMeshCapacity(
 
 function getUnitSymbolMaterial(
   batches: UnitBatchRenderer,
-  key: PlayerId,
+  key: string,
   unit: UnitViewModel
 ): THREE.MeshBasicMaterial {
   let material = batches.symbolMaterials.get(key);
 
   if (!material) {
     material = new THREE.MeshBasicMaterial({
-      map: createUnitSymbolTexture(unit.color, unit.owner),
+      map: createUnitSymbolTexture(unit.color, unit.owner, unit.shipClassId),
       transparent: true,
       depthWrite: false,
       depthTest: false,
@@ -1641,8 +1714,8 @@ function writeUnitInstanceMatrix(
   batches.matrix.compose(position, batches.iconQuaternion, batches.scale);
 }
 
-function getUnitSymbolBatchKey(unit: UnitViewModel): PlayerId {
-  return unit.owner;
+function getUnitSymbolBatchKey(unit: UnitViewModel): string {
+  return `${unit.owner}:${unit.shipClassId}`;
 }
 
 function nextInstanceCapacity(requiredCount: number): number {

@@ -1,5 +1,6 @@
 import { CAMERA_PRESETS, type CameraPreset } from "../camera/config";
-import type { LocalGameRuntime, RenderQualityMode } from "../types";
+import { SHIP_CLASS_IDS } from "@drop-ship/protocol";
+import type { LocalGameRuntime, RenderQualityMode, UnitViewModel } from "../types";
 
 export type CameraPresetControls = Readonly<{
   root: HTMLElement;
@@ -11,7 +12,12 @@ export type TacticalOverlayControls = Readonly<{
   input: HTMLInputElement;
 }>;
 
-
+export type CommandMenuControls = Readonly<{
+  root: HTMLElement;
+  content: HTMLElement;
+  onSelectLeader: (unitKey: string) => void;
+  onEscortLeader: () => void;
+}>;
 
 type TacticalOverlayTarget = {
   enabled: boolean;
@@ -158,6 +164,136 @@ export function createRenderModeControl(
   });
   container.appendChild(button);
   return button;
+}
+
+export function createCommandMenu(
+  container: HTMLElement,
+  options: Readonly<{
+    onSelectLeader: (unitKey: string) => void;
+    onEscortLeader: () => void;
+  }>
+): CommandMenuControls {
+  const root = document.createElement("aside");
+  const content = document.createElement("div");
+
+  root.className = "command-menu";
+  root.setAttribute("aria-label", "Command menu");
+  root.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  root.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  content.className = "command-menu-content";
+  root.appendChild(content);
+  container.appendChild(root);
+
+  return {
+    root,
+    content,
+    onSelectLeader: options.onSelectLeader,
+    onEscortLeader: options.onEscortLeader,
+  };
+}
+
+export function updateCommandMenu(
+  controls: CommandMenuControls,
+  selectedUnits: readonly UnitViewModel[],
+  leaderKey: string | null
+): void {
+  controls.content.replaceChildren();
+
+  const title = document.createElement("div");
+  title.className = "command-menu-title";
+  title.textContent = "Command";
+  controls.content.appendChild(title);
+
+  if (selectedUnits.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "command-menu-empty";
+    empty.textContent = "No units selected";
+    controls.content.appendChild(empty);
+    return;
+  }
+
+  for (const group of createUnitGroups(selectedUnits)) {
+    const section = document.createElement("details");
+    const summary = document.createElement("summary");
+    const list = document.createElement("div");
+
+    section.className = "command-menu-group";
+    section.open = group.units.length > 0;
+    summary.textContent = `${group.label} ${group.units.length}`;
+    list.className = "command-menu-list";
+    section.append(summary, list);
+
+    for (const unit of group.units) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "command-menu-unit";
+      button.textContent = `${unit.label} #${unit.handle.id}`;
+      button.setAttribute("aria-pressed", String(unit.key === leaderKey));
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        controls.onSelectLeader(unit.key);
+      });
+      list.appendChild(button);
+    }
+
+    controls.content.appendChild(section);
+  }
+
+  const commands = document.createElement("div");
+  const commandTitle = document.createElement("div");
+  const escort = document.createElement("button");
+  const selectedLeader = selectedUnits.find((unit) => unit.key === leaderKey);
+
+  commands.className = "command-menu-commands";
+  commandTitle.className = "command-menu-subtitle";
+  commandTitle.textContent = "Commands";
+  escort.type = "button";
+  escort.className = "command-menu-command";
+  escort.textContent = selectedLeader
+    ? `Escort ${selectedLeader.label} #${selectedLeader.handle.id}`
+    : "Escort leader";
+  escort.disabled = !selectedLeader || selectedUnits.length < 2;
+  escort.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    controls.onEscortLeader();
+  });
+  commands.append(commandTitle, escort);
+  controls.content.appendChild(commands);
+}
+
+function createUnitGroups(
+  selectedUnits: readonly UnitViewModel[]
+): readonly Readonly<{
+  label: string;
+  units: readonly UnitViewModel[];
+}>[] {
+  return [
+    {
+      label: "Scouts",
+      units: selectedUnits.filter(
+        (unit) => unit.shipClassId === SHIP_CLASS_IDS.fighter
+      ),
+    },
+    {
+      label: "Drop ships",
+      units: selectedUnits.filter(
+        (unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip
+      ),
+    },
+    {
+      label: "Battleships",
+      units: selectedUnits.filter(
+        (unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship
+      ),
+    },
+  ];
 }
 
 function navigateToRandomSeed(): void {

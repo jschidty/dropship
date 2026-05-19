@@ -106,7 +106,7 @@ export function createMinimalSkirmishConfig(
       : options.matchId;
   const players: readonly PlayerConfig[] = [
     { id: 1, name: "Player 1", color: "#74d9ff" },
-    { id: 2, name: "Player 2", color: "#ffb45f" },
+    { id: 2, name: "Player 2", color: "#ff4fd8" },
   ];
   const generated = generatePlanetarySystem(seed);
   const initialUnits = createInitialUnits(

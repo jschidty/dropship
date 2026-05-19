@@ -289,6 +289,7 @@ canvas {
 
 .command-menu-unit:hover,
 .command-menu-unit[aria-selected="true"],
+.command-menu-command[aria-pressed="true"],
 .command-menu-command:hover:not(:disabled) {
   background: rgb(252 61 33 / 16%);
   color: rgb(255 106 72 / 100%);

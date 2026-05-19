@@ -219,7 +219,19 @@ export function integrateUnitMotion(world: SimWorld): void {
       z: quantizeSimFloat(unit.position.z + unit.velocity.z * SIM_DT_SECONDS),
     };
 
-    if (lengthSquared(unit.velocity) > EPSILON) {
+    const orbitPlanet =
+      unit.moveOrder?.type === "orbitPlanet"
+        ? findPlanetByHandle(world, unit.moveOrder.planet)
+        : null;
+
+    if (orbitPlanet) {
+      unit.rotation = yawRotation(
+        deterministicAtan2(
+          unit.position.x - orbitPlanet.position.x,
+          unit.position.z - orbitPlanet.position.z
+        )
+      );
+    } else if (lengthSquared(unit.velocity) > EPSILON) {
       unit.rotation = yawRotation(
         deterministicAtan2(unit.velocity.x, unit.velocity.z)
       );
@@ -264,7 +276,11 @@ function computeOrderVelocity(
     );
   }
 
-  if (order.type === "capturePlanet" || order.type === "guardPlanet") {
+  if (
+    order.type === "capturePlanet" ||
+    order.type === "guardPlanet" ||
+    order.type === "orbitPlanet"
+  ) {
     const planet = findPlanetByHandle(world, order.planet);
 
     if (!planet) {
@@ -272,10 +288,22 @@ function computeOrderVelocity(
       return null;
     }
 
-    const targetRadius =
-      order.type === "capturePlanet" ? planet.radius * 2.25 : planet.radius * 3.05;
+    let targetRadius = planet.radius * 3.05;
 
-    return computeOrbitVelocityAroundPlanet(unit, planet, tick, stats, targetRadius);
+    if (order.type === "capturePlanet") {
+      targetRadius = planet.radius * 2.25;
+    } else if (order.type === "orbitPlanet") {
+      targetRadius =
+        planet.radius * (2.62 + unitScalar(unit, 0x85ebca6b) * 0.32);
+    }
+
+    return computeOrbitVelocityAroundPlanet(
+      unit,
+      planet,
+      tick,
+      stats,
+      targetRadius
+    );
   }
 
   if (order.type === "escort") {

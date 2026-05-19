@@ -22,13 +22,17 @@ export type CommandMenuControls = Readonly<{
   commandsPanel: HTMLDetailsElement;
   commandsBody: HTMLElement;
   escortButton: HTMLButtonElement;
+  orbitButton: HTMLButtonElement;
   emptyPanel: HTMLElement;
   unitList: HTMLElement;
   unitGroups: ReadonlyMap<CommandUnitGroupId, CommandUnitGroupControls>;
   onSelectLeader: (unitKey: string) => void;
   onDeselectUnit: (unitKey: string) => void;
   onEscortLeader: () => void;
+  onOrbitPlanet: () => void;
 }>;
+
+export type PendingCommandMenuCommand = "orbitPlanet" | null;
 
 type CommandUnitGroupId = "fighter" | "dropShip" | "battleship";
 
@@ -261,6 +265,7 @@ export function createCommandMenu(
     onSelectLeader: (unitKey: string) => void;
     onDeselectUnit: (unitKey: string) => void;
     onEscortLeader: () => void;
+    onOrbitPlanet: () => void;
   }>
 ): CommandMenuControls {
   const root = document.createElement("aside");
@@ -269,6 +274,7 @@ export function createCommandMenu(
   const commandsSummary = document.createElement("summary");
   const commandsBody = document.createElement("div");
   const escortButton = document.createElement("button");
+  const orbitButton = document.createElement("button");
   const emptyPanel = document.createElement("div");
   const unitList = document.createElement("div");
   const unitGroups = new Map<CommandUnitGroupId, CommandUnitGroupControls>();
@@ -300,7 +306,17 @@ export function createCommandMenu(
     options.onEscortLeader();
     escortButton.blur();
   });
-  commandsBody.appendChild(escortButton);
+  orbitButton.type = "button";
+  orbitButton.className = "command-menu-command";
+  orbitButton.textContent = "Orbit planet";
+  orbitButton.disabled = true;
+  orbitButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    options.onOrbitPlanet();
+    orbitButton.blur();
+  });
+  commandsBody.append(escortButton, orbitButton);
   commandsPanel.append(commandsSummary, commandsBody);
 
   emptyPanel.className = "command-menu-panel command-menu-empty";
@@ -324,19 +340,22 @@ export function createCommandMenu(
     commandsPanel,
     commandsBody,
     escortButton,
+    orbitButton,
     emptyPanel,
     unitList,
     unitGroups,
     onSelectLeader: options.onSelectLeader,
     onDeselectUnit: options.onDeselectUnit,
     onEscortLeader: options.onEscortLeader,
+    onOrbitPlanet: options.onOrbitPlanet,
   };
 }
 
 export function updateCommandMenu(
   controls: CommandMenuControls,
   selectedUnits: readonly UnitViewModel[],
-  leaderKey: string | null
+  leaderKey: string | null,
+  pendingCommand: PendingCommandMenuCommand
 ): void {
   const selectedLeader = selectedUnits.find((unit) => unit.key === leaderKey);
 
@@ -344,6 +363,11 @@ export function updateCommandMenu(
     ? `Escort ${selectedLeader.label} #${selectedLeader.handle.id}`
     : "Escort leader";
   controls.escortButton.disabled = !selectedLeader || selectedUnits.length < 2;
+  controls.orbitButton.disabled = selectedUnits.length === 0;
+  controls.orbitButton.setAttribute(
+    "aria-pressed",
+    String(pendingCommand === "orbitPlanet")
+  );
 
   if (selectedUnits.length === 0) {
     controls.emptyPanel.hidden = false;

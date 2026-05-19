@@ -29,6 +29,10 @@ export type UnitOrderIntent =
       planet: EntityHandle;
     }>
   | Readonly<{
+      type: "orbitPlanet";
+      planet: EntityHandle;
+    }>
+  | Readonly<{
       type: "escort";
       target: EntityHandle;
     }>;

@@ -42,6 +42,7 @@ testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
 testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
+testOrbitPlanetOrderFacesAwayFromGravity();
 testCaptureDemoConfig();
 testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
@@ -351,6 +352,60 @@ function testEscortOrderCommand(): void {
   assert.ok(
     escort.moveOrder?.type === "escort" &&
       sameHandle(escort.moveOrder.target, leader.handle)
+  );
+}
+
+function testOrbitPlanetOrderFacesAwayFromGravity(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+  const planet =
+    world.planets.find((entry) => entry.control.capturable) ??
+    world.planets[0];
+
+  assert.ok(unit);
+  assert.ok(planet);
+
+  runBatches(
+    world,
+    [
+      {
+        tick: 0,
+        commands: [
+          {
+            playerId: 1,
+            clientSeq: 43,
+            command: {
+              type: "issueUnitOrder",
+              unitHandles: [unit.handle],
+              order: {
+                type: "orbitPlanet",
+                planet: planet.handle,
+              },
+              queueMode: "replace",
+            },
+          },
+        ],
+      },
+    ],
+    8
+  );
+
+  assert.equal(unit.moveOrder?.type, "orbitPlanet");
+
+  const yaw = Math.atan2(unit.rotation.y, unit.rotation.w) * 2;
+  const outwardX = unit.position.x - planet.position.x;
+  const outwardZ = unit.position.z - planet.position.z;
+  const outwardLength = Math.hypot(outwardX, outwardZ);
+  const outwardDot =
+    (Math.sin(yaw) * outwardX + Math.cos(yaw) * outwardZ) /
+    Math.max(outwardLength, 1);
+
+  assert.ok(
+    outwardDot > 0.99,
+    "Expected orbit command to orient the ship away from planet gravity"
   );
 }
 

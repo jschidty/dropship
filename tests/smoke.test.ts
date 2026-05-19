@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { DEFAULT_CONTENT_REGISTRY } from "../packages/content/src/index";
 import {
+  DEFAULT_CAPTURE_DEMO_RULES,
+  PHASE_ONE_SIM_HZ,
+  SHIP_CLASS_IDS,
   createEmptyCommandBatch,
+  createCaptureDemoConfig,
   createMinimalSkirmishConfig,
   type CatchupMessage,
   type CommandBatch,
@@ -33,6 +37,10 @@ testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
+testCaptureDemoConfig();
+testDropShipCapturesPlanet();
+testDropShipSpawnsFighters();
+testNpcDefenderIssuesAttackOrders();
 testDeterministicReplayHash();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
@@ -231,7 +239,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "21b1bc22");
+  assert.equal(first, "fbd8ad16");
 }
 
 function testDefaultSteeringMovesUnits(): void {
@@ -297,6 +305,105 @@ function testMoveOrderInfluencesSteering(): void {
     distance(unit.position, target) < initialDistance,
     "Expected move command intent to pull the selected unit toward its target"
   );
+}
+
+function testCaptureDemoConfig(): void {
+  const config = createCaptureDemoConfig({ seed: 1337 });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  assert.equal(config.gameMode, "captureDemo");
+  assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip));
+  assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship));
+  assert.ok(world.planets.some((planet) => planet.control.capturable));
+}
+
+function testDropShipCapturesPlanet(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      planetCaptureSeconds: 1,
+      fighterSpawnIntervalTicks: 10_000,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.control.capturable);
+  const dropShip = world.units.find(
+    (entry) => entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(planet);
+  assert.ok(dropShip);
+
+  dropShip.position = {
+    x: planet.position.x + planet.radius * 2.25,
+    y: planet.position.y,
+    z: planet.position.z,
+  };
+  dropShip.prevPosition = dropShip.position;
+  dropShip.velocity = { x: 0, y: 0, z: 0 };
+  dropShip.moveOrder = {
+    type: "capturePlanet",
+    planet: planet.handle,
+  };
+
+  runBatches(world, [], PHASE_ONE_SIM_HZ + 2);
+
+  assert.equal(planet.control.owner, 1);
+}
+
+function testDropShipSpawnsFighters(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      fighterSpawnIntervalTicks: 2,
+      fighterSpawnCapPerDropShip: 2,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const initialFighters = world.units.filter(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
+  ).length;
+
+  runBatches(world, [], 8);
+
+  const spawnedFighters = world.units.filter(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
+  ).length - initialFighters;
+
+  assert.equal(spawnedFighters, 2);
+}
+
+function testNpcDefenderIssuesAttackOrders(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      npcAggroRange: 1_000,
+      fighterSpawnIntervalTicks: 10_000,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  runBatches(world, [], 2);
+
+  const defender = world.units.find((unit) => unit.owner === 2);
+
+  assert.ok(defender);
+  assert.equal(defender.moveOrder?.type, "attackTarget");
 }
 
 function testSnapshotRoundTrip(): void {

@@ -7,6 +7,8 @@ import type { ShipStats } from "@drop-ship/content";
 import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
+  findPlanetByHandle,
+  findUnitByHandle,
   type SimPlanet,
   type SimUnit,
   type SimWorld,
@@ -22,7 +24,12 @@ import {
   deterministicSquare,
   quantizeSimFloat,
 } from "./deterministicMath";
-import { readShipStats, readUnitShipStats } from "./shipStats";
+import {
+  readShipStats,
+  readUnitShipStats,
+  readUnitWeaponProfile,
+  type UnitWeaponProfile,
+} from "./shipStats";
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
 export const PLANET_GRAVITY_MAX_STRENGTH = 14;
@@ -145,12 +152,19 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const spatialIndex = createUnitSpatialIndex(units);
   const nextVelocities: Vec3Data[] = [];
   const shipStats = new Map<number, ShipStats>();
+  const weaponProfiles = new Map<number, UnitWeaponProfile>();
   const gravityVector = createZero();
 
   for (const unit of units) {
     const stats = readUnitShipStats(world, shipStats, unit);
     const desiredVelocity = createZero();
-    const orderVelocity = computeMoveOrderVelocity(unit, stats);
+    const orderVelocity = computeOrderVelocity(
+      unit,
+      world,
+      tick,
+      stats,
+      readUnitWeaponProfile(world, weaponProfiles, unit)
+    );
 
     if (orderVelocity) {
       addScaled(desiredVelocity, orderVelocity, MOVE_ORDER_WEIGHT);
@@ -216,11 +230,61 @@ export function integrateUnitMotion(world: SimWorld): void {
   }
 }
 
-function computeMoveOrderVelocity(
+function computeOrderVelocity(
   unit: SimUnit,
-  stats: ShipStats
+  world: SimWorld,
+  tick: number,
+  stats: ShipStats,
+  weaponProfile: UnitWeaponProfile | null
 ): Vec3Data | null {
-  const target = unit.moveOrder?.type === "moveTo" ? unit.moveOrder.target : null;
+  const order = unit.moveOrder;
+
+  if (!order) {
+    return null;
+  }
+
+  if (order.type === "attackTarget") {
+    const target = findUnitByHandle(world, order.target);
+
+    if (!target || target.health.current <= 0) {
+      unit.moveOrder = null;
+      return null;
+    }
+
+    return computeApproachVelocity(
+      unit,
+      target.position,
+      stats,
+      Math.max((weaponProfile?.range ?? 42) * 0.78, 12)
+    );
+  }
+
+  if (order.type === "capturePlanet" || order.type === "guardPlanet") {
+    const planet = findPlanetByHandle(world, order.planet);
+
+    if (!planet) {
+      unit.moveOrder = null;
+      return null;
+    }
+
+    const targetRadius =
+      order.type === "capturePlanet" ? planet.radius * 2.25 : planet.radius * 3.05;
+
+    return computeOrbitVelocityAroundPlanet(unit, planet, tick, stats, targetRadius);
+  }
+
+  if (order.type === "escort") {
+    const target = findUnitByHandle(world, order.target);
+
+    if (!target || target.health.current <= 0) {
+      unit.moveOrder = null;
+      return null;
+    }
+
+    return computeApproachVelocity(unit, target.position, stats, 16);
+  }
+
+  const target = order.target;
 
   if (!target) {
     return null;
@@ -241,6 +305,27 @@ function computeMoveOrderVelocity(
   return scale(normalize(offset), speed);
 }
 
+function computeApproachVelocity(
+  unit: SimUnit,
+  target: Vec3Data,
+  stats: ShipStats,
+  desiredRange: number
+): Vec3Data | null {
+  const offset = subtract(target, unit.position);
+  const distance = length(offset);
+
+  if (distance <= Math.max(desiredRange, MOVE_ORDER_ARRIVAL_DISTANCE)) {
+    return scale(normalize(offset), stats.cruiseSpeed * 0.12);
+  }
+
+  const remaining = distance - desiredRange;
+  const speed =
+    stats.cruiseSpeed *
+    clamp(remaining / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
+
+  return scale(normalize(offset), speed);
+}
+
 function computeDefaultMotionVelocity(
   unit: SimUnit,
   planets: readonly SimPlanet[],
@@ -253,17 +338,31 @@ function computeDefaultMotionVelocity(
     return scale(forwardFromRotation(unit), stats.cruiseSpeed * 0.55);
   }
 
+  return computeOrbitVelocityAroundPlanet(
+    unit,
+    planet,
+    tick,
+    stats,
+    planet.radius * (2.65 + unitScalar(unit, 0x9e3779b9) * 1.15)
+  );
+}
+
+function computeOrbitVelocityAroundPlanet(
+  unit: SimUnit,
+  planet: SimPlanet,
+  tick: number,
+  stats: ShipStats,
+  targetRadius: number
+): Vec3Data {
   const x = unit.position.x - planet.position.x;
   const z = unit.position.z - planet.position.z;
   const radius = Math.max(deterministicSqrt(x * x + z * z), 1);
   const radialX = x / radius;
   const radialZ = z / radius;
   const orbitSign = unit.owner === 1 ? 1 : -1;
-  const targetRadius =
-    planet.radius * (2.65 + unitScalar(unit, 0x9e3779b9) * 1.15);
   const radialError = radius - targetRadius;
   const radialCorrection =
-    -clamp(radialError / Math.max(planet.radius, 1), -0.8, 0.8) * 0.48;
+    -clamp(radialError / Math.max(planet.radius, 1), -0.95, 0.95) * 0.58;
   const targetY =
     planet.position.y +
     planet.radius * ((unitScalar(unit, 0xc2b2ae35) - 0.5) * 0.28);

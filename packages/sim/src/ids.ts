@@ -39,6 +39,15 @@ export function bindHandle(
   ids.runtimeToHandle.set(runtimeEntityId, handle);
 }
 
+export function unbindHandle(
+  ids: EntityIdAllocator,
+  handle: EntityHandle,
+  runtimeEntityId: RuntimeEntityId
+): void {
+  ids.handleToRuntime.delete(handleKey(handle));
+  ids.runtimeToHandle.delete(runtimeEntityId);
+}
+
 export function resolveHandle(
   ids: EntityIdAllocator,
   handle: EntityHandle

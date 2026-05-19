@@ -19,6 +19,7 @@ import {
   allocateHandle,
   bindHandle,
   createEntityIdAllocator,
+  unbindHandle,
   type EntityIdAllocator,
   type RuntimeEntityId,
 } from "./ids";
@@ -353,6 +354,42 @@ export function getPlanetsInStableOrder(world: SimWorld): readonly SimPlanet[] {
   return world.planets
     .slice()
     .sort((a, b) => compareHandles(a.handle, b.handle));
+}
+
+export function findUnitByHandle(
+  world: SimWorld,
+  handle: EntityHandle | null
+): SimUnit | null {
+  if (!handle) {
+    return null;
+  }
+
+  return world.units.find((unit) => compareHandles(unit.handle, handle) === 0) ?? null;
+}
+
+export function findPlanetByHandle(
+  world: SimWorld,
+  handle: EntityHandle | null
+): SimPlanet | null {
+  if (!handle) {
+    return null;
+  }
+
+  return (
+    world.planets.find((planet) => compareHandles(planet.handle, handle) === 0) ??
+    null
+  );
+}
+
+export function removeUnit(world: SimWorld, unit: SimUnit): void {
+  const index = world.units.indexOf(unit);
+
+  if (index === -1) {
+    return;
+  }
+
+  world.units.splice(index, 1);
+  unbindHandle(world.ids, unit.handle, unit.runtimeEntityId);
 }
 
 export function capturePrevPositions(world: SimWorld): void {

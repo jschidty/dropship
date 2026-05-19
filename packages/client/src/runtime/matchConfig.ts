@@ -1,17 +1,17 @@
-import { createMinimalSkirmishConfig } from "@drop-ship/content";
+import { TEMPLATE_IDS, createCaptureDemoConfig } from "@drop-ship/content";
 import type { MatchConfig, PlayerId } from "@drop-ship/protocol";
 
 export const DEFAULT_LOCAL_PLAYER_ID = 1 satisfies PlayerId;
 
 export function createLocalMatchConfig(seed?: number, stressUnits?: number): MatchConfig {
-  const config = createMinimalSkirmishConfig({ seed });
+  const config = createCaptureDemoConfig({ seed });
   const totalUnits = Math.max(0, Math.floor(stressUnits ?? 0));
 
   if (totalUnits <= config.initialUnits.length) {
     return config;
   }
 
-  const templateId = config.initialUnits[0]?.templateId ?? 1;
+  const templateId = TEMPLATE_IDS.fighterShip;
   const initialUnits = [...config.initialUnits];
 
   for (let index = initialUnits.length; index < totalUnits; index += 1) {

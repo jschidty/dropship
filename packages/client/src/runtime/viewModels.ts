@@ -16,6 +16,7 @@ type MutableUnitViewModel = {
   owner: PlayerId;
   ownerName: string;
   color: string;
+  shipClassId: number;
   position: THREE.Vector3;
   prevPosition: THREE.Vector3;
   rotation: THREE.Quaternion;
@@ -27,6 +28,7 @@ type MutableUnitViewModel = {
 };
 
 type MutablePlanetViewModel = {
+  handle: EntityHandle;
   key: string;
   label: string;
   position: THREE.Vector3;
@@ -37,6 +39,13 @@ type MutablePlanetViewModel = {
   appearance: PlanetAppearanceConfig;
   orbitAxis: THREE.Vector3;
   parentPlanetIndex: number | null;
+  control: {
+    capturable: boolean;
+    owner: PlayerId | 0;
+    capturingPlayer: PlayerId | 0;
+    captureTicks: number;
+    contested: boolean;
+  };
 };
 
 type ViewModelCache = {
@@ -102,6 +111,7 @@ function syncUnitViewModels(
         owner: unit.owner,
         ownerName: player?.name ?? `Player ${unit.owner}`,
         color: player?.color ?? "#ffffff",
+        shipClassId: unit.shipClassId,
         position: new THREE.Vector3(),
         prevPosition: new THREE.Vector3(),
         rotation: new THREE.Quaternion(),
@@ -119,6 +129,7 @@ function syncUnitViewModels(
     view.owner = unit.owner;
     view.ownerName = player?.name ?? `Player ${unit.owner}`;
     view.color = player?.color ?? "#ffffff";
+    view.shipClassId = unit.shipClassId;
     view.position.set(unit.position.x, unit.position.y, unit.position.z);
     view.prevPosition.set(
       unit.prevPosition.x,
@@ -172,6 +183,7 @@ function syncPlanetViewModels(
 
     if (!view || view.key !== key) {
       view = {
+        handle: planet.handle,
         key,
         label: planet.name || template.displayName,
         position: new THREE.Vector3(),
@@ -182,10 +194,18 @@ function syncPlanetViewModels(
         appearance: planet.appearance,
         orbitAxis: new THREE.Vector3(),
         parentPlanetIndex: planet.parentPlanetIndex,
+        control: {
+          capturable: planet.control.capturable,
+          owner: planet.control.owner,
+          capturingPlayer: planet.control.capturingPlayer,
+          captureTicks: planet.control.captureTicks,
+          contested: planet.control.contested,
+        },
       };
       target[index] = view;
     }
 
+    view.handle = planet.handle;
     view.label = planet.name || template.displayName;
     view.position.set(planet.position.x, planet.position.y, planet.position.z);
     view.mass = planet.mass;
@@ -195,6 +215,11 @@ function syncPlanetViewModels(
     view.appearance = planet.appearance;
     view.orbitAxis.set(planet.orbitAxis.x, planet.orbitAxis.y, planet.orbitAxis.z);
     view.parentPlanetIndex = planet.parentPlanetIndex;
+    view.control.capturable = planet.control.capturable;
+    view.control.owner = planet.control.owner;
+    view.control.capturingPlayer = planet.control.capturingPlayer;
+    view.control.captureTicks = planet.control.captureTicks;
+    view.control.contested = planet.control.contested;
   }
 }
 
@@ -228,6 +253,7 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
       owner: unit.owner,
       ownerName: player?.name ?? `Player ${unit.owner}`,
       color: player?.color ?? "#ffffff",
+      shipClassId: unit.shipClassId,
       position: toVector3(unit.position),
       prevPosition: toVector3(unit.prevPosition),
       rotation: toQuaternion(unit.rotation),
@@ -245,6 +271,7 @@ export function readPlanetViewModels(world: SimWorld): readonly PlanetViewModel[
     const template = world.content.getPlanetTemplate(planet.templateId);
 
     return {
+      handle: planet.handle,
       key: handleKey(planet.handle),
       label: planet.name || template.displayName,
       position: toVector3(planet.position),
@@ -255,6 +282,13 @@ export function readPlanetViewModels(world: SimWorld): readonly PlanetViewModel[
       appearance: planet.appearance,
       orbitAxis: toVector3(planet.orbitAxis),
       parentPlanetIndex: planet.parentPlanetIndex,
+      control: {
+        capturable: planet.control.capturable,
+        owner: planet.control.owner,
+        capturingPlayer: planet.control.capturingPlayer,
+        captureTicks: planet.control.captureTicks,
+        contested: planet.control.contested,
+      },
     };
   });
 }

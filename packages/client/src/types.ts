@@ -8,6 +8,8 @@ import type {
   Vec3Data,
 } from "@drop-ship/protocol";
 import type { SimWorld } from "@drop-ship/sim";
+import type { SimEvent } from "@drop-ship/sim";
+import type { UnitOrderIntent } from "@drop-ship/protocol";
 
 export type UnitViewModel = Readonly<{
   handle: EntityHandle;
@@ -16,6 +18,7 @@ export type UnitViewModel = Readonly<{
   owner: PlayerId;
   ownerName: string;
   color: string;
+  shipClassId: number;
   position: THREE.Vector3;
   prevPosition: THREE.Vector3;
   rotation: THREE.Quaternion;
@@ -27,6 +30,7 @@ export type UnitViewModel = Readonly<{
 }>;
 
 export type PlanetViewModel = Readonly<{
+  handle: EntityHandle;
   key: string;
   label: string;
   position: THREE.Vector3;
@@ -37,6 +41,13 @@ export type PlanetViewModel = Readonly<{
   appearance: PlanetAppearanceConfig;
   orbitAxis: THREE.Vector3;
   parentPlanetIndex: number | null;
+  control: Readonly<{
+    capturable: boolean;
+    owner: PlayerId | 0;
+    capturingPlayer: PlayerId | 0;
+    captureTicks: number;
+    contested: boolean;
+  }>;
 }>;
 
 export type LocalGameRuntime = Readonly<{
@@ -48,8 +59,13 @@ export type LocalGameRuntime = Readonly<{
     unitHandles: readonly EntityHandle[],
     target: Vec3Data
   ) => void;
+  enqueueUnitOrder: (
+    unitHandles: readonly EntityHandle[],
+    order: UnitOrderIntent
+  ) => void;
   readUnits: () => readonly UnitViewModel[];
   readPlanets: () => readonly PlanetViewModel[];
+  drainEvents: () => readonly SimEvent[];
   readHash: () => string;
   readSnapshot: () => CompactSimSnapshot;
   readConnectionStatus: () => RuntimeConnectionStatus;

@@ -1,6 +1,6 @@
 import {
   DEFAULT_CONTENT_REGISTRY,
-  createMinimalSkirmishConfig,
+  createCaptureDemoConfig,
 } from "@drop-ship/content";
 import {
   createEmptyCommandBatch,
@@ -32,13 +32,14 @@ export function createNetworkedGame(options: {
   seed?: number;
 }): LocalGameRuntime {
   let world = createWorld({
-    config: createMinimalSkirmishConfig({
+    config: createCaptureDemoConfig({
       matchId: options.matchId,
       seed: options.seed,
     }),
     content: DEFAULT_CONTENT_REGISTRY,
   });
   const queuedBatches = new Map<number, CommandBatch>();
+  const pendingEvents: typeof world.events = [];
   const outbox: string[] = [];
   let socket: WebSocket | null = null;
   let clientSeq = 0;
@@ -70,6 +71,7 @@ export function createNetworkedGame(options: {
 
         queuedBatches.delete(world.tick);
         runTick(world, batch);
+        pendingEvents.push(...world.events);
         processed += 1;
 
         if (world.tick % 30 === 0) {
@@ -121,11 +123,33 @@ export function createNetworkedGame(options: {
         },
       });
     },
+    enqueueUnitOrder(unitHandles, order) {
+      if (unitHandles.length === 0) {
+        return;
+      }
+
+      clientSeq += 1;
+      sendClientMessage({
+        type: "command",
+        playerId: options.playerId,
+        clientSeq,
+        localTick: world.tick,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles,
+          order,
+          queueMode: "replace",
+        },
+      });
+    },
     readUnits() {
       return readCachedUnitViewModels(world, viewModelCache);
     },
     readPlanets() {
       return readCachedPlanetViewModels(world, viewModelCache);
+    },
+    drainEvents() {
+      return pendingEvents.splice(0);
     },
     readHash() {
       return readCachedHash(world, hashCache);
@@ -139,6 +163,7 @@ export function createNetworkedGame(options: {
     dispose() {
       disposed = true;
       queuedBatches.clear();
+      pendingEvents.splice(0);
       outbox.splice(0);
       socket?.close();
       socket = null;

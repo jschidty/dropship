@@ -2,6 +2,8 @@ import * as THREE from "three";
 import gasGiantGrungeTextureUrl from "../../../../content/images/red-gas-giant/grunge.jpg?url";
 import gasGiantNoiseTextureUrl from "../../../../content/images/red-gas-giant/noise.png?url";
 import {
+  DEFAULT_CAPTURE_DEMO_RULES,
+  PHASE_ONE_SIM_HZ,
   type MatchConfig,
   type PlanetClass,
   type PlayerId,
@@ -12,6 +14,7 @@ import {
   PLANET_GRAVITY_MAX_STRENGTH,
   SIM_DT_MS,
   computePlanetGravityVector,
+  type SimEvent,
 } from "@drop-ship/sim";
 import {
   CAMERA_MODES,
@@ -138,6 +141,31 @@ type LightingRig = Readonly<{
   sunLight: THREE.DirectionalLight;
 }>;
 
+type ProjectileParticle = {
+  owner: PlayerId;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  spawnedAt: number;
+  durationMs: number;
+};
+
+type ProjectileParticleRenderer = {
+  root: THREE.Group;
+  geometry: THREE.PlaneGeometry;
+  materials: Map<PlayerId, THREE.MeshBasicMaterial>;
+  meshes: Map<
+    PlayerId,
+    THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  >;
+  capacities: Map<PlayerId, number>;
+  counts: Map<PlayerId, number>;
+  particles: ProjectileParticle[];
+  matrix: THREE.Matrix4;
+  position: THREE.Vector3;
+  scale: THREE.Vector3;
+  billboardQuaternion: THREE.Quaternion;
+};
+
 type RenderScratch = {
   focus: THREE.Vector3;
   worldUp: THREE.Vector3;
@@ -186,6 +214,9 @@ const MAX_SIM_FRAME_DELTA_MS = 250;
 const INITIAL_INSTANCE_CAPACITY = 64;
 const UNIT_SYMBOL_SCALE = 2.4;
 const SELECTION_RING_SCALE = 4;
+const PROJECTILE_PARTICLE_DURATION_MS = 240;
+const PROJECTILE_PARTICLE_SCALE = 1.8;
+const CINEMATIC_PROJECTILE_PARTICLE_SCALE = 2.45;
 const PLANET_SELECTION_MIN_RADIUS_PX = 10;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
@@ -308,6 +339,8 @@ export function mountMinimalGame(
 
   const unitBatches = createUnitBatchRenderer();
   worldGroup.add(unitBatches.root);
+  const projectileParticles = createProjectileParticleRenderer(renderQuality);
+  worldGroup.add(projectileParticles.root);
   const planetProxies = new Map<string, PlanetProxy>();
   const planetGeometry = new THREE.PlaneGeometry(1, 1);
   const planetRingGeometry = createPlanetRingGeometry(renderQuality);
@@ -397,6 +430,20 @@ export function mountMinimalGame(
     if (key === "d") {
       selectedUnitKeys.clear();
       selectedPlanetKey = null;
+      return;
+    }
+
+    if (key === "c" || key === "g") {
+      if (
+        issuePlanetOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          selectedPlanetKey,
+          key === "c" ? "capturePlanet" : "guardPlanet"
+        )
+      ) {
+        event.preventDefault();
+      }
       return;
     }
 
@@ -522,6 +569,12 @@ export function mountMinimalGame(
       if (selectedPlanet) {
         selectedPlanetKey =
           selectedPlanet.key === selectedPlanetKey ? null : selectedPlanet.key;
+        issuePlanetOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          selectedPlanet.key,
+          "capturePlanet"
+        );
         return;
       }
 
@@ -673,6 +726,13 @@ export function mountMinimalGame(
       camera,
       interpolationAlpha
     );
+    addProjectileEvents(projectileParticles, runtime.drainEvents(), now);
+    updateProjectileParticles(
+      projectileParticles,
+      now,
+      camera,
+      renderQuality
+    );
     adjustRenderPixelRatio(now);
     renderer.getDrawingBufferSize(renderResolution);
     updateNebulaSkyDome(
@@ -762,7 +822,7 @@ export function mountMinimalGame(
         renderer.info.render.calls,
         renderer.getPixelRatio(),
         renderQuality.mode,
-        selectedPlanet?.label ?? "none",
+        formatSelectedPlanetStatus(runtime, selectedPlanet),
         selectedUnitKeys.size
       );
       lastPerfDatasetUpdateAt = now;
@@ -822,6 +882,7 @@ export function mountMinimalGame(
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       disposeUnitBatchRenderer(unitBatches);
+      disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
       disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
@@ -1050,6 +1111,83 @@ function issueMoveCommandFromClick(
     toVec3Data(target)
   );
   return true;
+}
+
+function issuePlanetOrderFromSelection(
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  selectedPlanetKey: string | null,
+  orderType: "capturePlanet" | "guardPlanet"
+): boolean {
+  if (!selectedPlanetKey || selectedUnitKeys.size === 0) {
+    return false;
+  }
+
+  const planet = runtime
+    .readPlanets()
+    .find((entry) => entry.key === selectedPlanetKey);
+
+  if (!planet) {
+    return false;
+  }
+
+  const selectedUnits = runtime
+    .readUnits()
+    .filter(
+      (unit) =>
+        unit.owner === runtime.playerId && selectedUnitKeys.has(unit.key)
+    );
+
+  if (selectedUnits.length === 0) {
+    return false;
+  }
+
+  runtime.enqueueUnitOrder(
+    selectedUnits.map((unit) => unit.handle),
+    {
+      type: orderType,
+      planet: planet.handle,
+    }
+  );
+  return true;
+}
+
+function formatSelectedPlanetStatus(
+  runtime: LocalGameRuntime,
+  planet: PlanetViewModel | null
+): string {
+  if (!planet) {
+    return "none";
+  }
+
+  if (!planet.control.capturable) {
+    return `${planet.label} neutral`;
+  }
+
+  const owner =
+    planet.control.owner === 0
+      ? "Neutral"
+      : runtime.world.config.players.find(
+          (player) => player.id === planet.control.owner
+        )?.name ?? `Player ${planet.control.owner}`;
+
+  if (planet.control.contested) {
+    return `${planet.label} ${owner} contested`;
+  }
+
+  if (planet.control.capturingPlayer !== 0) {
+    const rules =
+      runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES;
+    const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
+    const progress = Math.min(
+      100,
+      (planet.control.captureTicks / Math.max(requiredTicks, 1)) * 100
+    );
+
+    return `${planet.label} ${owner} capture ${progress.toFixed(0)}%`;
+  }
+
+  return `${planet.label} ${owner}`;
 }
 
 function getPointerMoveTarget(
@@ -1541,6 +1679,192 @@ function disposeUnitBatchRenderer(batches: UnitBatchRenderer): void {
   batches.symbolMaterials.clear();
   batches.symbolCapacities.clear();
   batches.symbolCounts.clear();
+}
+
+function createProjectileParticleRenderer(
+  renderQuality: RenderQualityConfig
+): ProjectileParticleRenderer {
+  const root = new THREE.Group();
+  root.name = "projectile-particles";
+
+  return {
+    root,
+    geometry: new THREE.PlaneGeometry(1, 1),
+    materials: new Map([
+      [1, createProjectileParticleMaterial(0x74d9ff, renderQuality)],
+      [2, createProjectileParticleMaterial(0xff4fd8, renderQuality)],
+    ]),
+    meshes: new Map(),
+    capacities: new Map(),
+    counts: new Map(),
+    particles: [],
+    matrix: new THREE.Matrix4(),
+    position: new THREE.Vector3(),
+    scale: new THREE.Vector3(),
+    billboardQuaternion: new THREE.Quaternion(),
+  };
+}
+
+function createProjectileParticleMaterial(
+  color: number,
+  renderQuality: RenderQualityConfig
+): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: renderQuality.mode === "cinematic" ? 0.92 : 0.78,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: true,
+    side: THREE.DoubleSide,
+  });
+}
+
+function addProjectileEvents(
+  renderer: ProjectileParticleRenderer,
+  events: readonly SimEvent[],
+  now: number
+): void {
+  for (const event of events) {
+    if (event.type !== "weaponFired") {
+      continue;
+    }
+
+    renderer.particles.push({
+      owner: event.owner,
+      start: new THREE.Vector3(event.start.x, event.start.y, event.start.z),
+      end: new THREE.Vector3(event.end.x, event.end.y, event.end.z),
+      spawnedAt: now,
+      durationMs: PROJECTILE_PARTICLE_DURATION_MS,
+    });
+  }
+}
+
+function updateProjectileParticles(
+  renderer: ProjectileParticleRenderer,
+  now: number,
+  camera: THREE.Camera,
+  renderQuality: RenderQualityConfig
+): void {
+  renderer.particles = renderer.particles.filter(
+    (particle) => now - particle.spawnedAt <= particle.durationMs
+  );
+
+  for (const key of renderer.counts.keys()) {
+    renderer.counts.set(key, 0);
+  }
+
+  for (const particle of renderer.particles) {
+    renderer.counts.set(
+      particle.owner,
+      (renderer.counts.get(particle.owner) ?? 0) + 1
+    );
+  }
+
+  for (const [owner, count] of renderer.counts) {
+    if (count > 0) {
+      ensureProjectileParticleCapacity(renderer, owner, count);
+    }
+  }
+
+  renderer.billboardQuaternion.copy(camera.quaternion);
+
+  for (const key of renderer.counts.keys()) {
+    renderer.counts.set(key, 0);
+  }
+
+  for (const particle of renderer.particles) {
+    const mesh = renderer.meshes.get(particle.owner);
+
+    if (!mesh) {
+      continue;
+    }
+
+    const age = clamp(
+      (now - particle.spawnedAt) / Math.max(particle.durationMs, 1),
+      0,
+      1
+    );
+    const index = renderer.counts.get(particle.owner) ?? 0;
+    const scale =
+      renderQuality.mode === "cinematic"
+        ? CINEMATIC_PROJECTILE_PARTICLE_SCALE
+        : PROJECTILE_PARTICLE_SCALE;
+
+    renderer.position.lerpVectors(particle.start, particle.end, age);
+    renderer.scale.setScalar(scale * (1 - age * 0.35));
+    renderer.matrix.compose(
+      renderer.position,
+      renderer.billboardQuaternion,
+      renderer.scale
+    );
+    mesh.setMatrixAt(index, renderer.matrix);
+    renderer.counts.set(particle.owner, index + 1);
+  }
+
+  for (const [owner, mesh] of renderer.meshes) {
+    mesh.count = renderer.counts.get(owner) ?? 0;
+    mesh.instanceMatrix.needsUpdate = mesh.count > 0;
+  }
+}
+
+function ensureProjectileParticleCapacity(
+  renderer: ProjectileParticleRenderer,
+  owner: PlayerId,
+  requiredCount: number
+): void {
+  const capacity = renderer.capacities.get(owner) ?? 0;
+
+  if (capacity >= requiredCount) {
+    return;
+  }
+
+  const previousMesh = renderer.meshes.get(owner);
+
+  if (previousMesh) {
+    renderer.root.remove(previousMesh);
+    previousMesh.dispose();
+  }
+
+  const material =
+    renderer.materials.get(owner) ??
+    createProjectileParticleMaterial(owner === 1 ? 0x74d9ff : 0xff4fd8, {
+      ...RENDER_QUALITY_CONFIGS.interactive,
+    });
+  const nextCapacity = nextInstanceCapacity(requiredCount);
+  const mesh = new THREE.InstancedMesh(
+    renderer.geometry,
+    material,
+    nextCapacity
+  );
+  mesh.name = `Player ${owner} projectile particles`;
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 12;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  renderer.meshes.set(owner, mesh);
+  renderer.capacities.set(owner, nextCapacity);
+  renderer.root.add(mesh);
+}
+
+function disposeProjectileParticleRenderer(
+  renderer: ProjectileParticleRenderer
+): void {
+  for (const mesh of renderer.meshes.values()) {
+    renderer.root.remove(mesh);
+    mesh.dispose();
+  }
+
+  for (const material of renderer.materials.values()) {
+    material.dispose();
+  }
+
+  renderer.geometry.dispose();
+  renderer.meshes.clear();
+  renderer.materials.clear();
+  renderer.capacities.clear();
+  renderer.counts.clear();
+  renderer.particles.splice(0);
 }
 
 function disposePlanetProxies(

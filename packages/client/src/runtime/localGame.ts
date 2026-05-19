@@ -25,6 +25,7 @@ export function createMinimalLocalGame(
     content: DEFAULT_CONTENT_REGISTRY,
   });
   const pendingCommands: ScheduledCommand[] = [];
+  const pendingEvents: typeof world.events = [];
   const viewModelCache = createViewModelCache();
   const hashCache = createHashCache();
   let clientSeq = 0;
@@ -43,6 +44,7 @@ export function createMinimalLocalGame(
             }
           : createEmptyCommandBatch(world.tick)
       );
+      pendingEvents.push(...world.events);
     },
     enqueueRandomTurn() {
       clientSeq += 1;
@@ -70,11 +72,31 @@ export function createMinimalLocalGame(
         },
       });
     },
+    enqueueUnitOrder(unitHandles, order) {
+      if (unitHandles.length === 0) {
+        return;
+      }
+
+      clientSeq += 1;
+      pendingCommands.push({
+        playerId,
+        clientSeq,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles,
+          order,
+          queueMode: "replace",
+        },
+      });
+    },
     readUnits() {
       return readCachedUnitViewModels(world, viewModelCache);
     },
     readPlanets() {
       return readCachedPlanetViewModels(world, viewModelCache);
+    },
+    drainEvents() {
+      return pendingEvents.splice(0);
     },
     readHash() {
       return readCachedHash(world, hashCache);
@@ -91,6 +113,7 @@ export function createMinimalLocalGame(
     },
     dispose() {
       pendingCommands.splice(0);
+      pendingEvents.splice(0);
     },
   };
 }

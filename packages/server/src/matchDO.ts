@@ -1,7 +1,7 @@
 import {
   DEFAULT_COMMAND_LEAD_TICKS,
   PHASE_ONE_PLAYER_IDS,
-  createMinimalSkirmishConfig,
+  createCaptureDemoConfig,
   type ClientMessage,
   type CatchupMessage,
   type CommandAckMessage,
@@ -112,7 +112,7 @@ export function createMatchCoordinator(
 export class MatchDurableObject {
   private coordinator: MatchCoordinator | null = null;
   private readonly sessions = new Map<string, MatchSession>();
-  private config: ReturnType<typeof createMinimalSkirmishConfig> | null = null;
+  private config: ReturnType<typeof createCaptureDemoConfig> | null = null;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -216,13 +216,13 @@ export class MatchDurableObject {
     });
   }
 
-  private getMatchConfig(url: URL): ReturnType<typeof createMinimalSkirmishConfig> {
+  private getMatchConfig(url: URL): ReturnType<typeof createCaptureDemoConfig> {
     if (this.config) {
       return this.config;
     }
 
     const matchId = parseMatchIdFromPath(url.pathname) ?? "demo";
-    this.config = createMinimalSkirmishConfig({
+    this.config = createCaptureDemoConfig({
       matchId,
       seed: parseSeed(url.searchParams.get("seed")) ?? parseSeed(matchId),
     });

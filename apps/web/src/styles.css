@@ -81,16 +81,22 @@ canvas {
   color: #fff4bc;
 }
 
-.gravity-toggle {
+.top-left-controls {
   position: absolute;
   top: 14px;
   left: 14px;
   z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tactical-toggle,
+.random-seed-button {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
   height: 28px;
-  padding: 0 10px 0 8px;
   border: 1px solid rgb(131 247 255 / 24%);
   border-radius: 6px;
   background: rgb(5 8 18 / 52%);
@@ -102,14 +108,25 @@ canvas {
   user-select: none;
 }
 
-.gravity-toggle:hover,
-.gravity-toggle:has(input:checked) {
+.tactical-toggle {
+  gap: 7px;
+  padding: 0 10px 0 8px;
+}
+
+.random-seed-button {
+  min-width: 92px;
+  padding: 0 10px;
+}
+
+.tactical-toggle:hover,
+.tactical-toggle:has(input:checked),
+.random-seed-button:hover {
   border-color: rgb(131 247 255 / 62%);
   background: rgb(15 29 36 / 76%);
   color: #dffcff;
 }
 
-.gravity-toggle input {
+.tactical-toggle input {
   width: 13px;
   height: 13px;
   margin: 0;

@@ -8,6 +8,7 @@ import {
   type CommandBatch,
   type EntityHandle,
   type MatchConfig,
+  type PlanetAppearanceConfig,
   type PlanetOrbitConfig,
   type PlayerId,
   type QuaternionData,
@@ -68,6 +69,7 @@ export type SimPlanet = {
   radius: number;
   color: string;
   hasAtmosphere: boolean;
+  appearance: PlanetAppearanceConfig;
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;
@@ -132,6 +134,7 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
         radius: initialPlanet.radius,
         color: initialPlanet.color,
         hasAtmosphere: initialPlanet.hasAtmosphere,
+        appearance: initialPlanet.appearance,
         orbitAxis: initialPlanet.orbitAxis,
         orbit: initialPlanet.orbit,
         parentPlanetIndex: initialPlanet.parentPlanetIndex,
@@ -227,6 +230,7 @@ export function spawnPlanet(
     radius: number;
     color: string;
     hasAtmosphere: boolean;
+    appearance?: PlanetAppearanceConfig;
     orbitAxis: Vec3Data;
     orbit: PlanetOrbitConfig;
     parentPlanetIndex: number | null;
@@ -247,6 +251,9 @@ export function spawnPlanet(
     radius: options.radius,
     color: options.color,
     hasAtmosphere: options.hasAtmosphere,
+    appearance:
+      options.appearance ??
+      createFallbackPlanetAppearance(options.hasAtmosphere, options.parentPlanetIndex),
     orbitAxis: copyVec3(options.orbitAxis),
     orbit: copyPlanetOrbit(options.orbit),
     parentPlanetIndex: options.parentPlanetIndex,
@@ -295,6 +302,18 @@ export function copyPlanetOrbit(orbit: PlanetOrbitConfig): PlanetOrbitConfig {
     radius: orbit.radius,
     phase: orbit.phase,
     angularSpeed: orbit.angularSpeed,
+  };
+}
+
+function createFallbackPlanetAppearance(
+  hasAtmosphere: boolean,
+  parentPlanetIndex: number | null
+): PlanetAppearanceConfig {
+  return {
+    planetClass:
+      parentPlanetIndex !== null || !hasAtmosphere ? "ice" : "terran",
+    hasRings: false,
+    seed: 113,
   };
 }
 

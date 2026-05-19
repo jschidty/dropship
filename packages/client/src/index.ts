@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import gasGiantGrungeTextureUrl from "../../../content/images/red-gas-giant/grunge.jpg?url";
+import gasGiantNoiseTextureUrl from "../../../content/images/red-gas-giant/noise.png?url";
 import {
   DEFAULT_CONTENT_REGISTRY,
   createMinimalSkirmishConfig,
@@ -11,6 +13,8 @@ import {
   type EntityHandle,
   handleKey,
   type MatchConfig,
+  type PlanetAppearanceConfig,
+  type PlanetClass,
   type PlayerId,
   type ScheduledCommand,
   type ServerMessage,
@@ -54,6 +58,7 @@ export type PlanetViewModel = Readonly<{
   radius: number;
   color: string;
   hasAtmosphere: boolean;
+  appearance: PlanetAppearanceConfig;
   orbitAxis: THREE.Vector3;
   parentPlanetIndex: number | null;
 }>;
@@ -129,6 +134,7 @@ type MutablePlanetViewModel = {
   radius: number;
   color: string;
   hasAtmosphere: boolean;
+  appearance: PlanetAppearanceConfig;
   orbitAxis: THREE.Vector3;
   parentPlanetIndex: number | null;
 };
@@ -169,11 +175,24 @@ type UnitBatchRenderer = {
 };
 
 type PlanetProxy = {
+  glow: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   body: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  rings: THREE.Mesh<THREE.RingGeometry, THREE.ShaderMaterial>;
   lastSeenFrame: number;
 };
 
-type TacticalGrid = THREE.GridHelper;
+type GasGiantPaletteTheme = readonly [number, number, number, number];
+
+type GasGiantTextureSet = Readonly<{
+  grunge: THREE.Texture;
+  noise: THREE.Texture;
+}>;
+
+type TacticalGrid = Readonly<{
+  root: THREE.Group;
+  grid: THREE.GridHelper;
+  intersection: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+}>;
 
 type SkyDome = Readonly<{
   scene: THREE.Scene;
@@ -210,9 +229,11 @@ type RenderScratch = {
   sunDirection: THREE.Vector3;
   sunColor: THREE.Color;
   cameraDirection: THREE.Vector3;
+  cameraRight: THREE.Vector3;
+  cameraUp: THREE.Vector3;
+  cameraForward: THREE.Vector3;
   screenPosition: THREE.Vector2;
   sunScreenPosition: THREE.Vector4;
-  sunViewDirection: THREE.Vector3;
 };
 
 type CameraPresetControls = Readonly<{
@@ -220,7 +241,7 @@ type CameraPresetControls = Readonly<{
   buttons: Record<CameraPreset, HTMLButtonElement>;
 }>;
 
-type GravityOverlayControls = Readonly<{
+type TacticalOverlayControls = Readonly<{
   root: HTMLElement;
   input: HTMLInputElement;
 }>;
@@ -296,9 +317,31 @@ const PLANET_SELECTION_MIN_RADIUS_PX = 10;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
 const GRAVITY_OVERLAY_MIN_STRENGTH = 0.006;
+const GRAVITY_OVERLAY_VECTOR_LENGTH = 5.2;
+const GRAVITY_OVERLAY_HEAD_LENGTH = 1.45;
 const GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR = 3;
 const GRAVITY_OVERLAY_VERTICES_PER_VECTOR = GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR * 2;
+const TACTICAL_GRID_WORLD_SIZE = 4;
+const TACTICAL_GRID_DIVISIONS = 40;
+const TACTICAL_GRID_INTERSECTION_SEGMENTS = 128;
+const TACTICAL_OVERLAY_COLOR_HEX = 0xfc3d21;
+const PLANET_BODY_BILLBOARD_SCALE = 2.12;
+const PLANET_GLOW_BILLBOARD_SCALE = 3.08;
+const PLANET_RING_INNER_RADIUS = 1.18;
+const PLANET_RING_OUTER_RADIUS = 2.05;
+const PLANET_RING_THETA_SEGMENTS = 256;
+const PLANET_RING_PHI_SEGMENTS = 8;
+const GAS_GIANT_PALETTE_THEMES: readonly GasGiantPaletteTheme[] = [
+  [0x101a38, 0x315a9e, 0xc8d9ff, 0xe1b46d],
+  [0x1a102b, 0x67449b, 0xdfc4ff, 0xe87fa3],
+  [0x26140d, 0x9c4e24, 0xf0c06e, 0x7f2e21],
+  [0x10241d, 0x4f7e5d, 0xd8d19b, 0x95b75e],
+  [0x172232, 0x5d7287, 0xe4d4b6, 0xd09352],
+];
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const PLANET_RING_AXIS_SCRATCH = new THREE.Vector3(0, 1, 0);
+const GAS_GIANT_BASE_COLOR_SCRATCH = new THREE.Color();
+const GAS_GIANT_PALETTE_COLOR_SCRATCH = new THREE.Color();
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
 const DEFAULT_SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
 const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
@@ -892,6 +935,7 @@ function syncPlanetViewModels(
         radius: planet.radius,
         color: planet.color,
         hasAtmosphere: planet.hasAtmosphere,
+        appearance: planet.appearance,
         orbitAxis: new THREE.Vector3(),
         parentPlanetIndex: planet.parentPlanetIndex,
       };
@@ -904,6 +948,7 @@ function syncPlanetViewModels(
     view.radius = planet.radius;
     view.color = planet.color;
     view.hasAtmosphere = planet.hasAtmosphere;
+    view.appearance = planet.appearance;
     view.orbitAxis.set(planet.orbitAxis.x, planet.orbitAxis.y, planet.orbitAxis.z);
     view.parentPlanetIndex = planet.parentPlanetIndex;
   }
@@ -963,6 +1008,7 @@ export function readPlanetViewModels(world: SimWorld): readonly PlanetViewModel[
       radius: planet.radius,
       color: planet.color,
       hasAtmosphere: planet.hasAtmosphere,
+      appearance: planet.appearance,
       orbitAxis: toVector3(planet.orbitAxis),
       parentPlanetIndex: planet.parentPlanetIndex,
     };
@@ -1032,22 +1078,34 @@ export function mountMinimalGame(
   worldGroup.add(unitBatches.root);
   const planetProxies = new Map<string, PlanetProxy>();
   const planetGeometry = new THREE.PlaneGeometry(1, 1);
-  const planetMaterial = createPlanetBillboardMaterial();
+  const planetRingGeometry = createPlanetRingGeometry();
+  const gasGiantTextures = createGasGiantTextureSet();
+  const planetMaterial = createPlanetBillboardMaterial(gasGiantTextures);
+  const planetGlowMaterial = createPlanetGlowMaterial(gasGiantTextures);
+  const planetRingMaterial = createPlanetRingMaterial();
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
   const selectedUnitKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
+  let tacticalOverlayEnabled = true;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
   const cameraPresetControls = createCameraPresetControls(container, (preset) => {
     applyCameraPreset(cameraControls, preset);
   });
-  const gravityOverlayControls = createGravityOverlayControls(
-    container,
+  const topLeftControls = createTopLeftControls(container);
+  const tacticalOverlayControls = createTacticalOverlayControls(
+    topLeftControls,
     (enabled) => {
-      setGravityOverlayEnabled(gravityOverlay, gravityOverlayControls, enabled);
+      tacticalOverlayEnabled = enabled;
+      setTacticalOverlayEnabled(
+        gravityOverlay,
+        tacticalOverlayControls,
+        enabled
+      );
     }
   );
+  createRandomSeedControl(topLeftControls);
   const renderResolution = new THREE.Vector2();
   const scratch = createRenderScratch();
   const cameraFocusTween = createCameraFocusTween();
@@ -1058,7 +1116,7 @@ export function mountMinimalGame(
   );
   scene.add(lighting.group);
   const tacticalGrid = createTacticalPlane();
-  scene.add(tacticalGrid);
+  scene.add(tacticalGrid.root);
 
   const startedAt = performance.now();
   let frameId = 0;
@@ -1104,11 +1162,12 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "g") {
-      setGravityOverlayEnabled(
+    if (key === "g" || key === "t") {
+      tacticalOverlayEnabled = !tacticalOverlayEnabled;
+      setTacticalOverlayEnabled(
         gravityOverlay,
-        gravityOverlayControls,
-        !gravityOverlay.enabled
+        tacticalOverlayControls,
+        tacticalOverlayEnabled
       );
       return;
     }
@@ -1223,12 +1282,8 @@ export function mountMinimalGame(
       );
 
       if (selectedPlanet) {
-        selectedPlanetKey = selectedPlanet.key;
-        setGravityOverlayEnabled(
-          gravityOverlay,
-          gravityOverlayControls,
-          true
-        );
+        selectedPlanetKey =
+          selectedPlanet.key === selectedPlanetKey ? null : selectedPlanet.key;
         return;
       }
 
@@ -1333,6 +1388,7 @@ export function mountMinimalGame(
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
     selectedPlanetKey = pruneSelectedPlanetKey(selectedPlanetKey, planets);
+    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
     const planetaryContext = getCurrentPlanetaryContext(
       planets,
       selectedPlanetKey
@@ -1361,10 +1417,12 @@ export function mountMinimalGame(
       worldGroup,
       planetProxies,
       planets,
-      planetaryContext?.key ?? null,
       renderFrameIndex,
       planetGeometry,
-      planetMaterial
+      planetRingGeometry,
+      planetMaterial,
+      planetGlowMaterial,
+      planetRingMaterial
     );
     applyCameraControls(camera, cameraControls, container, displayedFocus, scratch);
     camera.updateMatrixWorld();
@@ -1391,11 +1449,11 @@ export function mountMinimalGame(
       sunDirection,
       scratch
     );
-    updateTacticalGrid(tacticalGrid, planetaryContext);
+    updateTacticalGrid(tacticalGrid, selectedPlanet, tacticalOverlayEnabled);
     updateGravityOverlay(
       gravityOverlay,
-      planetaryContext,
-      planetaryContext ? [planetaryContext] : []
+      selectedPlanet,
+      selectedPlanet ? [selectedPlanet] : []
     );
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
@@ -1413,7 +1471,6 @@ export function mountMinimalGame(
     if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
       container.dataset.cameraMode = cameraControls.mode;
       container.dataset.cameraFocus = planetaryContext?.label ?? "none";
-      container.dataset.selectedPlanet = planetaryContext?.label ?? "none";
       container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
       container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
       container.dataset.cameraViewHeight =
@@ -1424,7 +1481,9 @@ export function mountMinimalGame(
       container.dataset.sunOcclusion = sunScreenPosition.w.toFixed(3);
       container.dataset.unitCount = units.length.toString();
       container.dataset.selectedUnitCount = selectedUnitKeys.size.toString();
-      container.dataset.gravityOverlay = gravityOverlay.enabled ? "on" : "off";
+      container.dataset.selectedPlanet = selectedPlanet?.label ?? "none";
+      container.dataset.tacticalOverlay = tacticalOverlayEnabled ? "on" : "off";
+      container.dataset.gravityOverlay = tacticalOverlayEnabled ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
       container.dataset.connectionState = runtime.readConnectionStatus().state;
       container.dataset.simHz = observedSimHz.toFixed(1);
@@ -1462,7 +1521,7 @@ export function mountMinimalGame(
         estimatedRenderMs,
         renderer.info.render.calls,
         renderer.getPixelRatio(),
-        planetaryContext?.label ?? "none",
+        selectedPlanet?.label ?? "none",
         selectedUnitKeys.size
       );
       lastPerfDatasetUpdateAt = now;
@@ -1523,9 +1582,14 @@ export function mountMinimalGame(
       renderer.domElement.removeEventListener("wheel", handleWheel);
       disposeUnitBatchRenderer(unitBatches);
       disposeGravityOverlay(gravityOverlay);
+      disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
       planetGeometry.dispose();
+      planetRingGeometry.dispose();
       planetMaterial.dispose();
+      planetGlowMaterial.dispose();
+      planetRingMaterial.dispose();
+      disposeGasGiantTextureSet(gasGiantTextures);
       renderer.dispose();
       disposeSkyDome(nebulaSkyDome);
       disposeFullscreenPass(sunFlarePass);
@@ -1575,9 +1639,11 @@ function createRenderScratch(): RenderScratch {
     sunDirection: new THREE.Vector3(),
     sunColor: new THREE.Color(),
     cameraDirection: new THREE.Vector3(),
+    cameraRight: new THREE.Vector3(1, 0, 0),
+    cameraUp: new THREE.Vector3(0, 1, 0),
+    cameraForward: new THREE.Vector3(0, 0, 1),
     screenPosition: new THREE.Vector2(),
     sunScreenPosition: new THREE.Vector4(),
-    sunViewDirection: new THREE.Vector3(),
   };
 }
 
@@ -1692,15 +1758,22 @@ function getCurrentPlanetaryContext(
   planets: readonly PlanetViewModel[],
   selectedPlanetKey: string | null
 ): PlanetViewModel | null {
-  if (selectedPlanetKey) {
-    const selected = planets.find((planet) => planet.key === selectedPlanetKey);
+  const selected = getSelectedPlanet(planets, selectedPlanetKey);
 
-    if (selected) {
-      return selected;
-    }
+  if (selected) {
+    return selected;
   }
 
   return planets.find((planet) => planet.label === "Aurora") ?? planets[0] ?? null;
+}
+
+function getSelectedPlanet(
+  planets: readonly PlanetViewModel[],
+  selectedPlanetKey: string | null
+): PlanetViewModel | null {
+  return selectedPlanetKey
+    ? planets.find((planet) => planet.key === selectedPlanetKey) ?? null
+    : null;
 }
 
 function writeLocalFocusPosition(
@@ -1907,33 +1980,68 @@ function updatePlanetProxies(
   worldGroup: THREE.Group,
   proxies: Map<string, PlanetProxy>,
   planets: readonly PlanetViewModel[],
-  selectedPlanetKey: string | null,
   frameIndex: number,
   geometry: THREE.PlaneGeometry,
-  material: THREE.ShaderMaterial
+  ringGeometry: THREE.RingGeometry,
+  material: THREE.ShaderMaterial,
+  glowMaterial: THREE.ShaderMaterial,
+  ringMaterial: THREE.ShaderMaterial
 ): void {
   for (const planet of planets) {
     let proxy = proxies.get(planet.key);
 
     if (!proxy) {
-      proxy = createPlanetProxy(planet, geometry, material);
+      proxy = createPlanetProxy(
+        planet,
+        geometry,
+        ringGeometry,
+        material,
+        glowMaterial,
+        ringMaterial
+      );
       proxies.set(planet.key, proxy);
+      worldGroup.add(proxy.glow);
       worldGroup.add(proxy.body);
+      worldGroup.add(proxy.rings);
     }
 
     proxy.lastSeenFrame = frameIndex;
+    proxy.glow.position.copy(planet.position);
+    proxy.glow.scale.setScalar(readPlanetGlowBillboardScale(planet));
+    proxy.glow.material.uniforms.uPlanetColor.value.set(planet.color);
+    writeGasGiantPaletteUniforms(proxy.glow.material, planet);
+    proxy.glow.material.uniforms.uPlanetClass.value = planetClassToShaderValue(
+      planet.appearance.planetClass
+    );
+    proxy.glow.material.uniforms.uPlanetSeed.value = planet.appearance.seed;
     proxy.body.position.copy(planet.position);
-    proxy.body.scale.setScalar(planet.radius * 2.12);
+    proxy.body.scale.setScalar(readPlanetBodyBillboardScale(planet));
     proxy.body.material.uniforms.uPlanetColor.value.set(planet.color);
-    proxy.body.material.uniforms.uHasAtmosphere.value = planet.hasAtmosphere ? 1 : 0;
-    proxy.body.material.uniforms.uSelected.value =
-      planet.key === selectedPlanetKey ? 1 : 0;
+    writeGasGiantPaletteUniforms(proxy.body.material, planet);
+    proxy.body.material.uniforms.uPlanetClass.value = planetClassToShaderValue(
+      planet.appearance.planetClass
+    );
+    proxy.body.material.uniforms.uPlanetSeed.value = planet.appearance.seed;
+    proxy.rings.visible = planet.appearance.hasRings;
+    proxy.rings.position.copy(planet.position);
+    proxy.rings.scale.setScalar(planet.radius);
+    writePlanetRingOrientation(proxy.rings.quaternion, planet.orbitAxis);
+    proxy.rings.material.uniforms.uPlanetColor.value.set(planet.color);
+    proxy.rings.material.uniforms.uPlanetSeed.value = planet.appearance.seed;
+    writePlanetRingEllipse(
+      proxy.rings.material.uniforms.uRingEllipse.value,
+      planet.appearance.seed
+    );
   }
 
   for (const [key, proxy] of proxies) {
     if (proxy.lastSeenFrame !== frameIndex) {
+      worldGroup.remove(proxy.glow);
       worldGroup.remove(proxy.body);
+      worldGroup.remove(proxy.rings);
+      proxy.glow.material.dispose();
       proxy.body.material.dispose();
+      proxy.rings.material.dispose();
       proxies.delete(key);
     }
   }
@@ -2197,8 +2305,12 @@ function disposePlanetProxies(
   proxies: Map<string, PlanetProxy>
 ): void {
   for (const proxy of proxies.values()) {
+    worldGroup.remove(proxy.glow);
     worldGroup.remove(proxy.body);
+    worldGroup.remove(proxy.rings);
+    proxy.glow.material.dispose();
     proxy.body.material.dispose();
+    proxy.rings.material.dispose();
   }
 
   proxies.clear();
@@ -2207,25 +2319,189 @@ function disposePlanetProxies(
 function createPlanetProxy(
   planet: PlanetViewModel,
   geometry: THREE.PlaneGeometry,
-  material: THREE.ShaderMaterial
+  ringGeometry: THREE.RingGeometry,
+  material: THREE.ShaderMaterial,
+  glowMaterial: THREE.ShaderMaterial,
+  ringMaterial: THREE.ShaderMaterial
 ): PlanetProxy {
+  const planetGlowMaterial = glowMaterial.clone();
+  planetGlowMaterial.uniforms.uPlanetColor.value.set(planet.color);
+  writeGasGiantPaletteUniforms(planetGlowMaterial, planet);
+  planetGlowMaterial.uniforms.uPlanetClass.value = planetClassToShaderValue(
+    planet.appearance.planetClass
+  );
+  planetGlowMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
+  const glow = new THREE.Mesh(geometry, planetGlowMaterial);
+  glow.name = `${planet.label} subtle planet glow`;
+  glow.position.copy(planet.position);
+  glow.scale.setScalar(readPlanetGlowBillboardScale(planet));
+  glow.renderOrder = -4.5;
+  glow.frustumCulled = false;
+
   const planetMaterial = material.clone();
   planetMaterial.uniforms.uPlanetColor.value.set(planet.color);
-  planetMaterial.uniforms.uHasAtmosphere.value = planet.hasAtmosphere ? 1 : 0;
-  planetMaterial.uniforms.uSelected.value = 0;
+  writeGasGiantPaletteUniforms(planetMaterial, planet);
+  planetMaterial.uniforms.uPlanetClass.value = planetClassToShaderValue(
+    planet.appearance.planetClass
+  );
+  planetMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
   const body = new THREE.Mesh(
     geometry,
     planetMaterial
   );
   body.name = `${planet.label} shaded billboard planet`;
   body.position.copy(planet.position);
-  body.scale.setScalar(planet.radius * 2.12);
+  body.scale.setScalar(readPlanetBodyBillboardScale(planet));
   body.renderOrder = -5;
 
+  const ringsMaterial = ringMaterial.clone();
+  ringsMaterial.uniforms.uPlanetColor.value.set(planet.color);
+  ringsMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
+  writePlanetRingEllipse(ringsMaterial.uniforms.uRingEllipse.value, planet.appearance.seed);
+  const rings = new THREE.Mesh(ringGeometry, ringsMaterial);
+  rings.name = `${planet.label} shaded ring mesh`;
+  rings.position.copy(planet.position);
+  rings.scale.setScalar(planet.radius);
+  writePlanetRingOrientation(rings.quaternion, planet.orbitAxis);
+  rings.renderOrder = -4;
+  rings.visible = planet.appearance.hasRings;
+  rings.frustumCulled = false;
+
   return {
+    glow,
     body,
+    rings,
     lastSeenFrame: 0,
   };
+}
+
+function readPlanetGlowBillboardScale(planet: PlanetViewModel): number {
+  return planet.radius * PLANET_GLOW_BILLBOARD_SCALE;
+}
+
+function readPlanetBodyBillboardScale(planet: PlanetViewModel): number {
+  return planet.radius * PLANET_BODY_BILLBOARD_SCALE;
+}
+
+function createPlanetRingGeometry(): THREE.RingGeometry {
+  return new THREE.RingGeometry(
+    PLANET_RING_INNER_RADIUS,
+    PLANET_RING_OUTER_RADIUS,
+    PLANET_RING_THETA_SEGMENTS,
+    PLANET_RING_PHI_SEGMENTS
+  );
+}
+
+function writePlanetRingOrientation(
+  target: THREE.Quaternion,
+  orbitAxis: THREE.Vector3
+): THREE.Quaternion {
+  PLANET_RING_AXIS_SCRATCH.copy(orbitAxis);
+
+  if (PLANET_RING_AXIS_SCRATCH.lengthSq() <= 0.000001) {
+    PLANET_RING_AXIS_SCRATCH.set(0, 1, 0);
+  } else {
+    PLANET_RING_AXIS_SCRATCH.normalize();
+  }
+
+  return target.setFromUnitVectors(Z_AXIS, PLANET_RING_AXIS_SCRATCH);
+}
+
+function writePlanetRingEllipse(target: THREE.Vector2, seed: number): THREE.Vector2 {
+  const scaleSeed = Math.sin(seed * 12.9898 + 4.1414) * 43758.5453;
+  const scale = 1.035 + (scaleSeed - Math.floor(scaleSeed)) * 0.085;
+
+  return target.set(scale, 1 / scale);
+}
+
+function writeGasGiantPaletteUniforms(
+  material: THREE.ShaderMaterial,
+  planet: PlanetViewModel
+): void {
+  const baseColor = GAS_GIANT_BASE_COLOR_SCRATCH.set(planet.color);
+  const primaryIndex = Math.floor(
+    readSeededFraction(planet.appearance.seed, 2.731) * GAS_GIANT_PALETTE_THEMES.length
+  );
+  const secondaryOffset = 1 + Math.floor(
+    readSeededFraction(planet.appearance.seed, 8.193) *
+      (GAS_GIANT_PALETTE_THEMES.length - 1)
+  );
+  const secondaryIndex =
+    (primaryIndex + secondaryOffset) % GAS_GIANT_PALETTE_THEMES.length;
+  const primary = GAS_GIANT_PALETTE_THEMES[primaryIndex];
+  const secondary = GAS_GIANT_PALETTE_THEMES[secondaryIndex];
+  const paletteMix = 0.12 + readSeededFraction(planet.appearance.seed, 13.917) * 0.34;
+  const baseMix = 0.1 + readSeededFraction(planet.appearance.seed, 19.441) * 0.16;
+
+  writeGasGiantPaletteColor(
+    material.uniforms.uGasPaletteShadow.value,
+    primary[0],
+    secondary[0],
+    baseColor,
+    paletteMix,
+    baseMix * 0.45,
+    0.92
+  );
+  writeGasGiantPaletteColor(
+    material.uniforms.uGasPaletteLow.value,
+    primary[1],
+    secondary[1],
+    baseColor,
+    paletteMix,
+    baseMix,
+    1
+  );
+  writeGasGiantPaletteColor(
+    material.uniforms.uGasPaletteHigh.value,
+    primary[2],
+    secondary[2],
+    baseColor,
+    paletteMix * 0.65,
+    baseMix * 0.55,
+    1.08
+  );
+  writeGasGiantPaletteColor(
+    material.uniforms.uGasPaletteAccent.value,
+    primary[3],
+    secondary[3],
+    baseColor,
+    paletteMix,
+    baseMix * 0.7,
+    1.02
+  );
+}
+
+function writeGasGiantPaletteColor(
+  target: THREE.Color,
+  primaryHex: number,
+  secondaryHex: number,
+  baseColor: THREE.Color,
+  paletteMix: number,
+  baseMix: number,
+  exposure: number
+): void {
+  target.setHex(primaryHex);
+  GAS_GIANT_PALETTE_COLOR_SCRATCH.setHex(secondaryHex);
+  target.lerp(GAS_GIANT_PALETTE_COLOR_SCRATCH, paletteMix);
+  target.lerp(baseColor, baseMix);
+  target.multiplyScalar(exposure);
+}
+
+function readSeededFraction(seed: number, salt: number): number {
+  const value = Math.sin(seed * 12.9898 + salt * 78.233) * 43758.5453;
+
+  return value - Math.floor(value);
+}
+
+function planetClassToShaderValue(planetClass: PlanetClass): number {
+  switch (planetClass) {
+    case "gas-giant":
+      return 0;
+    case "terran":
+      return 1;
+    case "ice":
+      return 2;
+  }
 }
 
 function writeSunDirection(
@@ -2278,30 +2554,110 @@ function updateLighting(
 }
 
 function createTacticalPlane(): TacticalGrid {
-  const grid = new THREE.GridHelper(180, 36, 0x293044, 0x151b29);
+  const root = new THREE.Group();
+  const grid = new THREE.GridHelper(
+    TACTICAL_GRID_WORLD_SIZE,
+    TACTICAL_GRID_DIVISIONS,
+    TACTICAL_OVERLAY_COLOR_HEX,
+    TACTICAL_OVERLAY_COLOR_HEX
+  );
+  const intersectionGeometry = createTacticalIntersectionGeometry();
+  const intersectionMaterial = new THREE.LineBasicMaterial({
+    color: TACTICAL_OVERLAY_COLOR_HEX,
+    transparent: true,
+    opacity: 0.92,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const intersection = new THREE.LineLoop(
+    intersectionGeometry,
+    intersectionMaterial
+  );
+
+  root.name = "selected-planet-tactical-overlay";
+  root.visible = false;
   grid.name = "selected-planet-tactical-grid";
-  grid.renderOrder = 2;
-  return grid;
+  grid.frustumCulled = false;
+  grid.renderOrder = 7;
+  intersection.name = "selected-planet-intersection-circle";
+  intersection.frustumCulled = false;
+  intersection.renderOrder = 7.1;
+
+  const gridMaterials = Array.isArray(grid.material)
+    ? grid.material
+    : [grid.material];
+
+  for (const material of gridMaterials) {
+    material.transparent = true;
+    material.opacity = 0.42;
+    material.depthTest = false;
+    material.depthWrite = false;
+  }
+
+  root.add(grid, intersection);
+
+  return {
+    root,
+    grid,
+    intersection,
+  };
+}
+
+function createTacticalIntersectionGeometry(): THREE.BufferGeometry {
+  const positions = new Float32Array(TACTICAL_GRID_INTERSECTION_SEGMENTS * 3);
+
+  for (
+    let index = 0;
+    index < TACTICAL_GRID_INTERSECTION_SEGMENTS;
+    index += 1
+  ) {
+    const angle =
+      (index / TACTICAL_GRID_INTERSECTION_SEGMENTS) * Math.PI * 2;
+    const positionIndex = index * 3;
+
+    positions[positionIndex] = Math.cos(angle);
+    positions[positionIndex + 1] = 0;
+    positions[positionIndex + 2] = Math.sin(angle);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  return geometry;
 }
 
 function updateTacticalGrid(
-  grid: TacticalGrid,
-  context: PlanetViewModel | null
+  tacticalGrid: TacticalGrid,
+  context: PlanetViewModel | null,
+  enabled: boolean
 ): void {
-  grid.visible = !!context;
+  tacticalGrid.root.visible = enabled && !!context;
 
-  if (!context) {
+  if (!tacticalGrid.root.visible || !context) {
     return;
   }
 
-  const scale = Math.max(context.radius * 0.016, 0.8);
-
-  grid.position.set(
+  tacticalGrid.root.position.set(
     context.position.x,
-    context.position.y + 0.55,
+    context.position.y,
     context.position.z
   );
-  grid.scale.setScalar(scale);
+  tacticalGrid.root.scale.setScalar(context.radius);
+}
+
+function disposeTacticalGrid(tacticalGrid: TacticalGrid): void {
+  tacticalGrid.grid.geometry.dispose();
+  tacticalGrid.intersection.geometry.dispose();
+  tacticalGrid.intersection.material.dispose();
+
+  const gridMaterials = Array.isArray(tacticalGrid.grid.material)
+    ? tacticalGrid.grid.material
+    : [tacticalGrid.grid.material];
+
+  for (const material of gridMaterials) {
+    material.dispose();
+  }
+
+  tacticalGrid.root.clear();
 }
 
 function createGravityOverlay(): GravityOverlay {
@@ -2314,7 +2670,7 @@ function createGravityOverlay(): GravityOverlay {
   const geometry = new THREE.BufferGeometry();
   const material = new THREE.ShaderMaterial({
     uniforms: {
-      uColor: { value: new THREE.Color(0x83f7ff) },
+      uColor: { value: new THREE.Color(TACTICAL_OVERLAY_COLOR_HEX) },
     },
     vertexShader: GRAVITY_VECTOR_VERTEX_SHADER,
     fragmentShader: GRAVITY_VECTOR_FRAGMENT_SHADER,
@@ -2336,7 +2692,7 @@ function createGravityOverlay(): GravityOverlay {
   lines.frustumCulled = false;
   lines.renderOrder = 8;
   root.add(lines);
-  root.visible = true;
+  root.visible = false;
 
   return {
     root,
@@ -2381,7 +2737,7 @@ function updateGravityOverlay(
       const z = (zIndex - halfGrid) * spacing;
       const sample = overlay.sample.set(
         context.position.x + x,
-        context.position.y + 0.55,
+        context.position.y,
         context.position.z + z
       );
       const surfaceDistance = sample.distanceTo(context.position);
@@ -2414,16 +2770,14 @@ function updateGravityOverlay(
       }
 
       const opacity = 0.06 + smoothstep(0.02, 0.75, normalizedStrength) * 0.64;
-      const length = 2.6 + normalizedStrength * 9.4;
-      const headLength = Math.min(length * 0.35, 2.2);
 
       writeGravityVector(
         overlay,
         vectorIndex,
         sample,
         gravityVector.normalize(),
-        length,
-        headLength,
+        GRAVITY_OVERLAY_VECTOR_LENGTH,
+        GRAVITY_OVERLAY_HEAD_LENGTH,
         opacity
       );
     }
@@ -2572,21 +2926,99 @@ function createSunFlarePass(): FullscreenPass {
   };
 }
 
-function createPlanetBillboardMaterial(): THREE.ShaderMaterial {
+function createGasGiantTextureSet(): GasGiantTextureSet {
+  const loader = new THREE.TextureLoader();
+  const grunge = loader.load(gasGiantGrungeTextureUrl);
+  const noise = loader.load(gasGiantNoiseTextureUrl);
+
+  for (const texture of [grunge, noise]) {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.colorSpace = THREE.NoColorSpace;
+  }
+
+  return { grunge, noise };
+}
+
+function disposeGasGiantTextureSet(textures: GasGiantTextureSet): void {
+  textures.grunge.dispose();
+  textures.noise.dispose();
+}
+
+function createPlanetBillboardMaterial(
+  gasGiantTextures: GasGiantTextureSet
+): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uSunDirection: { value: DEFAULT_SUN_DIRECTION.clone() },
-      uSunColor: { value: DEFAULT_SUN_COLOR.clone() },
       uPlanetColor: { value: new THREE.Color(0x376fae) },
-      uHasAtmosphere: { value: 1 },
-      uSelected: { value: 0 },
+      uGasPaletteShadow: { value: new THREE.Color(0x101a38) },
+      uGasPaletteLow: { value: new THREE.Color(0x315a9e) },
+      uGasPaletteHigh: { value: new THREE.Color(0xc8d9ff) },
+      uGasPaletteAccent: { value: new THREE.Color(0xe1b46d) },
+      uGasGrungeTexture: { value: gasGiantTextures.grunge },
+      uGasNoiseTexture: { value: gasGiantTextures.noise },
+      uPlanetClass: { value: 1 },
+      uPlanetSeed: { value: 113 },
+      uCameraRight: { value: new THREE.Vector3(1, 0, 0) },
+      uCameraUp: { value: new THREE.Vector3(0, 1, 0) },
+      uCameraForward: { value: new THREE.Vector3(0, 0, 1) },
       uTime: { value: 0 },
     },
     vertexShader: PLANET_BILLBOARD_VERTEX_SHADER,
     fragmentShader: PLANET_BILLBOARD_FRAGMENT_SHADER,
     transparent: true,
     blending: THREE.NormalBlending,
-    depthTest: false,
+    depthTest: true,
+    depthWrite: true,
+    side: THREE.DoubleSide,
+  });
+}
+
+function createPlanetGlowMaterial(
+  gasGiantTextures: GasGiantTextureSet
+): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uPlanetColor: { value: new THREE.Color(0x376fae) },
+      uGasPaletteShadow: { value: new THREE.Color(0x101a38) },
+      uGasPaletteLow: { value: new THREE.Color(0x315a9e) },
+      uGasPaletteHigh: { value: new THREE.Color(0xc8d9ff) },
+      uGasPaletteAccent: { value: new THREE.Color(0xe1b46d) },
+      uSunDirection: { value: DEFAULT_SUN_DIRECTION.clone() },
+      uCameraRight: { value: new THREE.Vector3(1, 0, 0) },
+      uCameraUp: { value: new THREE.Vector3(0, 1, 0) },
+      uCameraForward: { value: new THREE.Vector3(0, 0, 1) },
+      uGasNoiseTexture: { value: gasGiantTextures.noise },
+      uPlanetClass: { value: 1 },
+      uPlanetSeed: { value: 113 },
+      uTime: { value: 0 },
+    },
+    vertexShader: PLANET_BILLBOARD_VERTEX_SHADER,
+    fragmentShader: PLANET_GLOW_FRAGMENT_SHADER,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthTest: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
+function createPlanetRingMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDirection: { value: DEFAULT_SUN_DIRECTION.clone() },
+      uPlanetColor: { value: new THREE.Color(0x376fae) },
+      uPlanetSeed: { value: 113 },
+      uRingEllipse: { value: new THREE.Vector2(1, 1) },
+    },
+    vertexShader: PLANET_RING_VERTEX_SHADER,
+    fragmentShader: PLANET_RING_FRAGMENT_SHADER,
+    transparent: true,
+    blending: THREE.NormalBlending,
+    depthTest: true,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
@@ -2702,15 +3134,30 @@ function updatePlanetBillboards(
   sunDirection: THREE.Vector3,
   scratch: RenderScratch
 ): void {
-  const sunViewDirection = scratch.sunViewDirection
-    .copy(sunDirection)
-    .transformDirection(camera.matrixWorldInverse)
+  const cameraRight = scratch.cameraRight
+    .setFromMatrixColumn(camera.matrixWorld, 0)
+    .normalize();
+  const cameraUp = scratch.cameraUp
+    .setFromMatrixColumn(camera.matrixWorld, 1)
+    .normalize();
+  const cameraForward = scratch.cameraForward
+    .setFromMatrixColumn(camera.matrixWorld, 2)
     .normalize();
 
   for (const proxy of proxies.values()) {
+    proxy.glow.quaternion.copy(camera.quaternion);
+    proxy.glow.material.uniforms.uSunDirection.value.copy(sunDirection);
+    proxy.glow.material.uniforms.uCameraRight.value.copy(cameraRight);
+    proxy.glow.material.uniforms.uCameraUp.value.copy(cameraUp);
+    proxy.glow.material.uniforms.uCameraForward.value.copy(cameraForward);
+    proxy.glow.material.uniforms.uTime.value = elapsedSeconds;
     proxy.body.quaternion.copy(camera.quaternion);
-    proxy.body.material.uniforms.uSunDirection.value.copy(sunViewDirection);
+    proxy.body.material.uniforms.uSunDirection.value.copy(sunDirection);
+    proxy.body.material.uniforms.uCameraRight.value.copy(cameraRight);
+    proxy.body.material.uniforms.uCameraUp.value.copy(cameraUp);
+    proxy.body.material.uniforms.uCameraForward.value.copy(cameraForward);
     proxy.body.material.uniforms.uTime.value = elapsedSeconds;
+    proxy.rings.material.uniforms.uSunDirection.value.copy(sunDirection);
   }
 }
 
@@ -2778,13 +3225,13 @@ function createSelectionRingTexture(): THREE.CanvasTexture {
   }
 
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = "rgba(255, 224, 76, 0.98)";
+  context.strokeStyle = "rgba(252, 61, 33, 0.98)";
   context.lineWidth = 8;
   context.beginPath();
   context.arc(64, 64, 48, 0, Math.PI * 2);
   context.stroke();
 
-  context.strokeStyle = "rgba(255, 247, 174, 0.45)";
+  context.strokeStyle = "rgba(255, 137, 84, 0.45)";
   context.lineWidth = 3;
   context.beginPath();
   context.arc(64, 64, 56, 0, Math.PI * 2);
@@ -2862,12 +3309,19 @@ function updateCameraPresetControls(
   }
 }
 
-function createGravityOverlayControls(
+function createTopLeftControls(container: HTMLElement): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "top-left-controls";
+  container.appendChild(root);
+  return root;
+}
+
+function createTacticalOverlayControls(
   container: HTMLElement,
   onChange: (enabled: boolean) => void
-): GravityOverlayControls {
+): TacticalOverlayControls {
   const root = document.createElement("label");
-  root.className = "gravity-toggle";
+  root.className = "tactical-toggle";
   const input = document.createElement("input");
   const label = document.createElement("span");
 
@@ -2879,7 +3333,7 @@ function createGravityOverlayControls(
   input.addEventListener("change", () => {
     onChange(input.checked);
   });
-  label.textContent = "Gravity";
+  label.textContent = "Tactical";
   root.append(input, label);
   container.appendChild(root);
 
@@ -2889,9 +3343,40 @@ function createGravityOverlayControls(
   };
 }
 
-function setGravityOverlayEnabled(
+function createRandomSeedControl(container: HTMLElement): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "random-seed-button";
+  button.textContent = "Random seed";
+  button.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    navigateToRandomSeed();
+  });
+  container.appendChild(button);
+  return button;
+}
+
+function navigateToRandomSeed(): void {
+  const url = new URL(window.location.href);
+  const seed = Math.floor(Math.random() * 1_000_000_000);
+  const matchId = url.searchParams.get("match");
+
+  url.searchParams.set("seed", seed.toString());
+
+  if (matchId?.startsWith("seed-")) {
+    url.searchParams.set("match", `seed-${seed}`);
+  }
+
+  window.location.assign(url.toString());
+}
+
+function setTacticalOverlayEnabled(
   overlay: GravityOverlay,
-  controls: GravityOverlayControls,
+  controls: TacticalOverlayControls,
   enabled: boolean
 ): void {
   overlay.enabled = enabled;
@@ -3226,90 +3711,488 @@ void main() {
 }
 `;
 
-const PLANET_BILLBOARD_FRAGMENT_SHADER = `
-uniform vec3 uSunDirection;
-uniform vec3 uSunColor;
+const PLANET_GLOW_FRAGMENT_SHADER = `
 uniform vec3 uPlanetColor;
-uniform float uHasAtmosphere;
-uniform float uSelected;
+uniform vec3 uGasPaletteHigh;
+uniform vec3 uGasPaletteAccent;
+uniform vec3 uSunDirection;
+uniform vec3 uCameraRight;
+uniform vec3 uCameraUp;
+uniform vec3 uCameraForward;
+uniform sampler2D uGasNoiseTexture;
+uniform float uPlanetClass;
+uniform float uPlanetSeed;
 uniform float uTime;
 
 varying vec2 vUv;
 
-const float PI = 3.14159265359;
-const vec3 betaR = vec3(5.5e-6, 13.0e-6, 22.4e-6);
-const vec3 betaM = vec3(21e-6);
-const float g = 0.76;
+float sampleGlowNoise(vec3 point, float scale, vec3 offset) {
+  vec3 axis = normalize(point);
+  vec3 blend = pow(abs(axis), vec3(1.35));
+  blend /= max(blend.x + blend.y + blend.z, 0.0001);
+  vec3 p = point * scale + offset;
+  float x = texture2D(uGasNoiseTexture, p.yz).r;
+  float y = texture2D(uGasNoiseTexture, p.zx).r;
+  float z = texture2D(uGasNoiseTexture, p.xy).r;
 
-float rayleighPhase(float mu) {
-  return 3.0 * (1.0 + mu * mu) / (16.0 * PI);
-}
-
-float henyeyGreensteinPhase(float mu) {
-  return (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * mu, 1.5));
+  return mix((x + y + z) * 0.333333, x * blend.x + y * blend.y + z * blend.z, 0.58);
 }
 
 void main() {
   vec2 centered = vUv * 2.0 - 1.0;
   float radius = length(centered);
-  const float solidRadius = 0.925;
-  float atmosphereRadius = mix(solidRadius, 0.968, uHasAtmosphere);
 
-  if (radius > atmosphereRadius) {
+  if (radius > 1.0) {
+    discard;
+  }
+
+  float gasMask = 1.0 - step(0.5, uPlanetClass);
+  float bodyEdge = 0.637;
+  float outside = max(radius - bodyEdge, 0.0);
+  float radialFalloff = clamp(outside / max(1.0 - bodyEdge, 0.0001), 0.0, 1.0);
+  vec2 spherePoint = centered / bodyEdge;
+  float sphereRadius = min(length(spherePoint), 0.999);
+  vec2 surfacePoint = sphereRadius > 0.0001
+    ? spherePoint * (sphereRadius / max(length(spherePoint), 0.0001))
+    : vec2(0.0);
+  float visibleHemisphere = sqrt(max(1.0 - sphereRadius * sphereRadius, 0.0));
+  vec3 viewNormal = normalize(vec3(surfacePoint, visibleHemisphere));
+  vec3 worldNormal = normalize(
+    uCameraRight * viewNormal.x +
+    uCameraUp * viewNormal.y +
+    uCameraForward * viewNormal.z
+  );
+  vec3 sunDirection = normalize(uSunDirection);
+  vec2 projectedSun = vec2(dot(sunDirection, uCameraRight), dot(sunDirection, uCameraUp));
+  float projectedSunStrength = smoothstep(0.04, 0.3, length(projectedSun));
+  vec2 sunOnBillboard = normalize(projectedSun + vec2(0.0001));
+  float sunward = dot(normalize(centered + vec2(0.0001)), sunOnBillboard);
+  float sunLit = smoothstep(-0.08, 0.62, dot(worldNormal, sunDirection));
+  float directionalLight = mix(1.0, smoothstep(-0.35, 0.82, sunward), projectedSunStrength);
+  float litDust = sunLit * directionalLight;
+  float edgeReveal = smoothstep(bodyEdge - 0.028, bodyEdge + 0.018, radius);
+  float rimBloom = exp(-outside * 6.6) * edgeReveal;
+  float surfaceBloom = exp(-abs(radius - bodyEdge) * 27.0);
+  float hotSurface = exp(-abs(radius - bodyEdge) * 50.0);
+  float wideBloom = exp(-outside * 3.05) *
+    smoothstep(bodyEdge + 0.04, bodyEdge + 0.18, radius);
+  float outerHaze = smoothstep(bodyEdge + 0.12, 0.9, radius);
+  float planetSpin = uTime * 0.009 + uPlanetSeed * 0.013;
+  float spinCos = cos(planetSpin);
+  float spinSin = sin(planetSpin);
+  vec3 spunNormal = vec3(
+    spinCos * worldNormal.x + spinSin * worldNormal.z,
+    worldNormal.y,
+    -spinSin * worldNormal.x + spinCos * worldNormal.z
+  );
+  float dustEmission = uTime * 0.0018;
+  vec3 noisePoint = spunNormal * (1.0 + radialFalloff * 0.18 - dustEmission);
+  float broadNoise = sampleGlowNoise(
+    noisePoint,
+    1.3,
+    vec3(uPlanetSeed * 0.013, uPlanetSeed * 0.017, uPlanetSeed * 0.021)
+  );
+  float fineNoise = sampleGlowNoise(
+    noisePoint,
+    3.75,
+    vec3(uPlanetSeed * 0.007, uPlanetSeed * 0.011, uPlanetSeed * 0.019)
+  );
+  float farMedia = smoothstep(0.26, 0.9, radialFalloff);
+  float mediaNoise = mix(broadNoise, fineNoise, mix(0.24, 0.08, farMedia));
+  float nearDensity = mix(0.82, 1.22, smoothstep(0.18, 0.92, mediaNoise));
+  float farDensity = mix(0.68, 1.08, smoothstep(0.12, 0.92, broadNoise));
+  float farBreakup = mix(
+    1.0,
+    farDensity,
+    farMedia
+  );
+  float thinMedia = mix(1.0, 0.26, smoothstep(0.14, 0.92, radialFalloff));
+  float mediaDensity = nearDensity * farBreakup * thinMedia;
+  float surfaceDensity = mix(0.86, 1.18, smoothstep(0.14, 0.88, mediaNoise));
+  float forwardScatter = pow(
+    clamp(dot(normalize(uCameraForward), sunDirection) * 0.5 + 0.5, 0.0, 1.0),
+    3.0
+  );
+  float terminatorDust = pow(1.0 - abs(dot(worldNormal, sunDirection)), 3.0) *
+    smoothstep(bodyEdge - 0.015, bodyEdge + 0.08, radius);
+  float outerFade = 1.0 - smoothstep(0.94, 1.0, radius);
+  float pulse = sin(uTime * 0.31 + uPlanetSeed * 0.071) * 0.5 + 0.5;
+  vec3 gasBloom = mix(uGasPaletteHigh, uGasPaletteAccent, 0.5);
+  vec3 scatterColor = mix(vec3(0.56, 0.68, 1.0), gasBloom, gasMask * 0.78);
+  vec3 sunWarmth = mix(vec3(1.0, 0.84, 0.58), scatterColor, 0.52);
+  vec3 glowColor = mix(uPlanetColor, scatterColor, 0.72 + gasMask * 0.18);
+  glowColor = mix(glowColor, sunWarmth, litDust * 0.42);
+  glowColor *= mix(1.24, 2.1, gasMask) * mix(0.94, 1.04, broadNoise);
+  float alpha = hotSurface * litDust * mix(0.06, 0.34, gasMask) * surfaceDensity;
+  alpha += surfaceBloom * (0.028 + litDust * mix(0.08, 0.28, gasMask)) * surfaceDensity;
+  alpha += rimBloom * (0.018 + litDust * mix(0.065, 0.22, gasMask)) * mediaDensity;
+  alpha += wideBloom *
+    (0.009 + (litDust + forwardScatter * 0.44) * mix(0.026, 0.09, gasMask)) *
+    mediaDensity;
+  alpha += outerHaze *
+    (0.002 + (litDust + forwardScatter * 0.35) * mix(0.007, 0.024, gasMask)) *
+    mediaDensity;
+  alpha += terminatorDust * mix(0.009, 0.036, gasMask) * (0.25 + litDust) *
+    mediaDensity;
+  alpha *= outerFade;
+  alpha *= 0.9 + pulse * 0.1;
+
+  if (alpha <= 0.002) {
+    discard;
+  }
+
+  gl_FragColor = vec4(glowColor, alpha);
+}
+`;
+
+const PLANET_RING_VERTEX_SHADER = `
+uniform vec3 uSunDirection;
+uniform vec2 uRingEllipse;
+
+varying float vRingRadius;
+varying float vRingAngle;
+varying float vRingLight;
+
+void main() {
+  vec3 localPosition = vec3(position.xy * uRingEllipse, position.z);
+  vec4 worldPosition = modelMatrix * vec4(localPosition, 1.0);
+  vec3 sunDirection = normalize(uSunDirection);
+  vec3 worldNormal = normalize(mat3(modelMatrix) * vec3(0.0, 0.0, 1.0));
+  vec3 viewVector = cameraPosition - worldPosition.xyz;
+  vec3 viewDirection = viewVector * inversesqrt(max(dot(viewVector, viewVector), 0.0001));
+  float planeLight = 0.42 + 0.58 * abs(dot(worldNormal, sunDirection));
+  float viewSunSide = smoothstep(-0.18, 0.72, dot(viewDirection, sunDirection));
+
+  vRingRadius = length(position.xy);
+  vRingAngle = atan(position.y, position.x);
+  vRingLight = planeLight * mix(0.32, 1.0, viewSunSide);
+  gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+`;
+
+const PLANET_BILLBOARD_FRAGMENT_SHADER = `
+uniform vec3 uSunDirection;
+uniform vec3 uPlanetColor;
+uniform vec3 uGasPaletteShadow;
+uniform vec3 uGasPaletteLow;
+uniform vec3 uGasPaletteHigh;
+uniform vec3 uGasPaletteAccent;
+uniform sampler2D uGasGrungeTexture;
+uniform sampler2D uGasNoiseTexture;
+uniform float uPlanetClass;
+uniform float uPlanetSeed;
+uniform vec3 uCameraRight;
+uniform vec3 uCameraUp;
+uniform vec3 uCameraForward;
+uniform float uTime;
+
+varying vec2 vUv;
+
+float rand(vec2 co, float seed) {
+  return fract(sin(dot(co.xy + seed, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float valueNoise(vec2 p, float seed) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+
+  float a = rand(i, seed);
+  float b = rand(i + vec2(1.0, 0.0), seed);
+  float c = rand(i + vec2(0.0, 1.0), seed);
+  float d = rand(i + vec2(1.0, 1.0), seed);
+
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p, float seed) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  float frequency = 1.0;
+
+  for (int octave = 0; octave < 5; octave += 1) {
+    value += amplitude * valueNoise(p * frequency, seed + float(octave) * 19.17);
+    frequency *= 2.03;
+    amplitude *= 0.52;
+  }
+
+  return value;
+}
+
+float triplanarFbm(vec3 p, vec3 normal, float seed) {
+  vec3 blend = pow(abs(normal), vec3(3.0));
+  blend /= max(blend.x + blend.y + blend.z, 0.0001);
+
+  float x = fbm(p.yz, seed + 11.0);
+  float y = fbm(p.zx, seed + 23.0);
+  float z = fbm(p.xy, seed + 37.0);
+
+  return x * blend.x + y * blend.y + z * blend.z;
+}
+
+vec3 rotateY(vec3 p, float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return vec3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
+}
+
+vec3 makeGasGiant(
+  vec3 normal,
+  vec3 baseColor,
+  float seed,
+  vec2 gasTextureUv
+) {
+  vec3 p = normalize(normal);
+  float shear = sin(p.y * 8.0 + uTime * 0.025 + seed * 0.17) * 0.18;
+  vec3 flow = rotateY(p, shear);
+  float turbulence = triplanarFbm(
+    flow * 3.8 + vec3(seed * 0.013, uTime * 0.012, seed * 0.019),
+    flow,
+    seed
+  );
+  float fine = triplanarFbm(
+    flow * 13.0 + vec3(uTime * 0.01, seed * 0.017, -uTime * 0.006),
+    flow,
+    seed + 31.0
+  );
+  float cellular = triplanarFbm(flow * 28.0 + vec3(seed * 0.031), flow, seed + 89.0);
+  float bandWave = sin(
+    flow.y * 38.0 +
+      turbulence * 6.4 +
+      sin(flow.x * 7.0 + flow.z * 4.3 + seed * 0.05) * 0.75
+  );
+  float widthRoll = sin(flow.y * 13.0 + seed * 0.29 + turbulence * 2.2) * 0.5 + 0.5;
+  float bandSignal = bandWave + fine * mix(0.42, 0.96, widthRoll);
+  float ribbon = smoothstep(
+    mix(-0.92, -0.48, widthRoll),
+    mix(0.5, 1.08, widthRoll),
+    bandSignal
+  );
+  float filament = smoothstep(
+    0.88,
+    0.99,
+    sin(flow.y * mix(74.0, 118.0, widthRoll) + turbulence * 7.2 + seed) * 0.5 + 0.5
+  ) * smoothstep(0.42, 0.88, fine + ribbon * 0.24);
+  vec2 grungeUv = gasTextureUv * 3.35 + vec2(turbulence * 0.035, fine * 0.024);
+  vec3 grungeSample = texture2D(uGasGrungeTexture, grungeUv).rgb;
+  float grungeMask = pow(clamp(length(grungeSample) * 0.78, 0.0, 1.0), 1.65);
+  float noiseMask = texture2D(
+    uGasNoiseTexture,
+    gasTextureUv * 2.65 + vec2(seed * 0.017, uTime * 0.012)
+  ).r;
+
+  float paletteRoll = triplanarFbm(flow * 1.75 + vec3(seed * 0.041), flow, seed + 149.0);
+  float accentRoll = smoothstep(0.38, 0.88, fine + turbulence * 0.28);
+  vec3 shadowBand = mix(uGasPaletteShadow, baseColor * 0.38, 0.12);
+  vec3 lowBand = mix(uGasPaletteLow, baseColor * 0.92, 0.16);
+  vec3 highBand = mix(uGasPaletteHigh, vec3(1.0, 0.88, 0.68), 0.1);
+  vec3 accentBand = mix(uGasPaletteAccent, baseColor * 1.16, 0.12);
+  vec3 middle = mix(lowBand, accentBand, paletteRoll * 0.46);
+  vec3 bright = mix(highBand, accentBand, accentRoll * 0.38);
+  vec3 dark = mix(shadowBand, lowBand * 0.46, smoothstep(0.18, 0.82, cellular));
+  vec3 color = mix(dark, middle, smoothstep(0.18, 0.78, turbulence));
+  color = mix(color, bright, ribbon * 0.72);
+  color = mix(color, accentBand, accentRoll * (0.1 + ribbon * 0.18));
+  color = mix(
+    color,
+    mix(highBand, accentBand, 0.45),
+    filament * (0.14 + noiseMask * 0.14)
+  );
+  color = mix(
+    color,
+    mix(vec3(1.0, 0.8, 0.7) * 0.8, highBand, 0.25),
+    grungeMask * smoothstep(0.32, 0.92, turbulence + noiseMask * 0.28) * 0.32
+  );
+  color = mix(
+    color,
+    shadowBand * 0.7,
+    grungeMask * (1.0 - noiseMask) * smoothstep(0.36, 0.86, cellular) * 0.18
+  );
+  color += (fine - 0.48) * (highBand - shadowBand) * 0.28;
+  color += (cellular - 0.5) * mix(accentBand, shadowBand, 0.55) * 0.2;
+
+  vec3 stormCenter = normalize(vec3(
+    0.54 + 0.22 * sin(seed * 0.71),
+    0.11 * sin(seed * 0.37),
+    0.72 + 0.12 * cos(seed * 0.43)
+  ));
+  float stormDistance = length(flow - stormCenter);
+  float storm = smoothstep(0.27, 0.07, stormDistance);
+  float stormEye = smoothstep(
+    0.08,
+    0.02,
+    length(flow - normalize(stormCenter + vec3(0.05, 0.0, -0.03)))
+  );
+  vec3 stormColor = mix(accentBand, highBand, 0.32);
+  color = mix(color, stormColor, storm * 0.48);
+  color += stormEye * mix(accentBand, vec3(0.32, 0.16, 0.08), 0.38);
+
+  return clamp(color, 0.0, 1.0);
+}
+
+vec3 makeTerran(vec3 normal, vec3 baseColor) {
+  vec3 soil = mix(baseColor, vec3(0.34, 0.43, 0.25), 0.42);
+  float polarTint = smoothstep(0.72, 0.94, abs(normal.y));
+
+  return mix(soil, vec3(0.78, 0.82, 0.76), polarTint * 0.18);
+}
+
+vec3 makeIceWorld(vec3 normal, vec3 baseColor) {
+  vec3 ice = mix(baseColor, vec3(0.74, 0.9, 1.0), 0.72);
+  float glint = pow(max(normal.y, 0.0), 4.0);
+
+  return clamp(ice + glint * vec3(0.08, 0.1, 0.12), 0.0, 1.0);
+}
+
+vec3 samplePlanetSurface(vec3 normal, vec3 spunNormal, vec2 gasTextureUv) {
+  if (uPlanetClass < 0.5) {
+    return makeGasGiant(spunNormal, uPlanetColor, uPlanetSeed, gasTextureUv);
+  }
+
+  if (uPlanetClass < 1.5) {
+    return makeTerran(normal, uPlanetColor);
+  }
+
+  return makeIceWorld(normal, uPlanetColor);
+}
+
+void main() {
+  vec2 centered = vUv * 2.0 - 1.0;
+  float radius = length(centered);
+  float solidRadius = 0.925;
+
+  if (radius > solidRadius) {
     discard;
   }
 
   vec2 spherePoint = centered / solidRadius;
   float sphereRadius = length(spherePoint);
   float visibleHemisphere = sqrt(max(1.0 - sphereRadius * sphereRadius, 0.0));
-  vec3 normal = normalize(vec3(spherePoint, visibleHemisphere));
+  vec3 viewNormal = normalize(vec3(spherePoint, visibleHemisphere));
+  vec3 normal = normalize(
+    uCameraRight * viewNormal.x +
+    uCameraUp * viewNormal.y +
+    uCameraForward * viewNormal.z
+  );
+  vec3 spunNormal = rotateY(normal, uTime * 0.028 + uPlanetSeed * 0.013);
+  vec2 gasTextureUv = vec2(
+    atan(max(visibleHemisphere, 0.0001), spherePoint.x) * 0.18 +
+      uTime * 0.006 +
+      uPlanetSeed * 0.013,
+    spherePoint.y * 0.13 + 0.5 + uPlanetSeed * 0.017
+  );
   vec3 sunDirection = normalize(uSunDirection);
   float mu = dot(normal, sunDirection);
-  float sunSide = smoothstep(-0.28, 0.82, mu);
   float solidMask = 1.0 - smoothstep(solidRadius - 0.004, solidRadius + 0.004, radius);
-  float surfaceHaze = smoothstep(solidRadius * 0.58, solidRadius + 0.006, radius);
-  float shell = smoothstep(solidRadius - 0.032, solidRadius + 0.004, radius) *
-    (1.0 - smoothstep(atmosphereRadius - 0.012, atmosphereRadius, radius));
-  float interiorColumn = solidMask * (0.56 + 0.44 * surfaceHaze);
-  float innerAir = interiorColumn * (0.34 + 0.48 * sunSide);
-  float horizonColumn = pow(max(shell, 0.0), 1.18);
-  float phaseR = rayleighPhase(mu);
-  float phaseM = henyeyGreensteinPhase(mu);
-  vec3 scatter =
-    betaR * phaseR * vec3(0.72, 1.08, 1.85) * 210000.0 +
-    betaM * phaseM * vec3(1.16, 0.92, 0.74) * 52000.0;
-  vec3 forwardSun = uSunColor * pow(max(mu, 0.0), 18.0) * 0.82;
-  vec3 lowColor = uPlanetColor * 0.58;
-  vec3 highColor = mix(uPlanetColor * 1.24, vec3(0.72), 0.18);
-  vec3 earth = mix(uPlanetColor * 0.68, vec3(0.34, 0.25, 0.16), 0.16);
-  float continent = smoothstep(
-    -0.24,
-    0.58,
-    sin(centered.x * 7.4 + centered.y * 2.2) +
-      0.5 * sin(centered.y * 8.6 - centered.x * 3.1)
-  );
-  vec3 surface = mix(lowColor, highColor, continent * 0.26);
-  surface = mix(surface, earth, continent * smoothstep(-0.15, 0.65, centered.y) * 0.08);
+  vec3 surface = samplePlanetSurface(normal, spunNormal, gasTextureUv);
   float limbShade = 1.0 - smoothstep(0.24, solidRadius, radius) * 0.34;
-  float lightShade = 0.36 + 0.62 * sunSide;
-  vec3 planetColor = surface * limbShade * lightShade;
-  planetColor += vec3(0.10, 0.19, 0.36) * (1.0 - sunSide) * 0.42;
+  vec3 viewDirection = normalize(uCameraForward);
+  vec3 halfVector = normalize(sunDirection + viewDirection);
+  float diffuse = max(mu, 0.0);
+  float wrapDiffuse = smoothstep(-0.18, 0.92, mu);
+  float specularPower = mix(28.0, 72.0, step(1.5, uPlanetClass));
+  float specularStrength = mix(0.08, 0.18, step(1.5, uPlanetClass));
+  float specular = pow(max(dot(normal, halfVector), 0.0), specularPower) *
+    specularStrength *
+    step(0.0, mu);
+  vec3 nightTint = mix(vec3(0.03, 0.04, 0.07), surface * 0.22, 0.44);
+  vec3 litColor = surface * (0.18 + diffuse * 0.72 + wrapDiffuse * 0.18);
+  vec3 color = mix(nightTint, litColor, wrapDiffuse) * limbShade;
+  color += vec3(1.0, 0.94, 0.82) * specular;
+  float gasMask = 1.0 - step(0.5, uPlanetClass);
+  vec2 projectedDirection = normalize(spherePoint + vec2(0.001));
+  float directionalWash = pow(
+    clamp(dot(projectedDirection, normalize(vec2(1.0, 0.5))), 0.0, 1.0),
+    0.9
+  );
+  float centerPreserve = pow(abs(radius / solidRadius - 1.0), 0.7);
+  vec3 edgeWash = mix(vec3(0.8, 0.7, 0.6), color, 1.0 - directionalWash * 0.62);
+  color = mix(color, mix(edgeWash, color, centerPreserve), gasMask);
 
-  vec3 atmosphereTint = mix(vec3(0.14, 0.34, 0.95), uPlanetColor * 1.18, 0.42);
-  vec3 atmosphericVeil = scatter * innerAir * vec3(0.72, 0.88, 1.25) * uHasAtmosphere;
-  atmosphericVeil += atmosphereTint * innerAir * (0.55 + 0.45 * sunSide) * uHasAtmosphere;
-  vec3 atmosphereColor = (scatter * (0.34 + sunSide * 1.72) + forwardSun) * horizonColumn;
-  atmosphereColor += atmosphereTint * horizonColumn * (0.35 + 0.65 * sunSide) * uHasAtmosphere;
-  atmosphereColor += atmosphericVeil;
-  vec3 color = mix(planetColor * solidMask, planetColor * solidMask * 0.38 + atmosphereColor, uHasAtmosphere);
-  float selectedRing = uSelected *
-    smoothstep(solidRadius + 0.012, solidRadius + 0.022, radius) *
-    (1.0 - smoothstep(atmosphereRadius - 0.014, atmosphereRadius, radius));
-  color = mix(color, vec3(1.0, 0.84, 0.22), selectedRing);
+  float alpha = solidMask;
 
-  float atmosphereAlpha = clamp(shell * (0.14 + sunSide * 0.36) + innerAir, 0.0, 0.42);
-  float alpha = max(max(solidMask, atmosphereAlpha * uHasAtmosphere), selectedRing);
+  if (alpha <= 0.004) {
+    discard;
+  }
+
   gl_FragColor = vec4(color, alpha);
+}
+`;
+
+const PLANET_RING_FRAGMENT_SHADER = `
+uniform vec3 uPlanetColor;
+uniform float uPlanetSeed;
+
+varying float vRingRadius;
+varying float vRingAngle;
+varying float vRingLight;
+
+float seeded(float value) {
+  return fract(sin(value * 12.9898 + uPlanetSeed * 78.233) * 43758.5453);
+}
+
+void main() {
+  float radial = clamp(
+    (vRingRadius - ${PLANET_RING_INNER_RADIUS.toFixed(2)}) /
+      ${(
+        PLANET_RING_OUTER_RADIUS - PLANET_RING_INNER_RADIUS
+      ).toFixed(2)},
+    0.0,
+    1.0
+  );
+  float edgeFade =
+    smoothstep(0.0, 0.05, radial) *
+    (1.0 - smoothstep(0.94, 1.0, radial));
+  float profileRoll = seeded(3.17);
+  float fineFrequency = mix(52.0, 112.0, seeded(8.41));
+  float radialWave =
+    sin(radial * fineFrequency + seeded(9.7) * 6.28318530718) * 0.5 + 0.5;
+  float angularDust =
+    sin(vRingAngle * mix(17.0, 31.0, seeded(12.7)) + radial * 18.0 + uPlanetSeed) *
+      0.5 + 0.5;
+  float bandAWidth = mix(0.03, 0.09, profileRoll);
+  float bandBWidth = mix(0.025, 0.08, seeded(5.4));
+  float bandCWidth = mix(0.035, 0.12, seeded(7.6));
+  float gapWidth = mix(0.02, 0.045, seeded(10.8));
+  float bandA = 1.0 - smoothstep(
+    0.0,
+    bandAWidth,
+    abs(radial - mix(0.18, 0.36, seeded(4.3)))
+  );
+  float bandB = 1.0 - smoothstep(
+    0.0,
+    bandBWidth,
+    abs(radial - mix(0.44, 0.68, seeded(6.5)))
+  );
+  float bandC = 1.0 - smoothstep(
+    0.0,
+    bandCWidth,
+    abs(radial - mix(0.72, 0.9, seeded(8.7)))
+  );
+  float gap = 1.0 - smoothstep(
+    0.0,
+    gapWidth,
+    abs(radial - mix(0.32, 0.82, seeded(11.9)))
+  );
+  float density =
+    mix(0.18, 0.36, profileRoll) +
+    radialWave * mix(0.08, 0.18, seeded(13.1)) +
+    angularDust * 0.035 +
+    bandA * mix(0.2, 0.42, seeded(14.2)) +
+    bandB * mix(0.16, 0.36, seeded(15.3)) +
+    bandC * mix(0.1, 0.28, seeded(16.4));
+  density *= 1.0 - gap * mix(0.55, 0.88, seeded(17.5));
+  float alpha = edgeFade * density * mix(0.34, 0.62, profileRoll);
+  vec3 gasColor = mix(uPlanetColor * 0.62, vec3(0.58, 0.54, 0.48), 0.55);
+  vec3 dustColor = mix(vec3(0.82, 0.72, 0.55), uPlanetColor * 0.92, 0.18);
+  vec3 ringColor = mix(gasColor, dustColor, smoothstep(0.24, 0.86, radialWave + bandA * 0.25));
+  ringColor *= vRingLight * (0.72 + density * 0.28);
+
+  if (alpha <= 0.003) {
+    discard;
+  }
+
+  gl_FragColor = vec4(clamp(ringColor, 0.0, 1.0), clamp(alpha, 0.0, 0.58));
 }
 `;
 

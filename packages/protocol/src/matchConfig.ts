@@ -53,6 +53,14 @@ export type PlanetOrbitConfig = Readonly<{
   angularSpeed: number;
 }>;
 
+export type PlanetClass = "gas-giant" | "terran" | "ice";
+
+export type PlanetAppearanceConfig = Readonly<{
+  planetClass: PlanetClass;
+  hasRings: boolean;
+  seed: number;
+}>;
+
 export type InitialPlanetConfig = Readonly<{
   templateId: number;
   name: string;
@@ -61,6 +69,7 @@ export type InitialPlanetConfig = Readonly<{
   radius: number;
   color: string;
   hasAtmosphere: boolean;
+  appearance: PlanetAppearanceConfig;
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;
@@ -136,6 +145,7 @@ function generatePlanetarySystem(seed: number): {
 
   for (let index = 0; index < planetCount; index += 1) {
     const radius = quantize(24 + random() * 20);
+    const appearance = samplePlanetAppearance(random, radius, false);
     const orbitAxis = sampleOrbitAxis(random);
     const orbitRadius = index === 0 ? 64 : 126 + index * 82 + random() * 34;
     const orbit: PlanetOrbitConfig = {
@@ -159,8 +169,10 @@ function generatePlanetarySystem(seed: number): {
         7_200_000_000 * Math.pow(radius / 28, 3) * (0.9 + random() * 0.22)
       ),
       radius,
-      color: samplePlanetColor(random, index, false),
-      hasAtmosphere: true,
+      color: samplePlanetColor(random, index, false, appearance.planetClass),
+      hasAtmosphere:
+        appearance.planetClass !== "ice" || random() < 0.42,
+      appearance,
       orbitAxis,
       orbit,
       parentPlanetIndex: null,
@@ -180,6 +192,7 @@ function generatePlanetarySystem(seed: number): {
 
     for (let moonIndex = 0; moonIndex < moonCount; moonIndex += 1) {
       const moonRadius = quantize(radius * (0.22 + random() * 0.16));
+      const appearance = samplePlanetAppearance(random, moonRadius, true);
       const moonAxis = sampleOrbitAxis(random);
       const moonDistance = radius * (2.05 + random() * 1.2) + moonRadius;
       const moonOrbit: PlanetOrbitConfig = {
@@ -201,14 +214,22 @@ function generatePlanetarySystem(seed: number): {
           planet.mass * Math.pow(moonRadius / Math.max(radius, 1), 3) * 0.8
         ),
         radius: moonRadius,
-        color: samplePlanetColor(random, planets.length, true),
+        color: samplePlanetColor(
+          random,
+          planets.length,
+          true,
+          appearance.planetClass
+        ),
         hasAtmosphere: false,
+        appearance,
         orbitAxis: moonAxis,
         orbit: moonOrbit,
         parentPlanetIndex,
       });
     }
   }
+
+  enforceSingleRingedPlanet(planets);
 
   return {
     environment: {
@@ -225,6 +246,54 @@ function generatePlanetarySystem(seed: number): {
     },
     planets,
   };
+}
+
+function enforceSingleRingedPlanet(planets: InitialPlanetConfig[]): void {
+  const ringedIndex = selectRingedPlanetIndex(planets);
+
+  if (ringedIndex === -1) {
+    return;
+  }
+
+  for (let index = 0; index < planets.length; index += 1) {
+    const planet = planets[index];
+    const hasRings = index === ringedIndex;
+
+    if (planet.appearance.hasRings === hasRings) {
+      continue;
+    }
+
+    planets[index] = {
+      ...planet,
+      appearance: {
+        ...planet.appearance,
+        hasRings,
+      },
+    };
+  }
+}
+
+function selectRingedPlanetIndex(planets: readonly InitialPlanetConfig[]): number {
+  for (let index = 0; index < planets.length; index += 1) {
+    const planet = planets[index];
+
+    if (planet.parentPlanetIndex === null && planet.appearance.hasRings) {
+      return index;
+    }
+  }
+
+  for (let index = 0; index < planets.length; index += 1) {
+    const planet = planets[index];
+
+    if (
+      planet.parentPlanetIndex === null &&
+      planet.appearance.planetClass === "gas-giant"
+    ) {
+      return index;
+    }
+  }
+
+  return planets.findIndex((planet) => planet.parentPlanetIndex === null);
 }
 
 function createInitialUnits(
@@ -276,15 +345,72 @@ function createInitialUnits(
 function samplePlanetColor(
   random: () => number,
   index: number,
-  muted: boolean
+  muted: boolean,
+  planetClass: PlanetClass
 ): string {
   const goldenRatioConjugate = 0.618033988749895;
-  const hue = (0.09 + index * goldenRatioConjugate + random() * 0.22) % 1;
-  const saturation = muted ? 0.16 + random() * 0.16 : 0.34 + random() * 0.22;
-  const value = muted ? 0.36 + random() * 0.18 : 0.52 + random() * 0.22;
+  let hue: number;
+  let saturation: number;
+  let value: number;
+
+  if (planetClass === "gas-giant") {
+    const palette = random();
+    if (palette < 0.25) {
+      hue = 0.55 + random() * 0.08;
+    } else if (palette < 0.5) {
+      hue = 0.72 + random() * 0.08;
+    } else if (palette < 0.75) {
+      hue = 0.035 + random() * 0.08;
+    } else {
+      hue = 0.22 + random() * 0.08;
+    }
+    saturation = muted ? 0.24 + random() * 0.16 : 0.38 + random() * 0.26;
+    value = muted ? 0.46 + random() * 0.18 : 0.58 + random() * 0.26;
+  } else if (planetClass === "ice") {
+    hue = 0.52 + random() * 0.12;
+    saturation = muted ? 0.12 + random() * 0.1 : 0.18 + random() * 0.16;
+    value = muted ? 0.54 + random() * 0.16 : 0.66 + random() * 0.2;
+  } else {
+    hue = (0.36 + index * goldenRatioConjugate + random() * 0.16) % 1;
+    saturation = muted ? 0.2 + random() * 0.14 : 0.42 + random() * 0.24;
+    value = muted ? 0.42 + random() * 0.16 : 0.48 + random() * 0.24;
+  }
+
   const rgb = hsvToRgb(hue, saturation, value);
 
   return rgbToHex(rgb.r, rgb.g, rgb.b);
+}
+
+function samplePlanetAppearance(
+  random: () => number,
+  radius: number,
+  moon: boolean
+): PlanetAppearanceConfig {
+  const sizeBias = moon
+    ? clamp((radius - 6) / 10, 0, 1)
+    : clamp((radius - 24) / 20, 0, 1);
+  const roll = random();
+  let planetClass: PlanetClass;
+
+  if (moon) {
+    planetClass = roll < 0.72 + sizeBias * 0.08 ? "ice" : "terran";
+  } else if (roll < 0.26 + sizeBias * 0.26) {
+    planetClass = "gas-giant";
+  } else if (roll < 0.76) {
+    planetClass = "terran";
+  } else {
+    planetClass = "ice";
+  }
+
+  const ringChance =
+    planetClass === "gas-giant" ? 0.62 : planetClass === "ice" ? 0.16 : 0.07;
+  const hasRings = random() < (moon ? ringChance * 0.12 : ringChance);
+
+  return {
+    planetClass,
+    hasRings,
+    seed: quantize(17 + random() * 983),
+  };
 }
 
 function sampleOrbitAxis(random: () => number): Vec3Data {

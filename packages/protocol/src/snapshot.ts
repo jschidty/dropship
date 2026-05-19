@@ -2,6 +2,7 @@ import type { EntityHandle, PlayerId } from "./handles";
 import type {
   MatchEnvironmentConfig,
   PlayerConfig,
+  PlanetAppearanceConfig,
   PlanetOrbitConfig,
   QuaternionData,
   Vec3Data,
@@ -45,6 +46,7 @@ export type PlanetSnapshot = Readonly<{
   radius: number;
   color: string;
   hasAtmosphere: boolean;
+  appearance: PlanetAppearanceConfig;
   orbitAxis: Vec3Data;
   orbit: PlanetOrbitConfig;
   parentPlanetIndex: number | null;

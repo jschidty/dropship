@@ -102,6 +102,7 @@ function testSeededMatchGeneration(): void {
   const moonCount = first.initialPlanets.filter(
     (planet) => planet.parentPlanetIndex !== null
   ).length;
+  const planetClasses = new Set<string>();
 
   assert.deepEqual(first.initialPlanets, second.initialPlanets);
   assert.deepEqual(first.environment, second.environment);
@@ -110,9 +111,20 @@ function testSeededMatchGeneration(): void {
   assert.ok(first.initialPlanets.length <= 4);
   assert.ok(moonCount >= 1);
   assert.ok(moonCount <= 3);
+  const ringedPlanets = first.initialPlanets.filter(
+    (planet) => planet.appearance.hasRings
+  );
+  assert.equal(ringedPlanets.length, 1);
+  assert.equal(ringedPlanets[0]?.parentPlanetIndex, null);
 
   for (const planet of first.initialPlanets) {
     assert.match(planet.color, /^#[0-9a-f]{6}$/);
+    assert.ok(
+      ["gas-giant", "terran", "ice"].includes(planet.appearance.planetClass)
+    );
+    assert.equal(typeof planet.appearance.hasRings, "boolean");
+    assert.ok(Number.isFinite(planet.appearance.seed));
+    planetClasses.add(planet.appearance.planetClass);
     assert.ok(planet.radius > 0);
     assert.ok(planet.mass > 0);
     assert.ok(planet.orbit.radius > 0);
@@ -120,12 +132,15 @@ function testSeededMatchGeneration(): void {
 
     if (planet.parentPlanetIndex !== null) {
       assert.equal(planet.hasAtmosphere, false);
+      assert.notEqual(planet.appearance.planetClass, "gas-giant");
       moonsByParent.set(
         planet.parentPlanetIndex,
         (moonsByParent.get(planet.parentPlanetIndex) ?? 0) + 1
       );
     }
   }
+
+  assert.ok(planetClasses.size >= 1);
 
   for (const count of moonsByParent.values()) {
     assert.ok(count <= 2);
@@ -216,7 +231,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "d4c2e5a9");
+  assert.equal(first, "3171bff9");
 }
 
 function testDefaultSteeringMovesUnits(): void {

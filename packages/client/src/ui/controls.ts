@@ -1,5 +1,6 @@
 import { CAMERA_PRESETS, type CameraPreset } from "../camera/config";
 import { SHIP_CLASS_IDS, type ShipClassId } from "@drop-ship/protocol";
+import { createUnitSymbolImageUrl } from "../render/canvasTextures";
 import type { LocalGameRuntime, RenderQualityMode, UnitViewModel } from "../types";
 
 export type CameraPresetControls = Readonly<{
@@ -47,6 +48,8 @@ type CommandUnitGroupControls = Readonly<{
 type CommandUnitRowControls = Readonly<{
   root: HTMLElement;
   selectButton: HTMLButtonElement;
+  icon: HTMLImageElement;
+  label: HTMLElement;
   removeButton: HTMLButtonElement;
 }>;
 
@@ -494,11 +497,18 @@ function syncUnitButtons(
     if (!row) {
       const root = document.createElement("div");
       const selectButton = document.createElement("button");
+      const icon = document.createElement("img");
+      const label = document.createElement("span");
       const removeButton = document.createElement("button");
 
       root.className = "command-menu-unit";
       selectButton.type = "button";
       selectButton.className = "command-menu-unit-select";
+      icon.className = "command-menu-unit-symbol";
+      icon.alt = "";
+      icon.draggable = false;
+      icon.setAttribute("aria-hidden", "true");
+      label.className = "command-menu-unit-label";
       removeButton.type = "button";
       removeButton.className = "command-menu-unit-remove";
       removeButton.setAttribute("aria-label", "Deselect unit");
@@ -527,10 +537,13 @@ function syncUnitButtons(
 
         removeButton.blur();
       });
+      selectButton.append(icon, label);
       root.append(selectButton, removeButton);
       row = {
         root,
         selectButton,
+        icon,
+        label,
         removeButton,
       };
       groupControls.rows.set(unit.key, row);
@@ -540,7 +553,12 @@ function syncUnitButtons(
     row.root.dataset.unitKey = unit.key;
     row.root.setAttribute("aria-selected", String(unit.key === leaderKey));
     row.selectButton.dataset.unitKey = unit.key;
-    row.selectButton.textContent = `${unit.label} #${unit.handle.id}`;
+    row.icon.src = createUnitSymbolImageUrl(
+      unit.color,
+      unit.owner,
+      unit.shipClassId
+    );
+    row.label.textContent = `${unit.label} #${unit.handle.id}`;
     row.selectButton.setAttribute(
       "aria-pressed",
       String(unit.key === leaderKey)

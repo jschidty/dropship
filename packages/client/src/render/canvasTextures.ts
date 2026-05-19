@@ -9,12 +9,49 @@ const SDF_TEXTURE_SIZE = 256;
 const SDF_SUPERSAMPLE_GRID = 3;
 const PI = Math.PI;
 const TAU = PI * 2;
+const UNIT_SYMBOL_IMAGE_URLS = new Map<string, string>();
 
 export function createUnitSymbolTexture(
   colorValue: string,
   owner: PlayerId,
   shipClassId: ShipClassId | number
 ): THREE.CanvasTexture {
+  const texture = new THREE.CanvasTexture(
+    createUnitSymbolCanvas(colorValue, owner, shipClassId)
+  );
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+
+export function createUnitSymbolImageUrl(
+  colorValue: string,
+  owner: PlayerId,
+  shipClassId: ShipClassId | number
+): string {
+  const key = `${colorValue}:${owner}:${shipClassId}`;
+  const cached = UNIT_SYMBOL_IMAGE_URLS.get(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  const imageUrl = createUnitSymbolCanvas(
+    colorValue,
+    owner,
+    shipClassId
+  ).toDataURL("image/png");
+  UNIT_SYMBOL_IMAGE_URLS.set(key, imageUrl);
+  return imageUrl;
+}
+
+function createUnitSymbolCanvas(
+  colorValue: string,
+  owner: PlayerId,
+  shipClassId: ShipClassId | number
+): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = SDF_TEXTURE_SIZE;
   canvas.height = SDF_TEXTURE_SIZE;
@@ -36,12 +73,7 @@ export function createUnitSymbolTexture(
     drawSdfSymbol(context, colorValue, drawIntuitionSdf);
   }
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.generateMipmaps = false;
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  return texture;
+  return canvas;
 }
 
 function drawSdfSymbol(

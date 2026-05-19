@@ -272,7 +272,26 @@ canvas {
 }
 
 .command-menu-unit-select {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 6px;
   padding: 0 8px;
+}
+
+.command-menu-unit-symbol {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.command-menu-unit-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command-menu-unit-remove {

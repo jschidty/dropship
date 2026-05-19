@@ -43,6 +43,8 @@ import {
   SIM_TAU,
   deterministicCos,
   deterministicSin,
+  deterministicSqrt,
+  quantizeSimFloat,
 } from "./deterministicMath";
 
 export const SIM_TICK_RATE = PHASE_ONE_SIM_HZ;
@@ -193,8 +195,8 @@ export const PhysicsSystem: SimSystem = {
 
 export const CollisionSystem: SimSystem = {
   name: "CollisionSystem",
-  run() {
-    // Collision is intentionally absent from the minimal game instance.
+  run(world) {
+    resolvePlanetCollisions(world);
   },
 };
 
@@ -611,6 +613,62 @@ function computeSpawnPosition(dropShip: SimUnit, tick: number): Vec3Data {
     y: dropShip.position.y + ((dropShip.handle.id % 3) - 1) * 1.5,
     z: dropShip.position.z + deterministicCos(angle) * radius,
   };
+}
+
+function resolvePlanetCollisions(world: SimWorld): void {
+  const shipStats = new Map<number, ShipStats>();
+
+  for (const unit of getUnitsInStableOrder(world)) {
+    const stats = readUnitShipStats(world, shipStats, unit);
+
+    for (const planet of getPlanetsInStableOrder(world)) {
+      const minimumDistance = planet.radius + stats.colliderRadius + 0.35;
+      const offsetX = unit.position.x - planet.position.x;
+      const offsetY = unit.position.y - planet.position.y;
+      const offsetZ = unit.position.z - planet.position.z;
+      const distanceSquaredValue =
+        offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
+
+      if (distanceSquaredValue >= minimumDistance * minimumDistance) {
+        continue;
+      }
+
+      let normalX: number;
+      let normalY: number;
+      let normalZ: number;
+
+      if (distanceSquaredValue <= 0.000001) {
+        const angle = unit.handle.id * 2.399963229728653;
+        normalX = deterministicSin(angle);
+        normalY = 0;
+        normalZ = deterministicCos(angle);
+      } else {
+        const distance = deterministicSqrt(distanceSquaredValue);
+        normalX = offsetX / distance;
+        normalY = offsetY / distance;
+        normalZ = offsetZ / distance;
+      }
+
+      unit.position = {
+        x: quantizeSimFloat(planet.position.x + normalX * minimumDistance),
+        y: quantizeSimFloat(planet.position.y + normalY * minimumDistance),
+        z: quantizeSimFloat(planet.position.z + normalZ * minimumDistance),
+      };
+
+      const inwardSpeed =
+        unit.velocity.x * normalX +
+        unit.velocity.y * normalY +
+        unit.velocity.z * normalZ;
+
+      if (inwardSpeed < 0) {
+        unit.velocity = {
+          x: quantizeSimFloat(unit.velocity.x - normalX * inwardSpeed),
+          y: quantizeSimFloat(unit.velocity.y - normalY * inwardSpeed),
+          z: quantizeSimFloat(unit.velocity.z - normalZ * inwardSpeed),
+        };
+      }
+    }
+  }
 }
 
 function distanceSquared(a: Vec3Data, b: Vec3Data): number {

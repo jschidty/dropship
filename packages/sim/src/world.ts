@@ -26,7 +26,9 @@ import {
 import { createPrngStream, type PrngStream } from "./prng";
 import {
   deterministicCos,
+  deterministicSqrt,
   deterministicSin,
+  quantizeSimFloat,
 } from "./deterministicMath";
 
 export type SimUnitMoveOrder = {
@@ -194,6 +196,8 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
         initialOwner: initialPlanet.initialOwner,
       });
     }
+
+    keepAllUnitsOutsidePlanets(world);
   }
 
   return world;
@@ -246,6 +250,12 @@ export function spawnUnit(
   const template = world.content.getUnitTemplate(options.templateId);
   const handle = options.handle ?? allocateHandle(world.ids);
   const runtimeEntityId = allocateRuntimeEntityId(world);
+  const position = keepPositionOutsidePlanets(
+    world,
+    options.position,
+    template.stats.colliderRadius,
+    handle.id
+  );
   const health = options.health ?? {
     current: template.stats.maxHealth,
     max: template.stats.maxHealth,
@@ -256,8 +266,8 @@ export function spawnUnit(
     owner: options.owner,
     templateId: options.templateId,
     shipClassId: template.shipClassId,
-    position: copyVec3(options.position),
-    prevPosition: copyVec3(options.position),
+    position,
+    prevPosition: copyVec3(position),
     velocity: copyVec3(options.velocity ?? template.initialVelocity),
     rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
     moveOrder: copyUnitOrder(options.moveOrder ?? null),
@@ -396,6 +406,61 @@ export function capturePrevPositions(world: SimWorld): void {
   for (const unit of world.units) {
     unit.prevPosition = copyVec3(unit.position);
   }
+}
+
+export function keepAllUnitsOutsidePlanets(world: SimWorld): void {
+  for (const unit of getUnitsInStableOrder(world)) {
+    const stats = world.content.getUnitTemplate(unit.templateId).stats;
+    unit.position = keepPositionOutsidePlanets(
+      world,
+      unit.position,
+      stats.colliderRadius,
+      unit.handle.id
+    );
+    unit.prevPosition = copyVec3(unit.position);
+  }
+}
+
+export function keepPositionOutsidePlanets(
+  world: SimWorld,
+  position: Vec3Data,
+  colliderRadius: number,
+  fallbackSeed: number
+): Vec3Data {
+  let adjusted = copyVec3(position);
+
+  for (const planet of getPlanetsInStableOrder(world)) {
+    const minimumDistance = planet.radius + colliderRadius + 0.35;
+    const offsetX = adjusted.x - planet.position.x;
+    const offsetY = adjusted.y - planet.position.y;
+    const offsetZ = adjusted.z - planet.position.z;
+    const distanceSquaredValue =
+      offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
+
+    if (distanceSquaredValue >= minimumDistance * minimumDistance) {
+      continue;
+    }
+
+    if (distanceSquaredValue <= 0.000001) {
+      const angle = fallbackSeed * 2.399963229728653;
+      adjusted = {
+        x: quantizeSimFloat(planet.position.x + deterministicSin(angle) * minimumDistance),
+        y: quantizeSimFloat(planet.position.y),
+        z: quantizeSimFloat(planet.position.z + deterministicCos(angle) * minimumDistance),
+      };
+      continue;
+    }
+
+    const distance = deterministicSqrt(distanceSquaredValue);
+    const scale = minimumDistance / distance;
+    adjusted = {
+      x: quantizeSimFloat(planet.position.x + offsetX * scale),
+      y: quantizeSimFloat(planet.position.y + offsetY * scale),
+      z: quantizeSimFloat(planet.position.z + offsetZ * scale),
+    };
+  }
+
+  return adjusted;
 }
 
 export function copyVec3(vector: Vec3Data): Vec3Data {

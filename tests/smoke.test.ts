@@ -38,6 +38,8 @@ testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
 testCaptureDemoConfig();
+testShipsSpawnOutsidePlanets();
+testPlanetCollisionKeepsShipsOutside();
 testDropShipCapturesPlanet();
 testDropShipSpawnsFighters();
 testNpcDefenderIssuesAttackOrders();
@@ -320,6 +322,39 @@ function testCaptureDemoConfig(): void {
   assert.ok(world.planets.some((planet) => planet.control.capturable));
 }
 
+function testShipsSpawnOutsidePlanets(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  assertUnitsOutsidePlanets(world);
+}
+
+function testPlanetCollisionKeepsShipsOutside(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.control.capturable);
+  const unit = world.units[0];
+
+  assert.ok(planet);
+  assert.ok(unit);
+
+  unit.position = {
+    x: planet.position.x,
+    y: planet.position.y,
+    z: planet.position.z,
+  };
+  unit.prevPosition = unit.position;
+  unit.velocity = { x: -10, y: 0, z: 0 };
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assertUnitsOutsidePlanets(world);
+}
+
 function testDropShipCapturesPlanet(): void {
   const config = {
     ...createCaptureDemoConfig({ seed: 1337 }),
@@ -575,6 +610,20 @@ function distance(
   b: Readonly<{ x: number; y: number; z: number }>
 ): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function assertUnitsOutsidePlanets(world: ReturnType<typeof createWorld>): void {
+  for (const unit of world.units) {
+    const stats = world.content.getUnitTemplate(unit.templateId).stats;
+
+    for (const planet of world.planets) {
+      assert.ok(
+        distance(unit.position, planet.position) >=
+          planet.radius + stats.colliderRadius,
+        `Expected unit ${unit.handle.id} outside planet ${planet.handle.id}`
+      );
+    }
+  }
 }
 
 function isCatchupMessage(value: unknown): value is CatchupMessage {

@@ -103,7 +103,7 @@ export function createTacticalOverlayControls(
   const label = document.createElement("span");
 
   input.type = "checkbox";
-  input.checked = true;
+  input.checked = false;
   input.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
   });

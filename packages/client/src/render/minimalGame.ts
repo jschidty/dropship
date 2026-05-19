@@ -357,7 +357,7 @@ export function mountMinimalGame(
   worldGroup.add(gravityOverlay.root);
   const selectedUnitKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
-  let tacticalOverlayEnabled = true;
+  let tacticalOverlayEnabled = false;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
   const cameraPresetControls = createCameraPresetControls(container, (preset) => {
@@ -447,7 +447,7 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "g" || key === "t") {
+    if (key === "t") {
       tacticalOverlayEnabled = !tacticalOverlayEnabled;
       setTacticalOverlayEnabled(
         gravityOverlay,

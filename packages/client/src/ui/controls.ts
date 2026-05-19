@@ -1,5 +1,5 @@
 import { CAMERA_PRESETS, type CameraPreset } from "../camera/config";
-import { SHIP_CLASS_IDS } from "@drop-ship/protocol";
+import { SHIP_CLASS_IDS, type ShipClassId } from "@drop-ship/protocol";
 import type { LocalGameRuntime, RenderQualityMode, UnitViewModel } from "../types";
 
 export type CameraPresetControls = Readonly<{
@@ -15,14 +15,63 @@ export type TacticalOverlayControls = Readonly<{
 export type CommandMenuControls = Readonly<{
   root: HTMLElement;
   content: HTMLElement;
+  commandsPanel: HTMLDetailsElement;
+  commandsBody: HTMLElement;
+  escortButton: HTMLButtonElement;
+  emptyPanel: HTMLElement;
+  unitList: HTMLElement;
+  unitGroups: ReadonlyMap<CommandUnitGroupId, CommandUnitGroupControls>;
   onSelectLeader: (unitKey: string) => void;
   onEscortLeader: () => void;
+}>;
+
+type CommandUnitGroupId = "fighter" | "dropShip" | "battleship";
+
+type CommandUnitGroupControls = Readonly<{
+  definition: CommandUnitGroupDefinition;
+  root: HTMLDetailsElement;
+  summary: HTMLElement;
+  list: HTMLElement;
+  buttons: Map<string, HTMLButtonElement>;
+}>;
+
+type CommandUnitGroup = Readonly<{
+  definition: CommandUnitGroupDefinition;
+  units: readonly UnitViewModel[];
+}>;
+
+type CommandUnitGroupDefinition = Readonly<{
+  id: CommandUnitGroupId;
+  label: string;
+  shipClassId: ShipClassId;
+  sortIndex: number;
 }>;
 
 type TacticalOverlayTarget = {
   enabled: boolean;
   root: { visible: boolean };
 };
+
+const COMMAND_UNIT_GROUPS: readonly CommandUnitGroupDefinition[] = [
+  {
+    id: "fighter",
+    label: "Scouts",
+    shipClassId: SHIP_CLASS_IDS.fighter,
+    sortIndex: 0,
+  },
+  {
+    id: "dropShip",
+    label: "Drop ships",
+    shipClassId: SHIP_CLASS_IDS.dropShip,
+    sortIndex: 1,
+  },
+  {
+    id: "battleship",
+    label: "Battleships",
+    shipClassId: SHIP_CLASS_IDS.battleship,
+    sortIndex: 2,
+  },
+];
 
 export function createStatsLayer(container: HTMLElement): HTMLElement {
   const statsLayer = document.createElement("div");
@@ -175,6 +224,13 @@ export function createCommandMenu(
 ): CommandMenuControls {
   const root = document.createElement("aside");
   const content = document.createElement("div");
+  const commandsPanel = document.createElement("details");
+  const commandsSummary = document.createElement("summary");
+  const commandsBody = document.createElement("div");
+  const escortButton = document.createElement("button");
+  const emptyPanel = document.createElement("div");
+  const unitList = document.createElement("div");
+  const unitGroups = new Map<CommandUnitGroupId, CommandUnitGroupControls>();
 
   root.className = "command-menu";
   root.setAttribute("aria-label", "Command menu");
@@ -186,12 +242,49 @@ export function createCommandMenu(
     event.stopPropagation();
   });
   content.className = "command-menu-content";
+
+  commandsPanel.className =
+    "command-menu-panel command-menu-commands-panel";
+  commandsPanel.open = true;
+  commandsSummary.className = "command-menu-panel-summary";
+  commandsSummary.textContent = "Commands";
+  commandsBody.className = "command-menu-panel-body command-menu-commands";
+  escortButton.type = "button";
+  escortButton.className = "command-menu-command";
+  escortButton.textContent = "Escort leader";
+  escortButton.disabled = true;
+  escortButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    options.onEscortLeader();
+  });
+  commandsBody.appendChild(escortButton);
+  commandsPanel.append(commandsSummary, commandsBody);
+
+  emptyPanel.className = "command-menu-panel command-menu-empty";
+  emptyPanel.textContent = "No units selected";
+
+  unitList.className = "command-menu-unit-list";
+  unitList.hidden = true;
+
+  for (const definition of COMMAND_UNIT_GROUPS) {
+    const group = createCommandUnitGroupControls(definition);
+    unitGroups.set(definition.id, group);
+  }
+
+  content.append(commandsPanel, emptyPanel, unitList);
   root.appendChild(content);
   container.appendChild(root);
 
   return {
     root,
     content,
+    commandsPanel,
+    commandsBody,
+    escortButton,
+    emptyPanel,
+    unitList,
+    unitGroups,
     onSelectLeader: options.onSelectLeader,
     onEscortLeader: options.onEscortLeader,
   };
@@ -202,98 +295,153 @@ export function updateCommandMenu(
   selectedUnits: readonly UnitViewModel[],
   leaderKey: string | null
 ): void {
-  controls.content.replaceChildren();
+  const selectedLeader = selectedUnits.find((unit) => unit.key === leaderKey);
 
-  const title = document.createElement("div");
-  title.className = "command-menu-title";
-  title.textContent = "Command";
-  controls.content.appendChild(title);
+  controls.escortButton.textContent = selectedLeader
+    ? `Escort ${selectedLeader.label} #${selectedLeader.handle.id}`
+    : "Escort leader";
+  controls.escortButton.disabled = !selectedLeader || selectedUnits.length < 2;
 
   if (selectedUnits.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "command-menu-empty";
-    empty.textContent = "No units selected";
-    controls.content.appendChild(empty);
+    controls.emptyPanel.hidden = false;
+    controls.unitList.hidden = true;
+    clearUnitGroups(controls);
     return;
   }
 
-  for (const group of createUnitGroups(selectedUnits)) {
-    const section = document.createElement("details");
-    const summary = document.createElement("summary");
-    const list = document.createElement("div");
+  controls.emptyPanel.hidden = true;
+  controls.unitList.hidden = false;
 
-    section.className = "command-menu-group";
-    section.open = group.units.length > 0;
-    summary.textContent = `${group.label} ${group.units.length}`;
-    list.className = "command-menu-list";
-    section.append(summary, list);
+  const groups = createUnitGroups(selectedUnits);
+  const visibleGroupIds = new Set<CommandUnitGroupId>();
 
-    for (const unit of group.units) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "command-menu-unit";
-      button.textContent = `${unit.label} #${unit.handle.id}`;
-      button.setAttribute("aria-pressed", String(unit.key === leaderKey));
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        controls.onSelectLeader(unit.key);
-      });
-      list.appendChild(button);
+  for (const group of groups) {
+    const groupControls = controls.unitGroups.get(group.definition.id);
+
+    if (!groupControls) {
+      continue;
     }
 
-    controls.content.appendChild(section);
+    visibleGroupIds.add(group.definition.id);
+    groupControls.root.hidden = false;
+    groupControls.summary.textContent = `${group.definition.label} [${group.units.length}]`;
+    syncUnitButtons(
+      groupControls,
+      group.units,
+      leaderKey,
+      controls.onSelectLeader
+    );
+    controls.unitList.appendChild(groupControls.root);
   }
 
-  const commands = document.createElement("div");
-  const commandTitle = document.createElement("div");
-  const escort = document.createElement("button");
-  const selectedLeader = selectedUnits.find((unit) => unit.key === leaderKey);
+  for (const [groupId, groupControls] of controls.unitGroups) {
+    if (visibleGroupIds.has(groupId)) {
+      continue;
+    }
 
-  commands.className = "command-menu-commands";
-  commandTitle.className = "command-menu-subtitle";
-  commandTitle.textContent = "Commands";
-  escort.type = "button";
-  escort.className = "command-menu-command";
-  escort.textContent = selectedLeader
-    ? `Escort ${selectedLeader.label} #${selectedLeader.handle.id}`
-    : "Escort leader";
-  escort.disabled = !selectedLeader || selectedUnits.length < 2;
-  escort.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    controls.onEscortLeader();
-  });
-  commands.append(commandTitle, escort);
-  controls.content.appendChild(commands);
+    groupControls.root.hidden = true;
+    groupControls.summary.textContent = `${groupControls.definition.label} [0]`;
+    syncUnitButtons(groupControls, [], leaderKey, controls.onSelectLeader);
+
+    if (groupControls.root.parentElement === controls.unitList) {
+      groupControls.root.remove();
+    }
+  }
 }
 
 function createUnitGroups(
   selectedUnits: readonly UnitViewModel[]
-): readonly Readonly<{
-  label: string;
-  units: readonly UnitViewModel[];
-}>[] {
-  return [
-    {
-      label: "Scouts",
-      units: selectedUnits.filter(
-        (unit) => unit.shipClassId === SHIP_CLASS_IDS.fighter
-      ),
-    },
-    {
-      label: "Drop ships",
-      units: selectedUnits.filter(
-        (unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip
-      ),
-    },
-    {
-      label: "Battleships",
-      units: selectedUnits.filter(
-        (unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship
-      ),
-    },
-  ];
+): readonly CommandUnitGroup[] {
+  return COMMAND_UNIT_GROUPS.map((definition) => ({
+    definition,
+    units: selectedUnits
+      .filter((unit) => unit.shipClassId === definition.shipClassId)
+      .sort((first, second) => first.handle.id - second.handle.id),
+  }))
+    .filter((group) => group.units.length > 0)
+    .sort(
+      (first, second) =>
+        first.units.length - second.units.length ||
+        first.definition.sortIndex - second.definition.sortIndex
+    );
+}
+
+function createCommandUnitGroupControls(
+  definition: CommandUnitGroupDefinition
+): CommandUnitGroupControls {
+  const root = document.createElement("details");
+  const summary = document.createElement("summary");
+  const list = document.createElement("div");
+
+  root.className = "command-menu-panel command-menu-group";
+  root.open = true;
+  root.hidden = true;
+  summary.className = "command-menu-panel-summary";
+  summary.textContent = `${definition.label} [0]`;
+  list.className = "command-menu-panel-body command-menu-list";
+  root.append(summary, list);
+
+  return {
+    definition,
+    root,
+    summary,
+    list,
+    buttons: new Map(),
+  };
+}
+
+function clearUnitGroups(controls: CommandMenuControls): void {
+  for (const groupControls of controls.unitGroups.values()) {
+    groupControls.root.hidden = true;
+    groupControls.summary.textContent = `${groupControls.definition.label} [0]`;
+    syncUnitButtons(groupControls, [], null, controls.onSelectLeader);
+    groupControls.root.remove();
+  }
+}
+
+function syncUnitButtons(
+  groupControls: CommandUnitGroupControls,
+  units: readonly UnitViewModel[],
+  leaderKey: string | null,
+  onSelectLeader: (unitKey: string) => void
+): void {
+  const visibleUnitKeys = new Set<string>();
+
+  for (const unit of units) {
+    let button = groupControls.buttons.get(unit.key);
+
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "command-menu-unit";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const unitKey = button?.dataset.unitKey;
+
+        if (unitKey) {
+          onSelectLeader(unitKey);
+        }
+      });
+      groupControls.buttons.set(unit.key, button);
+    }
+
+    visibleUnitKeys.add(unit.key);
+    button.dataset.unitKey = unit.key;
+    button.textContent = `${unit.label} #${unit.handle.id}`;
+    button.setAttribute("aria-pressed", String(unit.key === leaderKey));
+    groupControls.list.appendChild(button);
+  }
+
+  for (const [unitKey, button] of groupControls.buttons) {
+    if (visibleUnitKeys.has(unitKey)) {
+      continue;
+    }
+
+    button.remove();
+    groupControls.buttons.delete(unitKey);
+  }
 }
 
 function navigateToRandomSeed(): void {

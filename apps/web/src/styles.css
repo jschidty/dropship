@@ -164,9 +164,7 @@ canvas {
   z-index: 4;
   width: min(240px, calc(100vw - 28px));
   transform: translateY(-50%);
-  border: 1px solid rgb(252 61 33 / 72%);
   border-radius: 0;
-  background: rgb(5 8 18 / 58%);
   color: rgb(252 61 33 / 92%);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -175,43 +173,65 @@ canvas {
 
 .command-menu-content {
   display: grid;
-  gap: 0;
+  gap: 6px;
   padding: 0;
 }
 
-.command-menu-title,
-.command-menu-subtitle {
+.command-menu-panel {
+  overflow: hidden;
+  border: 1px solid rgb(252 61 33 / 72%);
+  border-radius: 0;
+  background: rgb(5 8 18 / 58%);
+}
+
+.command-menu-panel-summary {
+  min-height: 28px;
+  padding: 7px 9px;
   color: rgb(252 61 33 / 96%);
-  font-size: 11px;
   font-weight: 700;
-  padding: 8px 9px;
+  cursor: pointer;
+  list-style-position: outside;
   text-transform: uppercase;
 }
 
-.command-menu-empty {
+.command-menu-panel[open] > .command-menu-panel-body {
   border-top: 1px solid rgb(252 61 33 / 42%);
+}
+
+.command-menu-empty {
   color: rgb(252 61 33 / 66%);
   padding: 8px 9px;
 }
 
-.command-menu-group {
-  border-top: 1px solid rgb(252 61 33 / 42%);
-  padding-top: 0;
-}
-
-.command-menu-group summary {
-  cursor: pointer;
-  color: rgb(252 61 33 / 90%);
-  font-weight: 700;
-  padding: 8px 9px;
-  list-style-position: outside;
-}
-
+.command-menu-unit-list,
 .command-menu-list,
 .command-menu-commands {
   display: grid;
   gap: 0;
   margin-top: 0;
+}
+
+.command-menu-unit-list {
+  max-height: min(320px, calc(100vh - 152px));
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 3px;
+  scrollbar-color: rgb(252 61 33 / 82%) rgb(5 8 18 / 58%);
+  scrollbar-width: thin;
+}
+
+.command-menu-unit-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.command-menu-unit-list::-webkit-scrollbar-track {
+  background: rgb(5 8 18 / 58%);
+}
+
+.command-menu-unit-list::-webkit-scrollbar-thumb {
+  border: 1px solid rgb(5 8 18 / 78%);
+  border-radius: 0;
+  background: rgb(252 61 33 / 82%);
 }
 
 .command-menu-unit,
@@ -253,32 +273,25 @@ canvas {
   top: 0;
   left: 0;
   z-index: 5;
-  width: 20px;
-  height: 30px;
+  width: 24px;
+  height: 18px;
   pointer-events: none;
   will-change: transform;
 }
 
 .selected-leader-arrow::before {
-  position: absolute;
-  top: 0;
-  left: 9px;
-  width: 2px;
-  height: 18px;
-  background: #fc3d21;
-  box-shadow: 0 0 8px rgb(252 61 33 / 78%);
-  content: "";
+  display: none;
 }
 
 .selected-leader-arrow::after {
   position: absolute;
-  top: 17px;
-  left: 3px;
+  top: 0;
+  left: 0;
   width: 0;
   height: 0;
-  border-right: 7px solid transparent;
-  border-left: 7px solid transparent;
-  border-top: 11px solid #fc3d21;
+  border-right: 12px solid transparent;
+  border-left: 12px solid transparent;
+  border-top: 18px solid #fc3d21;
   filter: drop-shadow(0 0 5px rgb(252 61 33 / 78%));
   content: "";
 }

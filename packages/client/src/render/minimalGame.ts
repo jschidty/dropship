@@ -61,6 +61,7 @@ import {
 } from "../ui/controls";
 import { createMinimalLocalGame } from "../runtime/localGame";
 import { DEFAULT_LOCAL_PLAYER_ID } from "../runtime/matchConfig";
+import { selectMoveOrderUnits } from "../selection/commands";
 import type {
   LocalGameRuntime,
   MountedGame,
@@ -603,6 +604,7 @@ export function mountMinimalGame(
         camera,
         runtime,
         selectedUnitKeys,
+        commandMenuLeaderKey,
         selectedPlanetKey,
         scratch
       );
@@ -972,7 +974,7 @@ function updateSelectedLeaderArrow(
   }
 
   const x = (projected.x * 0.5 + 0.5) * container.clientWidth;
-  const y = (-projected.y * 0.5 + 0.5) * container.clientHeight - 24;
+  const y = (-projected.y * 0.5 + 0.5) * container.clientHeight - 14;
 
   arrow.hidden = false;
   arrow.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
@@ -1180,17 +1182,19 @@ function issueMoveCommandFromClick(
   camera: THREE.Camera,
   runtime: LocalGameRuntime,
   selectedUnitKeys: ReadonlySet<string>,
+  leaderKey: string | null,
   selectedPlanetKey: string | null,
   scratch: RenderScratch
 ): boolean {
-  const selectedUnits = runtime
-    .readUnits()
-    .filter(
-      (unit) =>
-        unit.owner === runtime.playerId && selectedUnitKeys.has(unit.key)
-    );
+  const units = runtime.readUnits();
+  const moveUnits = selectMoveOrderUnits(
+    units,
+    runtime.playerId,
+    selectedUnitKeys,
+    leaderKey
+  );
 
-  if (selectedUnits.length === 0) {
+  if (moveUnits.length === 0) {
     return false;
   }
 
@@ -1208,7 +1212,7 @@ function issueMoveCommandFromClick(
   }
 
   runtime.enqueueMoveUnits(
-    selectedUnits.map((unit) => unit.handle),
+    moveUnits.map((unit) => unit.handle),
     toVec3Data(target)
   );
   return true;

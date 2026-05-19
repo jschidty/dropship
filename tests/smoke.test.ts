@@ -30,6 +30,8 @@ import {
   runTick,
   serializeWorld,
 } from "../packages/sim/src/index";
+import { selectMoveOrderUnits } from "../packages/client/src/selection/commands";
+import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
 testDeterministicMathReferenceValues();
@@ -38,6 +40,7 @@ testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
+testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
 testCaptureDemoConfig();
 testShipsSpawnOutsidePlanets();
@@ -349,6 +352,33 @@ function testEscortOrderCommand(): void {
   );
 }
 
+function testMoveOrderTargetsEscortLeader(): void {
+  const leader = createTestUnitView("leader", 1, 1);
+  const escort = createTestUnitView("escort", 1, 2);
+  const enemy = createTestUnitView("enemy", 2, 3);
+  const units = [leader, escort, enemy];
+  const selectedUnitKeys = new Set(["leader", "escort", "enemy"]);
+
+  assert.deepEqual(
+    selectMoveOrderUnits(units, 1, selectedUnitKeys, "leader").map(
+      (unit) => unit.key
+    ),
+    ["leader"]
+  );
+  assert.deepEqual(
+    selectMoveOrderUnits(units, 1, selectedUnitKeys, null).map(
+      (unit) => unit.key
+    ),
+    ["leader", "escort"]
+  );
+  assert.deepEqual(
+    selectMoveOrderUnits(units, 1, selectedUnitKeys, "enemy").map(
+      (unit) => unit.key
+    ),
+    ["leader", "escort"]
+  );
+}
+
 function testCaptureDemoConfig(): void {
   const config = createCaptureDemoConfig({ seed: 1337 });
   const world = createWorld({
@@ -623,6 +653,21 @@ function createBudgetConfig(unitCount: number): MatchConfig {
     matchId: `${config.matchId}-budget-${unitCount}`,
     initialUnits,
   };
+}
+
+function createTestUnitView(
+  key: string,
+  owner: PlayerId,
+  id: number
+): UnitViewModel {
+  return {
+    handle: {
+      id,
+      generation: 1,
+    },
+    key,
+    owner,
+  } as UnitViewModel;
 }
 
 function createMemoryStorage(): DurableObjectStorage {

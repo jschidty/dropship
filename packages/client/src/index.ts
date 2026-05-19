@@ -178,7 +178,7 @@ type UnitBatchRenderer = {
 };
 
 type PlanetProxy = {
-  glow: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  glow: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> | null;
   body: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   rings: THREE.Mesh<THREE.RingGeometry, THREE.ShaderMaterial>;
   lastSeenFrame: number;
@@ -197,6 +197,7 @@ type RenderQualityConfig = Readonly<{
   minRenderPixelRatio: number;
   pixelRatioStep: number;
   lowFpsPixelRatioThreshold: number;
+  planetGlowEnabled: boolean;
   planetGlowBillboardScale: number;
   ringThetaSegments: number;
   ringPhiSegments: number;
@@ -348,6 +349,7 @@ const RENDER_QUALITY_CONFIGS: Record<RenderQualityMode, RenderQualityConfig> = {
     minRenderPixelRatio: 0.7,
     pixelRatioStep: 0.15,
     lowFpsPixelRatioThreshold: 58,
+    planetGlowEnabled: false,
     planetGlowBillboardScale: 2.42,
     ringThetaSegments: 128,
     ringPhiSegments: 4,
@@ -360,6 +362,7 @@ const RENDER_QUALITY_CONFIGS: Record<RenderQualityMode, RenderQualityConfig> = {
     minRenderPixelRatio: 1,
     pixelRatioStep: 0.1,
     lowFpsPixelRatioThreshold: 55,
+    planetGlowEnabled: true,
     planetGlowBillboardScale: 3.08,
     ringThetaSegments: 256,
     ringPhiSegments: 8,
@@ -1122,10 +1125,9 @@ export function mountMinimalGame(
     gasGiantTextures,
     renderQuality.mode
   );
-  const planetGlowMaterial = createPlanetGlowMaterial(
-    gasGiantTextures,
-    renderQuality.mode
-  );
+  const planetGlowMaterial = renderQuality.planetGlowEnabled
+    ? createPlanetGlowMaterial(gasGiantTextures, renderQuality.mode)
+    : null;
   const planetRingMaterial = createPlanetRingMaterial();
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
@@ -1635,7 +1637,7 @@ export function mountMinimalGame(
       planetGeometry.dispose();
       planetRingGeometry.dispose();
       planetMaterial.dispose();
-      planetGlowMaterial.dispose();
+      planetGlowMaterial?.dispose();
       planetRingMaterial.dispose();
       disposeGasGiantTextureSet(gasGiantTextures);
       renderer.dispose();
@@ -2034,7 +2036,7 @@ function updatePlanetProxies(
   geometry: THREE.PlaneGeometry,
   ringGeometry: THREE.RingGeometry,
   material: THREE.ShaderMaterial,
-  glowMaterial: THREE.ShaderMaterial,
+  glowMaterial: THREE.ShaderMaterial | null,
   ringMaterial: THREE.ShaderMaterial,
   renderQuality: RenderQualityConfig
 ): void {
@@ -2054,24 +2056,28 @@ function updatePlanetProxies(
         renderQuality
       );
       proxies.set(planet.key, proxy);
-      worldGroup.add(proxy.glow);
+      if (proxy.glow) {
+        worldGroup.add(proxy.glow);
+      }
       worldGroup.add(proxy.body);
       worldGroup.add(proxy.rings);
     }
 
     proxy.lastSeenFrame = frameIndex;
-    proxy.glow.position.copy(planet.position);
-    proxy.glow.scale.setScalar(
-      readPlanetGlowBillboardScale(planet, renderQuality)
-    );
-    proxy.glow.frustumCulled = renderQuality.cullPlanetAtmosphere;
-    proxy.glow.material.uniforms.uPlanetColor.value.set(planet.color);
-    writeGasGiantPaletteUniforms(proxy.glow.material, planet);
-    proxy.glow.material.uniforms.uPlanetClass.value = planetClassToShaderValue(
-      planet.appearance.planetClass
-    );
-    proxy.glow.material.uniforms.uPlanetSeed.value = planet.appearance.seed;
-    proxy.glow.material.uniforms.uRenderMode.value = shaderRenderMode;
+    if (proxy.glow) {
+      proxy.glow.position.copy(planet.position);
+      proxy.glow.scale.setScalar(
+        readPlanetGlowBillboardScale(planet, renderQuality)
+      );
+      proxy.glow.frustumCulled = renderQuality.cullPlanetAtmosphere;
+      proxy.glow.material.uniforms.uPlanetColor.value.set(planet.color);
+      writeGasGiantPaletteUniforms(proxy.glow.material, planet);
+      proxy.glow.material.uniforms.uPlanetClass.value = planetClassToShaderValue(
+        planet.appearance.planetClass
+      );
+      proxy.glow.material.uniforms.uPlanetSeed.value = planet.appearance.seed;
+      proxy.glow.material.uniforms.uRenderMode.value = shaderRenderMode;
+    }
     proxy.body.position.copy(planet.position);
     proxy.body.scale.setScalar(readPlanetBodyBillboardScale(planet));
     proxy.body.material.uniforms.uPlanetColor.value.set(planet.color);
@@ -2096,10 +2102,12 @@ function updatePlanetProxies(
 
   for (const [key, proxy] of proxies) {
     if (proxy.lastSeenFrame !== frameIndex) {
-      worldGroup.remove(proxy.glow);
+      if (proxy.glow) {
+        worldGroup.remove(proxy.glow);
+        proxy.glow.material.dispose();
+      }
       worldGroup.remove(proxy.body);
       worldGroup.remove(proxy.rings);
-      proxy.glow.material.dispose();
       proxy.body.material.dispose();
       proxy.rings.material.dispose();
       proxies.delete(key);
@@ -2365,10 +2373,12 @@ function disposePlanetProxies(
   proxies: Map<string, PlanetProxy>
 ): void {
   for (const proxy of proxies.values()) {
-    worldGroup.remove(proxy.glow);
+    if (proxy.glow) {
+      worldGroup.remove(proxy.glow);
+      proxy.glow.material.dispose();
+    }
     worldGroup.remove(proxy.body);
     worldGroup.remove(proxy.rings);
-    proxy.glow.material.dispose();
     proxy.body.material.dispose();
     proxy.rings.material.dispose();
   }
@@ -2381,25 +2391,20 @@ function createPlanetProxy(
   geometry: THREE.PlaneGeometry,
   ringGeometry: THREE.RingGeometry,
   material: THREE.ShaderMaterial,
-  glowMaterial: THREE.ShaderMaterial,
+  glowMaterial: THREE.ShaderMaterial | null,
   ringMaterial: THREE.ShaderMaterial,
   renderQuality: RenderQualityConfig
 ): PlanetProxy {
   const shaderRenderMode = renderQualityToShaderValue(renderQuality.mode);
-  const planetGlowMaterial = glowMaterial.clone();
-  planetGlowMaterial.uniforms.uPlanetColor.value.set(planet.color);
-  writeGasGiantPaletteUniforms(planetGlowMaterial, planet);
-  planetGlowMaterial.uniforms.uPlanetClass.value = planetClassToShaderValue(
-    planet.appearance.planetClass
-  );
-  planetGlowMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
-  planetGlowMaterial.uniforms.uRenderMode.value = shaderRenderMode;
-  const glow = new THREE.Mesh(geometry, planetGlowMaterial);
-  glow.name = `${planet.label} subtle planet glow`;
-  glow.position.copy(planet.position);
-  glow.scale.setScalar(readPlanetGlowBillboardScale(planet, renderQuality));
-  glow.renderOrder = -4.5;
-  glow.frustumCulled = renderQuality.cullPlanetAtmosphere;
+  const glow = glowMaterial
+    ? createPlanetGlowMesh(
+        planet,
+        geometry,
+        glowMaterial,
+        renderQuality,
+        shaderRenderMode
+      )
+    : null;
 
   const planetMaterial = material.clone();
   planetMaterial.uniforms.uPlanetColor.value.set(planet.color);
@@ -2437,6 +2442,32 @@ function createPlanetProxy(
     rings,
     lastSeenFrame: 0,
   };
+}
+
+function createPlanetGlowMesh(
+  planet: PlanetViewModel,
+  geometry: THREE.PlaneGeometry,
+  glowMaterial: THREE.ShaderMaterial,
+  renderQuality: RenderQualityConfig,
+  shaderRenderMode: number
+): THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> {
+  const planetGlowMaterial = glowMaterial.clone();
+  planetGlowMaterial.uniforms.uPlanetColor.value.set(planet.color);
+  writeGasGiantPaletteUniforms(planetGlowMaterial, planet);
+  planetGlowMaterial.uniforms.uPlanetClass.value = planetClassToShaderValue(
+    planet.appearance.planetClass
+  );
+  planetGlowMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
+  planetGlowMaterial.uniforms.uRenderMode.value = shaderRenderMode;
+
+  const glow = new THREE.Mesh(geometry, planetGlowMaterial);
+  glow.name = `${planet.label} subtle planet glow`;
+  glow.position.copy(planet.position);
+  glow.scale.setScalar(readPlanetGlowBillboardScale(planet, renderQuality));
+  glow.renderOrder = -4.5;
+  glow.frustumCulled = renderQuality.cullPlanetAtmosphere;
+
+  return glow;
 }
 
 function readPlanetGlowBillboardScale(
@@ -3025,6 +3056,7 @@ function createPlanetBillboardMaterial(
   renderMode: RenderQualityMode
 ): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
+    defines: renderMode === "cinematic" ? { CINEMATIC_RENDER: "1" } : {},
     uniforms: {
       uSunDirection: { value: DEFAULT_SUN_DIRECTION.clone() },
       uPlanetColor: { value: new THREE.Color(0x376fae) },
@@ -3222,12 +3254,14 @@ function updatePlanetBillboards(
     .normalize();
 
   for (const proxy of proxies.values()) {
-    proxy.glow.quaternion.copy(camera.quaternion);
-    proxy.glow.material.uniforms.uSunDirection.value.copy(sunDirection);
-    proxy.glow.material.uniforms.uCameraRight.value.copy(cameraRight);
-    proxy.glow.material.uniforms.uCameraUp.value.copy(cameraUp);
-    proxy.glow.material.uniforms.uCameraForward.value.copy(cameraForward);
-    proxy.glow.material.uniforms.uTime.value = elapsedSeconds;
+    if (proxy.glow) {
+      proxy.glow.quaternion.copy(camera.quaternion);
+      proxy.glow.material.uniforms.uSunDirection.value.copy(sunDirection);
+      proxy.glow.material.uniforms.uCameraRight.value.copy(cameraRight);
+      proxy.glow.material.uniforms.uCameraUp.value.copy(cameraUp);
+      proxy.glow.material.uniforms.uCameraForward.value.copy(cameraForward);
+      proxy.glow.material.uniforms.uTime.value = elapsedSeconds;
+    }
     proxy.body.quaternion.copy(camera.quaternion);
     proxy.body.material.uniforms.uSunDirection.value.copy(sunDirection);
     proxy.body.material.uniforms.uCameraRight.value.copy(cameraRight);
@@ -4043,6 +4077,7 @@ uniform float uRenderMode;
 
 varying vec2 vUv;
 
+#ifdef CINEMATIC_RENDER
 float rand(vec2 co, float seed) {
   return fract(sin(dot(co.xy + seed, vec2(12.9898, 78.233))) * 43758.5453);
 }
@@ -4184,72 +4219,7 @@ vec3 makeGasGiant(
 
   return clamp(color, 0.0, 1.0);
 }
-
-vec3 makeGasGiantInteractive(
-  vec3 normal,
-  vec3 baseColor,
-  float seed,
-  vec2 gasTextureUv
-) {
-  vec3 p = normalize(normal);
-  float shear = sin(p.y * 7.2 + uTime * 0.018 + seed * 0.17) * 0.12;
-  vec3 flow = rotateY(p, shear);
-  float broadNoise = texture2D(
-    uGasNoiseTexture,
-    gasTextureUv * 1.35 + vec2(seed * 0.013, uTime * 0.006)
-  ).r;
-  float detailNoise = texture2D(
-    uGasGrungeTexture,
-    gasTextureUv * 2.4 + vec2(broadNoise * 0.05 + seed * 0.007, -uTime * 0.004)
-  ).r;
-  float bandWave = sin(flow.y * 40.0 + broadNoise * 4.8 + seed * 0.05);
-  float widthRoll = sin(flow.y * 12.0 + seed * 0.29 + broadNoise * 2.0) * 0.5 + 0.5;
-  float ribbon = smoothstep(
-    mix(-0.78, -0.45, widthRoll),
-    mix(0.46, 0.94, widthRoll),
-    bandWave + detailNoise * mix(0.34, 0.72, widthRoll)
-  );
-  float filament = smoothstep(
-    0.82,
-    0.98,
-    sin(flow.y * mix(64.0, 96.0, widthRoll) + detailNoise * 5.4 + seed) *
-      0.5 + 0.5
-  ) * smoothstep(0.44, 0.86, detailNoise + ribbon * 0.18);
-  float paletteRoll = clamp(broadNoise * 0.72 + detailNoise * 0.28, 0.0, 1.0);
-  float accentRoll = smoothstep(0.42, 0.9, detailNoise + broadNoise * 0.24);
-  vec3 shadowBand = mix(uGasPaletteShadow, baseColor * 0.38, 0.12);
-  vec3 lowBand = mix(uGasPaletteLow, baseColor * 0.92, 0.16);
-  vec3 highBand = mix(uGasPaletteHigh, vec3(1.0, 0.88, 0.68), 0.1);
-  vec3 accentBand = mix(uGasPaletteAccent, baseColor * 1.16, 0.12);
-  vec3 middle = mix(lowBand, accentBand, paletteRoll * 0.42);
-  vec3 bright = mix(highBand, accentBand, accentRoll * 0.32);
-  vec3 dark = mix(shadowBand, lowBand * 0.5, smoothstep(0.18, 0.82, broadNoise));
-  vec3 color = mix(dark, middle, smoothstep(0.14, 0.78, broadNoise));
-  color = mix(color, bright, ribbon * 0.66);
-  color = mix(color, accentBand, accentRoll * (0.08 + ribbon * 0.14));
-  color = mix(
-    color,
-    mix(highBand, accentBand, 0.42),
-    filament * (0.12 + broadNoise * 0.12)
-  );
-  color = mix(
-    color,
-    mix(vec3(1.0, 0.8, 0.7) * 0.8, highBand, 0.25),
-    detailNoise * smoothstep(0.3, 0.9, broadNoise + detailNoise * 0.2) * 0.24
-  );
-  color += (detailNoise - 0.5) * (highBand - shadowBand) * 0.18;
-
-  vec3 stormCenter = normalize(vec3(
-    0.54 + 0.22 * sin(seed * 0.71),
-    0.11 * sin(seed * 0.37),
-    0.72 + 0.12 * cos(seed * 0.43)
-  ));
-  float stormDistance = length(flow - stormCenter);
-  float storm = smoothstep(0.25, 0.08, stormDistance);
-  color = mix(color, mix(accentBand, highBand, 0.32), storm * 0.38);
-
-  return clamp(color, 0.0, 1.0);
-}
+#endif
 
 vec3 makeTerran(vec3 normal, vec3 baseColor) {
   vec3 soil = mix(baseColor, vec3(0.34, 0.43, 0.25), 0.42);
@@ -4267,11 +4237,11 @@ vec3 makeIceWorld(vec3 normal, vec3 baseColor) {
 
 vec3 samplePlanetSurface(vec3 normal, vec3 spunNormal, vec2 gasTextureUv) {
   if (uPlanetClass < 0.5) {
-    if (uRenderMode < 0.5) {
-      return makeGasGiantInteractive(spunNormal, uPlanetColor, uPlanetSeed, gasTextureUv);
-    }
-
+#ifdef CINEMATIC_RENDER
     return makeGasGiant(spunNormal, uPlanetColor, uPlanetSeed, gasTextureUv);
+#else
+    return uPlanetColor;
+#endif
   }
 
   if (uPlanetClass < 1.5) {
@@ -4299,6 +4269,10 @@ void main() {
     uCameraUp * viewNormal.y +
     uCameraForward * viewNormal.z
   );
+  vec3 sunDirection = normalize(uSunDirection);
+  float mu = dot(normal, sunDirection);
+  float solidMask = 1.0 - smoothstep(solidRadius - 0.004, solidRadius + 0.004, radius);
+#ifdef CINEMATIC_RENDER
   vec3 spunNormal = rotateY(normal, uTime * 0.028 + uPlanetSeed * 0.013);
   vec2 gasTextureUv = vec2(
     atan(max(visibleHemisphere, 0.0001), spherePoint.x) * 0.18 +
@@ -4306,10 +4280,10 @@ void main() {
       uPlanetSeed * 0.013,
     spherePoint.y * 0.13 + 0.5 + uPlanetSeed * 0.017
   );
-  vec3 sunDirection = normalize(uSunDirection);
-  float mu = dot(normal, sunDirection);
-  float solidMask = 1.0 - smoothstep(solidRadius - 0.004, solidRadius + 0.004, radius);
   vec3 surface = samplePlanetSurface(normal, spunNormal, gasTextureUv);
+#else
+  vec3 surface = samplePlanetSurface(normal, normal, vec2(0.0));
+#endif
   float limbShade = 1.0 - smoothstep(0.24, solidRadius, radius) * 0.34;
   vec3 viewDirection = normalize(uCameraForward);
   vec3 halfVector = normalize(sunDirection + viewDirection);
@@ -4324,7 +4298,11 @@ void main() {
   vec3 litColor = surface * (0.18 + diffuse * 0.72 + wrapDiffuse * 0.18);
   vec3 color = mix(nightTint, litColor, wrapDiffuse) * limbShade;
   color += vec3(1.0, 0.94, 0.82) * specular;
+#ifdef CINEMATIC_RENDER
   float gasMask = 1.0 - step(0.5, uPlanetClass);
+#else
+  float gasMask = 0.0;
+#endif
   vec2 projectedDirection = normalize(spherePoint + vec2(0.001));
   float directionalWash = pow(
     clamp(dot(projectedDirection, normalize(vec2(1.0, 0.5))), 0.0, 1.0),

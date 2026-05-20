@@ -3,7 +3,7 @@ import { SHIP_CLASS_IDS } from "@drop-ship/protocol";
 import type { PlanetViewModel, UnitViewModel } from "../types";
 import { createSelectionRingTexture, createUnitSymbolTexture } from "./canvasTextures";
 import { nextInstanceCapacity } from "./instancing";
-import { Z_AXIS, readWorldUnitsPerPixel, yawFromQuaternion } from "./renderMath";
+import { Z_AXIS, yawFromQuaternion } from "./renderMath";
 
 export type UnitBatchRenderer = {
   root: THREE.Group;
@@ -30,13 +30,13 @@ export type UnitBatchRenderer = {
   scale: THREE.Vector3;
 };
 
-export const UNIT_SYMBOL_SIZE_PX = 20.7;
+export const UNIT_SYMBOL_SIZE_PX = 31.05;
 const UNIT_SYMBOL_SCALE_BY_CLASS: Readonly<Record<number, number>> = {
   [SHIP_CLASS_IDS.fighter]: 0.75,
   [SHIP_CLASS_IDS.dropShip]: 1.3,
   [SHIP_CLASS_IDS.battleship]: 1.2,
 };
-const SELECTION_RING_SIZE_PX = 26.1;
+const SELECTION_RING_SIZE_PX = 39.15;
 
 export function createUnitBatchRenderer(): UnitBatchRenderer {
   const geometry = new THREE.PlaneGeometry(1, 1);
@@ -79,7 +79,7 @@ export function updateUnitBatches(
   selectedUnitKeys: ReadonlySet<string>,
   planets: readonly PlanetViewModel[],
   camera: THREE.Camera,
-  container: HTMLElement,
+  worldUnitsPerPixel: number,
   interpolationAlpha: number
 ): void {
   const symbolUnits = new Map<string, UnitViewModel>();
@@ -120,7 +120,6 @@ export function updateUnitBatches(
 
   ensureSelectionMeshCapacity(batches, selectedUnitKeys.size);
   batches.billboardQuaternion.copy(camera.quaternion);
-  const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, container);
   const symbolScale = UNIT_SYMBOL_SIZE_PX * worldUnitsPerPixel;
   const selectionScale = SELECTION_RING_SIZE_PX * worldUnitsPerPixel;
 

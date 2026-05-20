@@ -85,7 +85,9 @@ testSimTuningAffectsHeadlessMotion();
 testDeterministicReplayHash();
 testHeadlessRunnerMatchesSmokeReplayHash();
 testHeadlessControllerCommandsUseCommandBatches();
+testHeadlessMetricsTracksBattleshipDamage();
 testHeadlessRunnerRunsAllNpcMatch();
+testHeadlessDropShipOnlyMatchCapturesPlanets();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
 
@@ -295,7 +297,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "1623dbe4");
+  assert.equal(first, "00e7d513");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -309,11 +311,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "1623dbe4");
+  assert.equal(result.finalHash, "00e7d513");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "1623dbe4",
+      hash: "00e7d513",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -378,6 +380,42 @@ function testHeadlessControllerCommandsUseCommandBatches(): void {
   assert.equal(result.metrics.commandCount, 1);
 }
 
+function testHeadlessMetricsTracksBattleshipDamage(): void {
+  const runner = createHeadlessMatchRunner({
+    config: createMinimalSkirmishConfig({
+      seed: 1337,
+      initialPlanets: [],
+      initialUnits: [
+        {
+          owner: 1,
+          templateId: TEMPLATE_IDS.battleship,
+          position: { x: 0, y: 0, z: 0 },
+        },
+        {
+          owner: 2,
+          templateId: TEMPLATE_IDS.dropShip,
+          position: { x: 42, y: 0, z: 0 },
+        },
+      ],
+    }),
+    maxTicks: 1,
+    hashIntervalTicks: 0,
+  });
+  const result = runner.run();
+  const battleshipClassKey = String(SHIP_CLASS_IDS.battleship);
+
+  assert.equal(result.metrics.eventCounts.weaponFired, 1);
+  assert.ok(result.metrics.damageDone.battleship.total > 0);
+  assert.equal(
+    result.metrics.damageDone.bySourceShipClass[battleshipClassKey],
+    result.metrics.damageDone.battleship.total
+  );
+  assert.equal(
+    result.metrics.damageDone.battleship.byOwner["1"],
+    result.metrics.damageDone.battleship.total
+  );
+}
+
 function testHeadlessRunnerRunsAllNpcMatch(): void {
   const runner = createHeadlessMatchRunner({
     config: createCaptureDemoConfig({
@@ -410,6 +448,38 @@ function testHeadlessRunnerRunsAllNpcMatch(): void {
   assert.ok(result.metrics.commandCount > 0);
   assert.ok(
     result.world.units.some((unit) => unit.moveOrder?.type === "attackTarget")
+  );
+}
+
+function testHeadlessDropShipOnlyMatchCapturesPlanets(): void {
+  const baseConfig = createCaptureDemoConfig({
+    seed: 202,
+    controllers: [
+      { playerId: 1, type: "npc" },
+      { playerId: 2, type: "npc" },
+    ],
+    rules: {
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+        fighterSpawnCapPerDropShip: 0,
+      },
+    },
+  });
+  const runner = createHeadlessMatchRunner({
+    config: {
+      ...baseConfig,
+      initialUnits: baseConfig.initialUnits.filter(
+        (unit) => unit.templateId === TEMPLATE_IDS.dropShip
+      ),
+    },
+    hashIntervalTicks: PHASE_ONE_SIM_HZ,
+  });
+  const result = runner.run();
+
+  assert.equal(result.metrics.matchEndReason, "allPlanetsCaptured");
+  assert.ok(
+    result.metrics.eventCounts.planetCaptured >= 2,
+    "Expected NPC drop ships to capture planets without combat escorts"
   );
 }
 
@@ -606,13 +676,17 @@ function testCaptureDemoConfig(): void {
 
   assert.equal(config.gameMode, "captureDemo");
   assert.ok(world.planets.some((planet) => planet.control.capturable));
+  assert.equal(
+    world.planets.filter((planet) => planet.control.capturable).length,
+    2
+  );
 
   const playerOneDropShip = assertCaptureDemoFleet(world, 1);
   const playerTwoDropShip = assertCaptureDemoFleet(world, 2);
 
   assert.ok(
-    distance(playerOneDropShip.position, playerTwoDropShip.position) > 650,
-    "Expected starting fleets to begin far away from each other"
+    distance(playerOneDropShip.position, playerTwoDropShip.position) > 450,
+    "Expected starting fleets to begin separated around the primary planet"
   );
 
   for (const unit of world.units) {

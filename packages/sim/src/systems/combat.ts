@@ -33,7 +33,9 @@ export const CombatSystem: SimSystem = {
         continue;
       }
 
-      target.health.current = Math.max(0, target.health.current - weapon.damage);
+      const damage = Math.min(target.health.current, weapon.damage);
+
+      target.health.current = Math.max(0, target.health.current - damage);
       unit.weaponCooldownTicks = weapon.cooldownTicks;
       world.events.push({
         type: "weaponFired",
@@ -42,6 +44,9 @@ export const CombatSystem: SimSystem = {
         target: target.handle,
         owner: unit.owner,
         weaponId: weapon.weaponId,
+        sourceShipClassId: unit.shipClassId,
+        targetShipClassId: target.shipClassId,
+        damage,
         start: unit.position,
         end: target.position,
       });

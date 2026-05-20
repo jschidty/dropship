@@ -61,6 +61,9 @@ export type SimEvent =
       target: EntityHandle;
       owner: PlayerId;
       weaponId: number;
+      sourceShipClassId: number;
+      targetShipClassId: number;
+      damage: number;
       start: Vec3Data;
       end: Vec3Data;
     }>

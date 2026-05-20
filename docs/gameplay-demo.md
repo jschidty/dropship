@@ -20,7 +20,7 @@ Phase 1 target:
 
 - 2 players
 - 5 minute match length for the current demo tuning
-- 1-4 capturable planets from match config
+- 2 capturable parent planets from the default match config
 - up to 1,000 live sim entities
 - one energy weapon family
 - tactical-view controls and UI only
@@ -70,8 +70,10 @@ Required default:
 
 ```ts
 const MATCH_DURATION_TICKS = 5 * 60 * PHASE_ONE_SIM_HZ;
-const PLANET_CAPTURE_SECONDS = 25;
+const PLANET_CAPTURE_SECONDS = 15;
 const PLANET_CAPTURE_TICKS = PLANET_CAPTURE_SECONDS * PHASE_ONE_SIM_HZ;
+const CAPTURE_ORBIT_MIN_RADIUS_MULTIPLIER = 1;
+const CAPTURE_ORBIT_MAX_RADIUS_MULTIPLIER = 5.75;
 ```
 
 Any rule that affects sim outcomes must be included in match config, content, snapshot, and hash. The renderer may duplicate values for display only, but display copies are not authoritative.
@@ -103,6 +105,7 @@ Role:
 - relatively defenseless
 - should feel valuable and vulnerable
 - spawns fighters to create a light defensive screen
+- default loadout favors capture navigation with four small engines, a fuel tank, and one cargo bay
 
 Sim behavior:
 

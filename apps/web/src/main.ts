@@ -21,6 +21,9 @@ const stressUnits = parsePositiveInteger(
 const renderMode = parseRenderMode(
   params.get("render") ?? params.get("renderMode") ?? params.get("quality")
 );
+const debugNetworkLogs =
+  parseOptionalBoolean(params.get("debugNetworkLogs") ?? params.get("netLogs")) ??
+  (import.meta.env.DEV || isLocalHostname(window.location.hostname));
 
 mountMinimalGame(app, {
   playerId,
@@ -30,6 +33,7 @@ mountMinimalGame(app, {
   seed,
   stressUnits,
   renderMode,
+  debugNetworkLogs,
 });
 
 function parsePlayerId(value: string | null): PlayerId {
@@ -56,4 +60,26 @@ function parseInteger(value: string | null): number | undefined {
 
 function parseRenderMode(value: string | null): RenderQualityMode | undefined {
   return value === "cinematic" || value === "interactive" ? value : undefined;
+}
+
+function parseOptionalBoolean(value: string | null): boolean | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "0" || normalized === "false" || normalized === "off") {
+    return false;
+  }
+
+  if (normalized === "1" || normalized === "true" || normalized === "on") {
+    return true;
+  }
+
+  return undefined;
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }

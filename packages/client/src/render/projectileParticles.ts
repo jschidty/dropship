@@ -6,7 +6,7 @@ import {
   RENDER_QUALITY_CONFIGS,
   type RenderQualityConfig,
 } from "./renderQuality";
-import { Z_AXIS, clamp, readWorldUnitsPerPixel } from "./renderMath";
+import { Z_AXIS, clamp } from "./renderMath";
 
 type ProjectileParticle = {
   owner: PlayerId;
@@ -183,7 +183,7 @@ export function updateProjectileParticles(
   renderer: ProjectileParticleRenderer,
   now: number,
   camera: THREE.Camera,
-  container: HTMLElement,
+  worldUnitsPerPixel: number,
   renderQuality: RenderQualityConfig
 ): void {
   renderer.particles = renderer.particles.filter(
@@ -208,7 +208,6 @@ export function updateProjectileParticles(
   }
 
   renderer.billboardQuaternion.copy(camera.quaternion);
-  const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, container);
   const projectileLengthPx =
     renderQuality.mode === "cinematic"
       ? CINEMATIC_PROJECTILE_PARTICLE_LENGTH_PX

@@ -6,10 +6,10 @@ export const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 export function readWorldUnitsPerPixel(
   camera: THREE.Camera,
-  container: HTMLElement
+  viewportHeight: number
 ): number {
   if (camera instanceof THREE.OrthographicCamera) {
-    return (camera.top - camera.bottom) / Math.max(container.clientHeight, 1);
+    return (camera.top - camera.bottom) / Math.max(viewportHeight, 1);
   }
 
   return 1;

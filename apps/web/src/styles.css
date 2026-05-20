@@ -115,6 +115,7 @@ canvas {
 .render-mode-button:focus-visible,
 .command-menu-unit-select:focus-visible,
 .command-menu-unit-remove:focus-visible,
+.command-menu-history-entry:focus-visible,
 .command-menu-command:focus-visible,
 .command-menu-panel-summary:focus-visible {
   outline: 1px solid rgb(252 61 33 / 100%);
@@ -266,10 +267,25 @@ canvas {
   pointer-events: auto;
 }
 
+.command-history-menu {
+  top: 50%;
+  right: auto;
+  left: 28px;
+  transform: translateY(-50%);
+  perspective: 860px;
+  perspective-origin: 50% 0%;
+}
+
 .command-menu-content {
+  position: relative;
   display: grid;
   gap: 6px;
   padding: 0;
+}
+
+.command-history-stack {
+  padding: 0 0 18px;
+  transform-style: preserve-3d;
 }
 
 .command-menu-panel {
@@ -300,7 +316,8 @@ canvas {
 
 .command-menu-unit-list,
 .command-menu-list,
-.command-menu-commands {
+.command-menu-commands,
+.command-menu-history {
   display: grid;
   gap: 0;
   margin-top: 0;
@@ -340,7 +357,8 @@ canvas {
 
 .command-menu-unit-select,
 .command-menu-unit-remove,
-.command-menu-command {
+.command-menu-command,
+.command-menu-history-entry {
   width: 100%;
   min-height: 26px;
   border: 0;
@@ -387,12 +405,164 @@ canvas {
   padding: 0 9px;
 }
 
+.command-menu-history-entry {
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid rgb(252 61 33 / 42%);
+  background: rgb(8 14 26 / 62%);
+  padding: 6px 9px;
+}
+
+.command-history-menu .command-menu-history {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0;
+  padding: 0;
+  transform-style: preserve-3d;
+}
+
+.command-history-menu
+  .command-menu-history-entry
+  + .command-menu-history-entry {
+  margin-bottom: -20px;
+}
+
+.command-history-menu .command-menu-history-entry {
+  --history-card-y: 0px;
+  --history-card-z: 8px;
+
+  position: relative;
+  min-height: 42px;
+  border: 1px solid rgb(252 61 33 / 78%);
+  background:
+    linear-gradient(105deg, rgb(252 61 33 / 18%), rgb(5 8 18 / 86%) 34%),
+    linear-gradient(180deg, rgb(20 28 52 / 78%), rgb(5 8 18 / 86%));
+  box-shadow:
+    0 16px 30px rgb(0 0 0 / 34%),
+    0 0 18px rgb(252 61 33 / 16%),
+    inset 0 0 0 1px rgb(239 248 255 / 5%);
+  transform: perspective(860px) rotateX(-15deg)
+    translate3d(0, var(--history-card-y), var(--history-card-z));
+  transform-origin: center bottom;
+  transform-style: preserve-3d;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 160ms ease,
+    transform 180ms ease;
+  will-change: transform;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(1) {
+  --history-card-y: 12px;
+  --history-card-z: 52px;
+
+  z-index: 20;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(2) {
+  --history-card-y: 9px;
+  --history-card-z: 46px;
+
+  z-index: 19;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(3) {
+  --history-card-y: 6px;
+  --history-card-z: 40px;
+
+  z-index: 18;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(4) {
+  --history-card-y: 3px;
+  --history-card-z: 34px;
+
+  z-index: 17;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(5) {
+  --history-card-y: 0px;
+  --history-card-z: 28px;
+
+  z-index: 16;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(6) {
+  --history-card-y: -3px;
+  --history-card-z: 22px;
+
+  z-index: 15;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(7) {
+  --history-card-y: -6px;
+  --history-card-z: 16px;
+
+  z-index: 14;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(8) {
+  --history-card-y: -9px;
+  --history-card-z: 10px;
+
+  z-index: 13;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(9) {
+  --history-card-y: -12px;
+  --history-card-z: 4px;
+
+  z-index: 12;
+}
+
+.command-history-menu .command-menu-history-entry:nth-child(10) {
+  --history-card-y: -15px;
+  --history-card-z: -2px;
+
+  z-index: 11;
+}
+
+.command-menu-history-label,
+.command-menu-history-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-menu-history-label {
+  color: rgb(252 61 33 / 92%);
+  font-weight: 700;
+}
+
+.command-menu-history-detail {
+  color: rgb(239 248 255 / 72%);
+  font-size: 11px;
+}
+
 .command-menu-unit:hover,
 .command-menu-unit[aria-selected="true"],
 .command-menu-command[aria-pressed="true"],
-.command-menu-command:hover:not(:disabled) {
+.command-menu-command:hover:not(:disabled),
+.command-menu-history-entry:hover {
   background: rgb(252 61 33 / 16%);
   color: rgb(255 106 72 / 100%);
+}
+
+.command-history-menu .command-menu-history-entry:hover {
+  border-color: rgb(255 106 72 / 100%);
+  box-shadow:
+    0 22px 36px rgb(0 0 0 / 40%),
+    0 0 26px rgb(252 61 33 / 28%),
+    inset 0 0 0 1px rgb(239 248 255 / 8%);
+  transform: perspective(860px) rotateX(-15deg)
+    translate3d(
+      0,
+      calc(var(--history-card-y) - 12px),
+      calc(var(--history-card-z) + 18px)
+    );
 }
 
 .command-menu-unit-select:hover,
@@ -507,5 +677,9 @@ canvas {
   .match-status {
     top: 52px;
     max-width: calc(100vw - 28px);
+  }
+
+  .command-menu {
+    width: min(220px, calc(50vw - 22px));
   }
 }

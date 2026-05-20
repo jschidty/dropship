@@ -10,7 +10,8 @@ import type { MatchStatusSnapshot } from "./GameOverlay";
 export function createMatchStatusSnapshot(
   runtime: LocalGameRuntime,
   units: readonly UnitViewModel[],
-  planets: readonly PlanetViewModel[]
+  planets: readonly PlanetViewModel[],
+  isPaused = false
 ): MatchStatusSnapshot {
   const rules = runtime.world.config.rules.matchEnd;
   const remainingTicks = Math.max(rules.durationTicks - runtime.world.tick, 0);
@@ -27,7 +28,7 @@ export function createMatchStatusSnapshot(
     playerTwoText: createPlayerMatchStatusText(units, planets, 2),
     playerOneColor: playerOne?.color ?? "#74d9ff",
     playerTwoColor: playerTwo?.color ?? "#ff4fd8",
-    resultText: formatMatchResult(runtime),
+    resultText: formatMatchResult(runtime, isPaused),
     resultKind: readMatchResultKind(runtime),
   };
 }
@@ -82,11 +83,14 @@ function readMatchResultKind(
   return result.winner === runtime.playerId ? "win" : "lose";
 }
 
-function formatMatchResult(runtime: LocalGameRuntime): string {
+function formatMatchResult(
+  runtime: LocalGameRuntime,
+  isPaused: boolean
+): string {
   const result = runtime.world.matchResult;
 
   if (!result) {
-    return "";
+    return isPaused ? "Paused" : "";
   }
 
   const label =

@@ -8,6 +8,7 @@
     "dev:web": "pnpm --filter @drop-ship/web run dev",
     "dev:server": "pnpm --filter @drop-ship/server run dev",
     "build": "pnpm --filter @drop-ship/web build",
+    "bake:textures": "node packages/tools/scripts/bake-unit-symbol-textures.mjs",
     "deploy": "pnpm build && pnpm --filter @drop-ship/server run deploy",
     "preview": "pnpm --filter @drop-ship/web preview",
     "test": "node tests/run-smoke.mjs"

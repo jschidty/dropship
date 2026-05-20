@@ -6,6 +6,7 @@ import {
   createEmptyCommandBatch,
   type ClientMessage,
   type CommandBatch,
+  type CompactSimSnapshot,
   type MatchConfig,
   type PlayerId,
   type ServerMessage,
@@ -30,6 +31,7 @@ export function createNetworkedGame(options: {
   playerId: PlayerId;
   serverUrl?: string;
   seed?: number;
+  debugLogs?: boolean;
 }): LocalGameRuntime {
   let world = createWorld({
     config: createCaptureDemoConfig({
@@ -53,6 +55,19 @@ export function createNetworkedGame(options: {
   };
   const viewModelCache = createViewModelCache();
   const hashCache = createHashCache();
+  const debugLog = createNetworkDebugLogger(
+    options.debugLogs,
+    options.matchId,
+    options.playerId
+  );
+  let loggedMatchResultTick: number | null = null;
+  let lastConnectionStatusLogKey = "";
+
+  debugLog("connection:init", {
+    serverUrl: options.serverUrl ?? "same-origin",
+    seed: options.seed ?? null,
+    ...summarizeWorld(world),
+  });
 
   const runtime: LocalGameRuntime = {
     playerId: options.playerId,
@@ -78,6 +93,7 @@ export function createNetworkedGame(options: {
         runTick(world, batch);
         pendingEvents.push(...world.events);
         processed += 1;
+        logMatchResult();
 
         if (world.tick % 30 === 0) {
           sendClientMessage({
@@ -89,6 +105,10 @@ export function createNetworkedGame(options: {
         }
 
         if (options.playerId === 1 && world.tick % 600 === 0) {
+          debugLog("snapshot:send", {
+            tick: world.tick,
+            ...summarizeWorld(world),
+          });
           sendClientMessage({
             type: "snapshot",
             playerId: options.playerId,
@@ -174,6 +194,12 @@ export function createNetworkedGame(options: {
       return status;
     },
     dispose() {
+      debugLog("connection:dispose", {
+        socketState: socket?.readyState ?? null,
+        queuedBatches: queuedBatches.size,
+        outboxMessages: outbox.length,
+        ...summarizeWorld(world),
+      });
       disposed = true;
       queuedBatches.clear();
       pendingEvents.splice(0);
@@ -193,6 +219,10 @@ export function createNetworkedGame(options: {
       options.serverUrl,
       options.seed
     );
+    debugLog("connection:connecting", {
+      url,
+      ...summarizeWorld(world),
+    });
     socket = new WebSocket(url);
     status = {
       ...status,
@@ -205,6 +235,10 @@ export function createNetworkedGame(options: {
         state: "open",
         lastError: undefined,
       };
+      debugLog("connection:open", {
+        outboxMessages: outbox.length,
+        ...summarizeWorld(world),
+      });
       sendClientMessage({
         type: "ready",
         playerId: options.playerId,
@@ -217,6 +251,13 @@ export function createNetworkedGame(options: {
       }
     });
     socket.addEventListener("close", () => {
+      debugLog("connection:closed", {
+        disposed,
+        serverTick: status.serverTick ?? null,
+        queuedBatches: queuedBatches.size,
+        outboxMessages: outbox.length,
+        ...summarizeWorld(world),
+      });
       if (!disposed) {
         status = {
           ...status,
@@ -226,6 +267,10 @@ export function createNetworkedGame(options: {
       }
     });
     socket.addEventListener("error", () => {
+      debugLog("connection:error", {
+        serverTick: status.serverTick ?? null,
+        ...summarizeWorld(world),
+      });
       status = {
         ...status,
         state: "error",
@@ -239,6 +284,10 @@ export function createNetworkedGame(options: {
     const message = JSON.parse(data) as ServerMessage | { type: "error"; code: string };
 
     if (message.type === "error") {
+      debugLog("connection:server-error", {
+        code: message.code,
+        ...summarizeWorld(world),
+      });
       status = {
         ...status,
         state: "error",
@@ -248,11 +297,20 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "matchStart") {
+      debugLog("match:start", {
+        serverTick: message.serverTick,
+        configMatchId: message.config.matchId,
+        gameMode: message.config.gameMode ?? null,
+        initialUnits: message.config.initialUnits.length,
+        initialPlanets: message.config.initialPlanets.length,
+        localTickBefore: world.tick,
+      });
       world = createWorld({
         config: message.config as MatchConfig,
         content: DEFAULT_CONTENT_REGISTRY,
       });
       queuedBatches.clear();
+      loggedMatchResultTick = null;
       status = {
         ...status,
         playerId: message.playerId,
@@ -260,6 +318,10 @@ export function createNetworkedGame(options: {
       };
 
       if (message.serverTick > world.tick) {
+        debugLog("reconnect:request", {
+          lastTick: world.tick,
+          serverTick: message.serverTick,
+        });
         sendClientMessage({
           type: "reconnect",
           playerId: options.playerId,
@@ -285,6 +347,15 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "connectionStatus") {
+      const statusLogKey = createConnectionStatusLogKey(message);
+      if (statusLogKey !== lastConnectionStatusLogKey) {
+        debugLog("connection:status", {
+          serverTick: message.serverTick,
+          running: message.running,
+          players: message.players,
+        });
+        lastConnectionStatusLogKey = statusLogKey;
+      }
       status = {
         ...status,
         serverTick: message.serverTick,
@@ -295,13 +366,27 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "catchup") {
+      debugLog("catchup:received", {
+        serverTick: message.serverTick,
+        snapshotTick: message.snapshotTick,
+        snapshot: summarizeSnapshot(message.snapshot),
+        commandBatches: message.commands.length,
+        commandCount: countCommands(message.commands),
+        localTickBefore: world.tick,
+      });
       applyCatchup(message);
       return;
     }
 
     if (message.type === "resyncHard") {
+      debugLog("resync:hard", {
+        tick: message.tick,
+        snapshot: summarizeSnapshot(message.snapshot),
+        localTickBefore: world.tick,
+      });
       world = hydrateWorldFromSnapshot(message.snapshot, DEFAULT_CONTENT_REGISTRY);
       queuedBatches.clear();
+      logMatchResult();
     }
   }
 
@@ -318,17 +403,47 @@ export function createNetworkedGame(options: {
     const catchupBatches = new Map(
       message.commands.map((batch) => [batch.tick, batch])
     );
+    const replayStartTick = world.tick;
+    let replayedTicks = 0;
+    let replayedBatches = 0;
+    let replayedCommands = 0;
+
+    debugLog("replay:start", {
+      fromTick: replayStartTick,
+      toTick: message.serverTick,
+      snapshotTick: message.snapshotTick,
+      commandBatches: message.commands.length,
+      commandCount: countCommands(message.commands),
+      ...summarizeWorld(world),
+    });
 
     while (world.tick < message.serverTick && !world.matchResult) {
-      runTick(
-        world,
-        catchupBatches.get(world.tick) ?? createEmptyCommandBatch(world.tick)
-      );
+      const batch =
+        catchupBatches.get(world.tick) ?? createEmptyCommandBatch(world.tick);
+
+      if (batch.commands.length > 0) {
+        replayedBatches += 1;
+        replayedCommands += batch.commands.length;
+      }
+
+      runTick(world, batch);
+      replayedTicks += 1;
+      logMatchResult();
     }
 
     if (world.matchResult) {
       queuedBatches.clear();
     }
+
+    debugLog("replay:done", {
+      fromTick: replayStartTick,
+      toTick: world.tick,
+      targetServerTick: message.serverTick,
+      replayedTicks,
+      replayedBatches,
+      replayedCommands,
+      ...summarizeWorld(world),
+    });
 
     status = {
       ...status,
@@ -338,6 +453,8 @@ export function createNetworkedGame(options: {
 
   function sendClientMessage(message: ClientMessage): void {
     const encoded = JSON.stringify(message);
+
+    logOutgoingClientMessage(message, socket?.readyState === WebSocket.OPEN);
 
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(encoded);
@@ -352,9 +469,55 @@ export function createNetworkedGame(options: {
       return;
     }
 
+    if (outbox.length > 0) {
+      debugLog("connection:flush-outbox", {
+        messages: outbox.length,
+      });
+    }
+
     while (outbox.length > 0) {
       socket.send(outbox.shift() ?? "");
     }
+  }
+
+  function logOutgoingClientMessage(message: ClientMessage, isOpen: boolean): void {
+    if (message.type === "ready") {
+      debugLog("connection:ready", {
+        isOpen,
+      });
+      return;
+    }
+
+    if (message.type === "reconnect") {
+      debugLog("reconnect:send", {
+        isOpen,
+        lastTick: message.lastTick,
+        serverTick: status.serverTick ?? null,
+      });
+      return;
+    }
+
+    if (message.type === "snapshot") {
+      debugLog("snapshot:queued", {
+        isOpen,
+        tick: message.tick,
+        snapshot: summarizeSnapshot(message.snapshot),
+      });
+    }
+  }
+
+  function logMatchResult(): void {
+    const result = world.matchResult;
+
+    if (!result || loggedMatchResultTick === result.completedTick) {
+      return;
+    }
+
+    loggedMatchResultTick = result.completedTick;
+    debugLog("match:result", {
+      result,
+      ...summarizeWorld(world),
+    });
   }
 }
 
@@ -378,4 +541,66 @@ function createMatchWebSocketUrl(
   }
 
   return url.toString();
+}
+
+type NetworkDebugLogger = (
+  event: string,
+  payload?: Readonly<Record<string, unknown>>
+) => void;
+
+function createNetworkDebugLogger(
+  enabled: boolean | undefined,
+  matchId: string,
+  playerId: PlayerId
+): NetworkDebugLogger {
+  if (!enabled) {
+    return () => {};
+  }
+
+  return (event, payload = {}) => {
+    console.info("[drop-ship:net]", event, {
+      matchId,
+      playerId,
+      ...payload,
+    });
+  };
+}
+
+function summarizeWorld(world: ReturnType<typeof createWorld>): Record<string, unknown> {
+  return {
+    tick: world.tick,
+    units: world.units.length,
+    planets: world.planets.length,
+    matchResult: world.matchResult,
+  };
+}
+
+function summarizeSnapshot(
+  snapshot: CompactSimSnapshot | null
+): Record<string, unknown> | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    tick: snapshot.tick,
+    units: snapshot.units.length,
+    planets: snapshot.planets.length,
+    matchResult: snapshot.matchResult ?? null,
+  };
+}
+
+function countCommands(batches: readonly CommandBatch[]): number {
+  return batches.reduce((total, batch) => total + batch.commands.length, 0);
+}
+
+function createConnectionStatusLogKey(
+  message: Extract<ServerMessage, { type: "connectionStatus" }>
+): string {
+  return [
+    message.running ? "running" : "paused",
+    ...message.players.map(
+      (player) => `${player.playerId}:${player.connected ? "1" : "0"}`
+    ),
+  ].join("|");
 }

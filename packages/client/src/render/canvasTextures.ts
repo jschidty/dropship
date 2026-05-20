@@ -5,25 +5,129 @@ import {
   type ShipClassId,
 } from "@drop-ship/protocol";
 
-const SDF_TEXTURE_SIZE = 256;
-const SDF_SUPERSAMPLE_GRID = 3;
+const UNIT_SYMBOL_TEXTURE_SIZE = 256;
+const UNIT_SYMBOL_TEXTURE_SUPERSAMPLE_GRID = 3;
+const UNIT_SYMBOL_IMAGE_SIZE = 64;
+const UNIT_SYMBOL_IMAGE_SUPERSAMPLE_GRID = 2;
 const PI = Math.PI;
 const TAU = PI * 2;
 const UNIT_SYMBOL_IMAGE_URLS = new Map<string, string>();
+const DEFAULT_PLAYER_ONE_COLOR = "#74d9ff";
+const DEFAULT_PLAYER_TWO_COLOR = "#ff4fd8";
+const TEXTURE_LOADER = new THREE.TextureLoader();
+const BAKED_SELECTION_RING_TEXTURE_URL = new URL(
+  "./assets/unit-symbols/textures/selection-ring.png",
+  import.meta.url
+).href;
+const BAKED_UNIT_SYMBOL_ASSETS = new Map<
+  string,
+  Readonly<{ imageUrl: string; textureUrl: string }>
+>([
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_ONE_COLOR,
+    1,
+    SHIP_CLASS_IDS.fighter,
+    new URL("./assets/unit-symbols/images/player-1-fighter.png", import.meta.url)
+      .href,
+    new URL(
+      "./assets/unit-symbols/textures/player-1-fighter.png",
+      import.meta.url
+    ).href
+  ),
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_ONE_COLOR,
+    1,
+    SHIP_CLASS_IDS.dropShip,
+    new URL(
+      "./assets/unit-symbols/images/player-1-drop-ship.png",
+      import.meta.url
+    ).href,
+    new URL(
+      "./assets/unit-symbols/textures/player-1-drop-ship.png",
+      import.meta.url
+    ).href
+  ),
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_ONE_COLOR,
+    1,
+    SHIP_CLASS_IDS.battleship,
+    new URL(
+      "./assets/unit-symbols/images/player-1-battleship.png",
+      import.meta.url
+    ).href,
+    new URL(
+      "./assets/unit-symbols/textures/player-1-battleship.png",
+      import.meta.url
+    ).href
+  ),
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_TWO_COLOR,
+    2,
+    SHIP_CLASS_IDS.fighter,
+    new URL("./assets/unit-symbols/images/player-2-fighter.png", import.meta.url)
+      .href,
+    new URL(
+      "./assets/unit-symbols/textures/player-2-fighter.png",
+      import.meta.url
+    ).href
+  ),
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_TWO_COLOR,
+    2,
+    SHIP_CLASS_IDS.dropShip,
+    new URL(
+      "./assets/unit-symbols/images/player-2-drop-ship.png",
+      import.meta.url
+    ).href,
+    new URL(
+      "./assets/unit-symbols/textures/player-2-drop-ship.png",
+      import.meta.url
+    ).href
+  ),
+  createBakedUnitSymbolAsset(
+    DEFAULT_PLAYER_TWO_COLOR,
+    2,
+    SHIP_CLASS_IDS.battleship,
+    new URL(
+      "./assets/unit-symbols/images/player-2-battleship.png",
+      import.meta.url
+    ).href,
+    new URL(
+      "./assets/unit-symbols/textures/player-2-battleship.png",
+      import.meta.url
+    ).href
+  ),
+]);
 
 export function createUnitSymbolTexture(
   colorValue: string,
   owner: PlayerId,
   shipClassId: ShipClassId | number
-): THREE.CanvasTexture {
-  const texture = new THREE.CanvasTexture(
-    createUnitSymbolCanvas(colorValue, owner, shipClassId)
+): THREE.Texture {
+  const bakedAsset = BAKED_UNIT_SYMBOL_ASSETS.get(
+    createUnitSymbolKey(colorValue, owner, shipClassId)
   );
+  const texture = bakedAsset
+    ? TEXTURE_LOADER.load(bakedAsset.textureUrl)
+    : new THREE.CanvasTexture(
+        createUnitSymbolCanvas(
+          colorValue,
+          owner,
+          shipClassId,
+          UNIT_SYMBOL_TEXTURE_SIZE,
+          UNIT_SYMBOL_TEXTURE_SUPERSAMPLE_GRID
+        )
+      );
+
+  configureUnitSymbolTexture(texture);
+  return texture;
+}
+
+function configureUnitSymbolTexture(texture: THREE.Texture): void {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
-  return texture;
 }
 
 export function createUnitSymbolImageUrl(
@@ -31,7 +135,13 @@ export function createUnitSymbolImageUrl(
   owner: PlayerId,
   shipClassId: ShipClassId | number
 ): string {
-  const key = `${colorValue}:${owner}:${shipClassId}`;
+  const key = createUnitSymbolKey(colorValue, owner, shipClassId);
+  const bakedAsset = BAKED_UNIT_SYMBOL_ASSETS.get(key);
+
+  if (bakedAsset) {
+    return bakedAsset.imageUrl;
+  }
+
   const cached = UNIT_SYMBOL_IMAGE_URLS.get(key);
 
   if (cached) {
@@ -41,20 +151,54 @@ export function createUnitSymbolImageUrl(
   const imageUrl = createUnitSymbolCanvas(
     colorValue,
     owner,
-    shipClassId
+    shipClassId,
+    UNIT_SYMBOL_IMAGE_SIZE,
+    UNIT_SYMBOL_IMAGE_SUPERSAMPLE_GRID
   ).toDataURL("image/png");
   UNIT_SYMBOL_IMAGE_URLS.set(key, imageUrl);
   return imageUrl;
 }
 
-function createUnitSymbolCanvas(
+function createUnitSymbolKey(
   colorValue: string,
   owner: PlayerId,
   shipClassId: ShipClassId | number
+): string {
+  return `${colorValue.trim().toLowerCase()}:${owner}:${shipClassId}`;
+}
+
+function createBakedUnitSymbolAsset(
+  colorValue: string,
+  owner: PlayerId,
+  shipClassId: ShipClassId | number,
+  imageUrl: string,
+  textureUrl: string
+): readonly [
+  string,
+  Readonly<{
+    imageUrl: string;
+    textureUrl: string;
+  }>,
+] {
+  return [
+    createUnitSymbolKey(colorValue, owner, shipClassId),
+    {
+      imageUrl,
+      textureUrl,
+    },
+  ];
+}
+
+function createUnitSymbolCanvas(
+  colorValue: string,
+  owner: PlayerId,
+  shipClassId: ShipClassId | number,
+  size: number,
+  supersampleGrid: number
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
-  canvas.width = SDF_TEXTURE_SIZE;
-  canvas.height = SDF_TEXTURE_SIZE;
+  canvas.width = size;
+  canvas.height = size;
 
   const context = canvas.getContext("2d");
 
@@ -66,11 +210,11 @@ function createUnitSymbolCanvas(
   void owner;
 
   if (shipClassId === SHIP_CLASS_IDS.battleship) {
-    drawSdfSymbol(context, colorValue, drawEldersSdf);
+    drawSdfSymbol(context, size, supersampleGrid, colorValue, drawEldersSdf);
   } else if (shipClassId === SHIP_CLASS_IDS.dropShip) {
-    drawSdfSymbol(context, colorValue, drawLoopSdf);
+    drawSdfSymbol(context, size, supersampleGrid, colorValue, drawLoopSdf);
   } else {
-    drawSdfSymbol(context, colorValue, drawIntuitionSdf);
+    drawSdfSymbol(context, size, supersampleGrid, colorValue, drawIntuitionSdf);
   }
 
   return canvas;
@@ -78,34 +222,36 @@ function createUnitSymbolCanvas(
 
 function drawSdfSymbol(
   context: CanvasRenderingContext2D,
+  size: number,
+  supersampleGrid: number,
   colorValue: string,
   draw: (st: Vec2) => number
 ): void {
   const color = new THREE.Color(colorValue);
-  const image = context.createImageData(SDF_TEXTURE_SIZE, SDF_TEXTURE_SIZE);
-  const samples = SDF_SUPERSAMPLE_GRID * SDF_SUPERSAMPLE_GRID;
-  const sampleStep = 1 / SDF_SUPERSAMPLE_GRID;
+  const image = context.createImageData(size, size);
+  const samples = supersampleGrid * supersampleGrid;
+  const sampleStep = 1 / supersampleGrid;
   const sampleOffset = sampleStep * 0.5;
   const red = Math.round(color.r * 255);
   const green = Math.round(color.g * 255);
   const blue = Math.round(color.b * 255);
 
-  for (let y = 0; y < SDF_TEXTURE_SIZE; y += 1) {
-    for (let x = 0; x < SDF_TEXTURE_SIZE; x += 1) {
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
       let coverage = 0;
 
-      for (let sy = 0; sy < SDF_SUPERSAMPLE_GRID; sy += 1) {
-        for (let sx = 0; sx < SDF_SUPERSAMPLE_GRID; sx += 1) {
+      for (let sy = 0; sy < supersampleGrid; sy += 1) {
+        for (let sx = 0; sx < supersampleGrid; sx += 1) {
           coverage += clamp01(
             draw({
-              x: (x + sx * sampleStep + sampleOffset) / SDF_TEXTURE_SIZE,
-              y: 1 - (y + sy * sampleStep + sampleOffset) / SDF_TEXTURE_SIZE,
+              x: (x + sx * sampleStep + sampleOffset) / size,
+              y: 1 - (y + sy * sampleStep + sampleOffset) / size,
             })
           );
         }
       }
 
-      const pixel = (y * SDF_TEXTURE_SIZE + x) * 4;
+      const pixel = (y * size + x) * 4;
       image.data[pixel] = red;
       image.data[pixel + 1] = green;
       image.data[pixel + 2] = blue;
@@ -277,7 +423,16 @@ function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
 
-export function createSelectionRingTexture(): THREE.CanvasTexture {
+export function createSelectionRingTexture(): THREE.Texture {
+  const bakedTexture = TEXTURE_LOADER.load(BAKED_SELECTION_RING_TEXTURE_URL);
+  bakedTexture.colorSpace = THREE.SRGBColorSpace;
+  bakedTexture.generateMipmaps = false;
+  bakedTexture.minFilter = THREE.LinearFilter;
+  bakedTexture.magFilter = THREE.LinearFilter;
+  return bakedTexture;
+}
+
+export function createFallbackSelectionRingTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 128;

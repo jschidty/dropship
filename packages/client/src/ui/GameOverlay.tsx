@@ -16,6 +16,13 @@ import type { UiStore } from "./store";
 
 export type PendingCommandMenuCommand = "orbitPlanet" | null;
 
+export type CommandHistoryEntry = Readonly<{
+  id: number;
+  label: string;
+  detail: string;
+  unitCount: number;
+}>;
+
 export type MatchStatusSnapshot = Readonly<{
   remainingTicks: number;
   playerOneText: string;
@@ -38,6 +45,7 @@ export type GameOverlaySnapshot = Readonly<{
   selectedUnits: readonly UnitViewModel[];
   commandMenuLeaderKey: string | null;
   pendingCommand: PendingCommandMenuCommand;
+  commandHistory: readonly CommandHistoryEntry[];
   matchStatus: MatchStatusSnapshot;
   stats: GameStatsSnapshot;
   hotkeysOpen: boolean;
@@ -55,6 +63,7 @@ export type GameOverlayActions = Readonly<{
   deselectUnit: (unitKey: string) => void;
   escortLeader: () => void;
   toggleOrbitPlanetCommand: () => void;
+  selectCommandHistoryEntry: (entryId: number) => void;
   closeHotkeysDialog: () => void;
 }>;
 
@@ -64,12 +73,13 @@ export function createInitialOverlaySnapshot(
 ): GameOverlaySnapshot {
   return {
     activeCameraPreset: "top",
-    tacticalOverlayEnabled: false,
+    tacticalOverlayEnabled: true,
     debugInfoEnabled: false,
     renderMode,
     selectedUnits: [],
     commandMenuLeaderKey: null,
     pendingCommand: null,
+    commandHistory: [],
     matchStatus: {
       remainingTicks: 0,
       playerOneText: "P1 0P 0U",
@@ -119,6 +129,7 @@ function GameOverlay({
       <CameraPresetControls snapshot={snapshot} actions={actions} />
       <TopLeftControls snapshot={snapshot} actions={actions} />
       <MatchStatus snapshot={snapshot.matchStatus} />
+      <CommandHistoryMenu snapshot={snapshot} actions={actions} />
       <CommandMenu snapshot={snapshot} actions={actions} />
       <StatsLayer snapshot={snapshot} />
       <HotkeysDialog snapshot={snapshot} actions={actions} />
@@ -275,6 +286,49 @@ function MatchStatus({ snapshot }: { snapshot: MatchStatusSnapshot }) {
   );
 }
 
+function CommandHistoryMenu({
+  snapshot,
+  actions,
+}: {
+  snapshot: GameOverlaySnapshot;
+  actions: GameOverlayActions;
+}) {
+  const hasCommandHistory = snapshot.commandHistory.length > 0;
+
+  return (
+    <aside
+      className="command-menu command-history-menu"
+      hidden={!hasCommandHistory}
+      aria-label="Recent commands"
+      onPointerDown={stopOverlayPointer}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+      <div className="command-menu-history command-history-stack">
+        {snapshot.commandHistory.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className="command-menu-history-entry"
+            title={`${entry.label} - ${entry.detail}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              actions.selectCommandHistoryEntry(entry.id);
+              event.currentTarget.blur();
+            }}
+          >
+            <span className="command-menu-history-label">{entry.label}</span>
+            <span className="command-menu-history-detail">{entry.detail}</span>
+          </button>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 function CommandMenu({
   snapshot,
   actions,
@@ -285,11 +339,12 @@ function CommandMenu({
   const selectedLeader = snapshot.selectedUnits.find(
     (unit) => unit.key === snapshot.commandMenuLeaderKey
   );
+  const hasSelectedUnits = snapshot.selectedUnits.length > 0;
 
   return (
     <aside
       className="command-menu"
-      hidden={snapshot.selectedUnits.length === 0}
+      hidden={!hasSelectedUnits}
       aria-label="Command menu"
       onPointerDown={stopOverlayPointer}
       onContextMenu={(event) => {
@@ -301,6 +356,7 @@ function CommandMenu({
         <details
           className="command-menu-panel command-menu-commands-panel"
           open
+          hidden={!hasSelectedUnits}
         >
           <summary className="command-menu-panel-summary">Commands</summary>
           <div className="command-menu-panel-body command-menu-commands">
@@ -337,7 +393,7 @@ function CommandMenu({
         </details>
         <div
           className="command-menu-unit-list"
-          hidden={snapshot.selectedUnits.length === 0}
+          hidden={!hasSelectedUnits}
         >
           {createUnitGroups(snapshot.selectedUnits).map((group) => (
             <CommandUnitGroup
@@ -512,6 +568,7 @@ const HOTKEYS: readonly (readonly [string, string])[] = [
   ["C", "Capture selected planet"],
   ["G", "Guard selected planet"],
   ["T", "Toggle tactical overlay"],
+  ["P", "Pause/resume single-player"],
   ["Tab", "Toggle tactical/strategic camera"],
   ["2", "Strategic camera"],
   ["R", "Randomize owned unit headings"],

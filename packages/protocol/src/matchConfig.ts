@@ -20,8 +20,7 @@ export const SHIP_CLASS_IDS = {
   battleship: 3,
 } as const;
 
-export type ShipClassId =
-  (typeof SHIP_CLASS_IDS)[keyof typeof SHIP_CLASS_IDS];
+export type ShipClassId = (typeof SHIP_CLASS_IDS)[keyof typeof SHIP_CLASS_IDS];
 
 export type Vec3Data = Readonly<{
   x: number;
@@ -238,8 +237,8 @@ export type MatchContentOverrides = Readonly<{
 export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
   capture: {
     planetCaptureSeconds: 15,
-    orbitMinRadiusMultiplier: 1.25,
-    orbitMaxRadiusMultiplier: 4.25,
+    orbitMinRadiusMultiplier: 1,
+    orbitMaxRadiusMultiplier: 3,
     breakGraceTicks: 30,
   },
   spawning: {
@@ -406,21 +405,21 @@ const MIN_GENERATED_PLANETS = 4;
 const MAX_GENERATED_PLANETS = 10;
 const MIN_PARENT_PLANETS = 4;
 const MAX_MOONS_PER_PLANET = 2;
+const CAPTURE_DEMO_CAPTURABLE_PARENT_PLANETS = 2;
 const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
   { id: 1, name: "Player 1", color: "#74d9ff" },
   { id: 2, name: "Player 2", color: "#ff4fd8" },
 ];
 
 export function createMinimalSkirmishConfig(
-  options: CreateMinimalSkirmishConfigOptions | number = {}
+  options: CreateMinimalSkirmishConfigOptions | number = {},
 ): MatchConfig {
   const normalizedOptions =
     typeof options === "number" ? { seed: options } : options;
   const seed = normalizeSeed(normalizedOptions.seed);
-  const matchId =
-    !normalizedOptions.matchId
-      ? `local-minimal-skirmish-${seed}`
-      : normalizedOptions.matchId;
+  const matchId = !normalizedOptions.matchId
+    ? `local-minimal-skirmish-${seed}`
+    : normalizedOptions.matchId;
   const players = normalizedOptions.players ?? DEFAULT_PLAYERS;
   const generated = generatePlanetarySystem(seed);
   const initialUnits =
@@ -451,14 +450,14 @@ export function createMinimalSkirmishConfig(
 }
 
 export function createCaptureDemoConfig(
-  options: CreateMinimalSkirmishConfigOptions | number = {}
+  options: CreateMinimalSkirmishConfigOptions | number = {},
 ): MatchConfig {
   const normalizedOptions =
     typeof options === "number" ? { seed: options } : options;
   const base = createMinimalSkirmishConfig(options);
-  const primaryPlanet = base.initialPlanets.find(
-    (planet) => planet.parentPlanetIndex === null
-  ) ?? base.initialPlanets[0];
+  const primaryPlanet =
+    base.initialPlanets.find((planet) => planet.parentPlanetIndex === null) ??
+    base.initialPlanets[0];
   const center = primaryPlanet?.position ?? { x: 0, y: 0, z: 0 };
   const initialUnits = createCaptureDemoUnits(center);
 
@@ -470,36 +469,58 @@ export function createCaptureDemoConfig(
       normalizedOptions.controllers ??
       createDefaultControllersForGame(base.players, "captureDemo"),
     rules: base.rules,
-    initialUnits:
-      normalizedOptions.initialUnits ? normalizedOptions.initialUnits : initialUnits,
-    initialPlanets:
-      normalizedOptions.initialPlanets
-        ? normalizedOptions.initialPlanets
-        : base.initialPlanets.map((planet, index) => ({
-            ...planet,
-            capturable: planet.parentPlanetIndex === null,
-            initialOwner: index === 0 ? 0 : undefined,
-          })),
+    initialUnits: normalizedOptions.initialUnits
+      ? normalizedOptions.initialUnits
+      : initialUnits,
+    initialPlanets: normalizedOptions.initialPlanets
+      ? normalizedOptions.initialPlanets
+      : createCaptureDemoPlanets(base.initialPlanets),
   };
+}
+
+function createCaptureDemoPlanets(
+  planets: readonly InitialPlanetConfig[],
+): readonly InitialPlanetConfig[] {
+  let capturableParentPlanets = 0;
+
+  return planets.map((planet) => {
+    if (planet.parentPlanetIndex !== null) {
+      return {
+        ...planet,
+        capturable: false,
+        initialOwner: undefined,
+      };
+    }
+
+    capturableParentPlanets += 1;
+    const capturable =
+      capturableParentPlanets <= CAPTURE_DEMO_CAPTURABLE_PARENT_PLANETS;
+
+    return {
+      ...planet,
+      capturable,
+      initialOwner: capturable ? 0 : undefined,
+    };
+  });
 }
 
 export function createDefaultControllersForGame(
   players: readonly PlayerConfig[],
-  gameMode: GameMode | undefined
+  gameMode: GameMode | undefined,
 ): readonly PlayerControllerConfig[] {
   return createDefaultControllers(
     players,
     "human",
     gameMode === "captureDemo"
       ? new Map<PlayerId, PlayerControllerType>([[2, "npc"]])
-      : new Map<PlayerId, PlayerControllerType>()
+      : new Map<PlayerId, PlayerControllerType>(),
   );
 }
 
 export function createDefaultControllers(
   players: readonly PlayerConfig[],
   fallbackType: PlayerControllerType,
-  overrides: ReadonlyMap<PlayerId, PlayerControllerType> = new Map()
+  overrides: ReadonlyMap<PlayerId, PlayerControllerType> = new Map(),
 ): readonly PlayerControllerConfig[] {
   return players.map((player) => ({
     playerId: player.id,
@@ -509,7 +530,7 @@ export function createDefaultControllers(
 
 export function resolveMatchRules(
   overrides: PartialMatchRulesConfig | undefined,
-  legacyCaptureDemoRules?: CaptureDemoRules
+  legacyCaptureDemoRules?: CaptureDemoRules,
 ): MatchRulesConfig {
   const legacyRules = legacyCaptureDemoRules
     ? captureDemoRulesToMatchRules(legacyCaptureDemoRules)
@@ -540,7 +561,7 @@ export function resolveMatchRules(
 }
 
 function captureDemoRulesToMatchRules(
-  rules: CaptureDemoRules
+  rules: CaptureDemoRules,
 ): MatchRulesConfig {
   return {
     capture: {
@@ -566,7 +587,7 @@ function captureDemoRulesToMatchRules(
 }
 
 export function resolveSimTuning(
-  overrides: PartialSimTuningConfig | undefined
+  overrides: PartialSimTuningConfig | undefined,
 ): SimTuningConfig {
   return {
     movement: {
@@ -597,13 +618,13 @@ export function resolveSimTuning(
 }
 
 function createCaptureDemoUnits(
-  primaryPlanetPosition: Vec3Data
+  primaryPlanetPosition: Vec3Data,
 ): readonly InitialUnitConfig[] {
   const offsets: InitialUnitConfig[] = [];
   const addFleet = (
     owner: PlayerId,
     anchor: Vec3Data,
-    facing: 1 | -1
+    facing: 1 | -1,
   ): void => {
     offsets.push({
       owner,
@@ -650,12 +671,12 @@ function createCaptureDemoUnits(
           y: anchor.y + 2,
           z: anchor.z + 30,
         },
-      }
+      },
     );
   };
 
-  addFleet(1, { x: -360, y: 8, z: -260 }, 1);
-  addFleet(2, { x: 360, y: 8, z: 260 }, -1);
+  addFleet(1, { x: -220, y: 8, z: -120 }, 1);
+  addFleet(2, { x: 220, y: 8, z: 120 }, -1);
 
   return offsets.map((unit) => ({
     ...unit,
@@ -677,7 +698,7 @@ function generatePlanetarySystem(seed: number): {
     randomInt(random, MAX_GENERATED_PLANETS - MIN_GENERATED_PLANETS + 1);
   const targetMoonCount = randomInt(
     random,
-    targetPlanetCount - MIN_PARENT_PLANETS + 1
+    targetPlanetCount - MIN_PARENT_PLANETS + 1,
   );
   const planetCount = targetPlanetCount - targetMoonCount;
   const sunDirection = sampleOrbitAxis(random);
@@ -707,7 +728,7 @@ function generatePlanetarySystem(seed: number): {
       orbit.center,
       orbitAxis,
       orbit.radius,
-      orbit.phase
+      orbit.phase,
     );
     const parentPlanetIndex = planets.length;
     const planet: InitialPlanetConfig = {
@@ -715,12 +736,11 @@ function generatePlanetarySystem(seed: number): {
       name: PLANET_NAMES[index] ?? `Planet ${index + 1}`,
       position,
       mass: quantize(
-        7_200_000_000 * Math.pow(radius / 28, 3) * (0.9 + random() * 0.22)
+        7_200_000_000 * Math.pow(radius / 28, 3) * (0.9 + random() * 0.22),
       ),
       radius,
       color: samplePlanetColor(random, index, false, appearance.planetClass),
-      hasAtmosphere:
-        appearance.planetClass !== "ice" || random() < 0.42,
+      hasAtmosphere: appearance.planetClass !== "ice" || random() < 0.42,
       appearance,
       orbitAxis,
       orbit,
@@ -733,10 +753,9 @@ function generatePlanetarySystem(seed: number): {
     const maxMoons = Math.min(MAX_MOONS_PER_PLANET, remainingMoons);
     const minMoons = Math.max(
       0,
-      remainingMoons - remainingParentPlanets * MAX_MOONS_PER_PLANET
+      remainingMoons - remainingParentPlanets * MAX_MOONS_PER_PLANET,
     );
-    const moonCount =
-      minMoons + randomInt(random, maxMoons - minMoons + 1);
+    const moonCount = minMoons + randomInt(random, maxMoons - minMoons + 1);
 
     remainingMoons -= moonCount;
 
@@ -760,17 +779,17 @@ function generatePlanetarySystem(seed: number): {
           position,
           moonAxis,
           moonOrbit.radius,
-          moonOrbit.phase
+          moonOrbit.phase,
         ),
         mass: quantize(
-          planet.mass * Math.pow(moonRadius / Math.max(radius, 1), 3) * 0.8
+          planet.mass * Math.pow(moonRadius / Math.max(radius, 1), 3) * 0.8,
         ),
         radius: moonRadius,
         color: samplePlanetColor(
           random,
           planets.length,
           true,
-          appearance.planetClass
+          appearance.planetClass,
         ),
         hasAtmosphere: false,
         appearance,
@@ -825,7 +844,9 @@ function enforceSingleRingedPlanet(planets: InitialPlanetConfig[]): void {
   }
 }
 
-function selectRingedPlanetIndex(planets: readonly InitialPlanetConfig[]): number {
+function selectRingedPlanetIndex(
+  planets: readonly InitialPlanetConfig[],
+): number {
   for (let index = 0; index < planets.length; index += 1) {
     const planet = planets[index];
 
@@ -849,7 +870,7 @@ function selectRingedPlanetIndex(planets: readonly InitialPlanetConfig[]): numbe
 }
 
 function createInitialUnits(
-  primaryPlanetPosition: Vec3Data
+  primaryPlanetPosition: Vec3Data,
 ): readonly InitialUnitConfig[] {
   const offsets: readonly InitialUnitConfig[] = [
     {
@@ -898,7 +919,7 @@ function samplePlanetColor(
   random: () => number,
   index: number,
   muted: boolean,
-  planetClass: PlanetClass
+  planetClass: PlanetClass,
 ): string {
   const goldenRatioConjugate = 0.618033988749895;
   let hue: number;
@@ -936,7 +957,7 @@ function samplePlanetColor(
 function samplePlanetAppearance(
   random: () => number,
   radius: number,
-  moon: boolean
+  moon: boolean,
 ): PlanetAppearanceConfig {
   const sizeBias = moon
     ? clamp((radius - 6) / 10, 0, 1)
@@ -988,7 +1009,7 @@ function positionOnOrbit(
   center: Vec3Data,
   axis: Vec3Data,
   radius: number,
-  phase: number
+  phase: number,
 ): Vec3Data {
   const basis = orbitBasis(axis);
   const phaseCos = Math.cos(phase);
@@ -997,15 +1018,15 @@ function positionOnOrbit(
   return {
     x: quantize(
       center.x +
-        (basis.tangent.x * phaseCos + basis.bitangent.x * phaseSin) * radius
+        (basis.tangent.x * phaseCos + basis.bitangent.x * phaseSin) * radius,
     ),
     y: quantize(
       center.y +
-        (basis.tangent.y * phaseCos + basis.bitangent.y * phaseSin) * radius
+        (basis.tangent.y * phaseCos + basis.bitangent.y * phaseSin) * radius,
     ),
     z: quantize(
       center.z +
-        (basis.tangent.z * phaseCos + basis.bitangent.z * phaseSin) * radius
+        (basis.tangent.z * phaseCos + basis.bitangent.z * phaseSin) * radius,
     ),
   };
 }
@@ -1050,7 +1071,7 @@ function crossVec3(a: Vec3Data, b: Vec3Data): Vec3Data {
 function hsvToRgb(
   hue: number,
   saturation: number,
-  value: number
+  value: number,
 ): { r: number; g: number; b: number } {
   const sector = Math.floor(hue * 6);
   const fraction = hue * 6 - sector;

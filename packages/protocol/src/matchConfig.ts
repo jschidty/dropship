@@ -405,7 +405,6 @@ const MIN_GENERATED_PLANETS = 4;
 const MAX_GENERATED_PLANETS = 10;
 const MIN_PARENT_PLANETS = 4;
 const MAX_MOONS_PER_PLANET = 2;
-const CAPTURE_DEMO_CAPTURABLE_PARENT_PLANETS = 2;
 const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
   { id: 1, name: "Player 1", color: "#74d9ff" },
   { id: 2, name: "Player 2", color: "#ff4fd8" },
@@ -481,8 +480,6 @@ export function createCaptureDemoConfig(
 function createCaptureDemoPlanets(
   planets: readonly InitialPlanetConfig[],
 ): readonly InitialPlanetConfig[] {
-  let capturableParentPlanets = 0;
-
   return planets.map((planet) => {
     if (planet.parentPlanetIndex !== null) {
       return {
@@ -492,14 +489,10 @@ function createCaptureDemoPlanets(
       };
     }
 
-    capturableParentPlanets += 1;
-    const capturable =
-      capturableParentPlanets <= CAPTURE_DEMO_CAPTURABLE_PARENT_PLANETS;
-
     return {
       ...planet,
-      capturable,
-      initialOwner: capturable ? 0 : undefined,
+      capturable: true,
+      initialOwner: 0,
     };
   });
 }
@@ -621,7 +614,7 @@ function createCaptureDemoUnits(
   primaryPlanetPosition: Vec3Data,
 ): readonly InitialUnitConfig[] {
   const offsets: InitialUnitConfig[] = [];
-  const addFleet = (
+  const addSquadron = (
     owner: PlayerId,
     anchor: Vec3Data,
     facing: 1 | -1,
@@ -652,7 +645,13 @@ function createCaptureDemoUnits(
         },
       });
     }
+  };
 
+  const addBattleships = (
+    owner: PlayerId,
+    anchor: Vec3Data,
+    facing: 1 | -1,
+  ): void => {
     offsets.push(
       {
         owner,
@@ -675,8 +674,16 @@ function createCaptureDemoUnits(
     );
   };
 
-  addFleet(1, { x: -220, y: 8, z: -120 }, 1);
-  addFleet(2, { x: 220, y: 8, z: 120 }, -1);
+  const playerOneAnchor = { x: -220, y: 8, z: -120 };
+  const playerTwoAnchor = { x: 220, y: 8, z: 120 };
+
+  addSquadron(1, playerOneAnchor, 1);
+  addSquadron(1, { x: -292, y: 12, z: -48 }, 1);
+  addBattleships(1, playerOneAnchor, 1);
+
+  addSquadron(2, playerTwoAnchor, -1);
+  addSquadron(2, { x: 292, y: 12, z: 48 }, -1);
+  addBattleships(2, playerTwoAnchor, -1);
 
   return offsets.map((unit) => ({
     ...unit,

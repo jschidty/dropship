@@ -72,6 +72,7 @@ testLocalRuntimeStopsAfterMatchEnd();
 testLocalRuntimeUsesScriptedNpcController();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
+testNpcDropShipsClaimDifferentCapturePlanets();
 testNpcFightersHoldEscortWhenDropShipIsNotThreatened();
 testNpcControllersCanOwnEveryPlayer();
 testLegacySnapshotHydratesResolvedConfig();
@@ -476,7 +477,6 @@ function testHeadlessDropShipOnlyMatchCapturesPlanets(): void {
   });
   const result = runner.run();
 
-  assert.equal(result.metrics.matchEndReason, "allPlanetsCaptured");
   assert.ok(
     result.metrics.eventCounts.planetCaptured >= 2,
     "Expected NPC drop ships to capture planets without combat escorts"
@@ -675,10 +675,24 @@ function testCaptureDemoConfig(): void {
   });
 
   assert.equal(config.gameMode, "captureDemo");
-  assert.ok(world.planets.some((planet) => planet.control.capturable));
+  const parentPlanets = world.planets.filter(
+    (planet) => planet.parentPlanetIndex === null
+  );
+  const capturablePlanets = world.planets.filter(
+    (planet) => planet.control.capturable
+  );
+
+  assert.ok(capturablePlanets.length >= 4);
   assert.equal(
-    world.planets.filter((planet) => planet.control.capturable).length,
-    2
+    capturablePlanets.length,
+    parentPlanets.length,
+    "Expected every primary planet to be capturable"
+  );
+  assert.ok(
+    world.planets.every(
+      (planet) => planet.parentPlanetIndex === null || !planet.control.capturable
+    ),
+    "Expected moons to remain non-capturable"
   );
 
   const playerOneDropShip = assertCaptureDemoFleet(world, 1);
@@ -853,7 +867,7 @@ function testCapturedPlanetSpawnsDropShip(): void {
     (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
   );
   const spawnedDropShip = playerDropShips.find(
-    (unit) => !sameHandle(unit.handle, dropShip.handle)
+    (unit) => unit.spawnedTick > 0 && unit.moveOrder?.type === "orbitPlanet"
   );
 
   assert.equal(planet.control.owner, 1);
@@ -894,7 +908,7 @@ function testDropShipSpawnsFighters(): void {
     (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
   ).length - initialFighters;
 
-  assert.equal(spawnedFighters, 2);
+  assert.equal(spawnedFighters, 4);
 }
 
 function testSpawnedFightersEscortParentDropShip(): void {
@@ -1080,14 +1094,20 @@ function testLocalRuntimeUsesScriptedNpcController(): void {
   runtime.stepTick();
 
   for (const scheduled of expectedCommands) {
-    assert.equal(scheduled.command.type, "issueUnitOrder");
+    const command = scheduled.command;
+
+    assert.equal(command.type, "issueUnitOrder");
+
+    if (command.type !== "issueUnitOrder") {
+      continue;
+    }
 
     const unit = runtime.world.units.find((entry) =>
-      sameHandle(entry.handle, scheduled.command.unitHandles[0])
+      sameHandle(entry.handle, command.unitHandles[0])
     );
 
     assert.ok(unit);
-    assert.deepEqual(unit.moveOrder, scheduled.command.order);
+    assert.deepEqual(unit.moveOrder, command.order);
   }
 
   runtime.dispose();
@@ -1201,6 +1221,74 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
   assert.ok(
     dropShip.moveOrder?.type === "capturePlanet" &&
       sameHandle(dropShip.moveOrder.planet, safePlanet.handle)
+  );
+}
+
+function testNpcDropShipsClaimDifferentCapturePlanets(): void {
+  const base = createCaptureDemoConfig({ seed: 1337 });
+  const planetTemplate = base.initialPlanets.find(
+    (planet) => planet.parentPlanetIndex === null
+  );
+
+  assert.ok(planetTemplate);
+
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    controllers: [
+      { playerId: 1, type: "npc" },
+      { playerId: 2, type: "npc" },
+    ],
+    initialPlanets: [
+      createStaticTestPlanet(planetTemplate, "Near", { x: 0, y: 0, z: 0 }),
+      createStaticTestPlanet(planetTemplate, "Second", { x: 120, y: 0, z: 0 }),
+      createStaticTestPlanet(planetTemplate, "Third", { x: 240, y: 0, z: 0 }),
+    ],
+    initialUnits: [
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 30, y: 8, z: 0 },
+      },
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 34, y: 8, z: 6 },
+      },
+    ],
+    rules: {
+      npc: {
+        thinkIntervalTicks: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+        fighterSpawnCapPerDropShip: 0,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const controller = createScriptedNpcController({ playerIds: [2] });
+  const targets = controller
+    .commandsForTick(world)
+    .flatMap((scheduled) => {
+      const command = scheduled.command;
+
+      return command.type === "issueUnitOrder" &&
+        command.order.type === "capturePlanet"
+        ? [command.order.planet]
+        : [];
+    });
+  const targetKeys = new Set(
+    targets.map((target) => `${target.id}:${target.generation}`)
+  );
+
+  assert.equal(targets.length, 2);
+  assert.equal(
+    targetKeys.size,
+    2,
+    "Expected NPC drop ships to spread across capture targets"
   );
 }
 
@@ -1735,23 +1823,30 @@ function assertCaptureDemoFleet(
   );
   const dropShip = dropShips[0];
 
-  assert.equal(dropShips.length, 1);
-  assert.equal(fighters.length, 6);
+  assert.equal(dropShips.length, 2);
+  assert.equal(fighters.length, 12);
   assert.equal(battleships.length, 2);
   assert.ok(dropShip);
+  assert.ok(dropShips[1]);
+  assert.ok(
+    distance(dropShip.position, dropShips[1].position) > 90,
+    "Expected capture demo to start with two separated drop-ship squadrons"
+  );
 
   for (const fighter of fighters) {
-    assert.equal(fighter.moveOrder?.type, "escort");
+    const order = fighter.moveOrder;
+
+    assert.equal(order?.type, "escort");
     assert.ok(
-      fighter.moveOrder?.type === "escort" &&
-        sameHandle(fighter.moveOrder.target, dropShip.handle)
+      order?.type === "escort" &&
+        dropShips.some((candidate) => sameHandle(order.target, candidate.handle))
     );
   }
 
   for (const unit of playerUnits) {
     assert.ok(
-      distance(unit.position, dropShip.position) < 80,
-      "Expected each starting fleet to spawn in a tight group"
+      dropShips.some((candidate) => distance(unit.position, candidate.position) < 90),
+      "Expected every starting ship to spawn near one of its drop ships"
     );
   }
 

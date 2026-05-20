@@ -1,0 +1,4 @@
+interface:
+  display_name: "Headless Runs"
+  short_description: "Run headless games and tune gameplay in this repo."
+  default_prompt: "Run headless games for balance tuning and report the gameplay impact."

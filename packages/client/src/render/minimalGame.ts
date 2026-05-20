@@ -348,8 +348,10 @@ export function mountMinimalGame(
   worldGroup.add(planetHoverRing.root);
   const captureProgressRings = new Map<string, CaptureProgressRing>();
   const selectedUnitKeys = new Set<string>();
+  const previousCommandSelectionKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
   let commandMenuLeaderKey: string | null = null;
+  let previousCommandLeaderKey: string | null = null;
   let hoveredPlanetKey: string | null = null;
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = true;
@@ -414,8 +416,7 @@ export function mountMinimalGame(
       );
 
       if (issuedCommand) {
-        recordCommandHistory(issuedCommand);
-        publishOverlaySnapshot();
+        completeIssuedCommand(issuedCommand);
       }
     },
     toggleOrbitPlanetCommand() {
@@ -563,6 +564,7 @@ export function mountMinimalGame(
   }
 
   function closeHotkeysDialog(): void {
+    singlePlayerPaused = false;
     hotkeysDialogOpen = false;
     publishOverlaySnapshot();
     renderer.domElement.focus();
@@ -614,6 +616,49 @@ export function mountMinimalGame(
     publishOverlaySnapshot();
   }
 
+  function completeIssuedCommand(command: IssuedUnitCommand): void {
+    rememberCurrentCommandSelection();
+    recordCommandHistory(command);
+    selectedUnitKeys.clear();
+    commandMenuLeaderKey = null;
+    pendingCommand = null;
+    hoveredPlanetKey = null;
+    publishOverlaySnapshot();
+  }
+
+  function rememberCurrentCommandSelection(): void {
+    previousCommandSelectionKeys.clear();
+
+    for (const unitKey of selectedUnitKeys) {
+      previousCommandSelectionKeys.add(unitKey);
+    }
+
+    previousCommandLeaderKey = commandMenuLeaderKey;
+  }
+
+  function restorePreviousCommandSelection(): void {
+    if (previousCommandSelectionKeys.size === 0) {
+      return;
+    }
+
+    clearZoomToFitFocus();
+    selectedUnitKeys.clear();
+
+    for (const unitKey of previousCommandSelectionKeys) {
+      selectedUnitKeys.add(unitKey);
+    }
+
+    pruneSelectedUnitKeys(selectedUnitKeys, runtime.readUnits());
+    commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+      previousCommandLeaderKey,
+      selectedUnitKeys
+    );
+    selectedPlanetKey = null;
+    pendingCommand = null;
+    hoveredPlanetKey = null;
+    publishOverlaySnapshot();
+  }
+
   function isSinglePlayerPaused(): boolean {
     return (
       runtime.readConnectionStatus().mode === "local" &&
@@ -656,15 +701,15 @@ export function mountMinimalGame(
 
     const key = event.key.toLowerCase();
 
-    if (event.metaKey && event.code === "Space") {
-      hotkeysDialogOpen ? closeHotkeysDialog() : openHotkeysDialog();
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
     if (hotkeysDialogOpen) {
       if (key === "escape") {
+        closeHotkeysDialog();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
+      if (key === "p" && runtime.readConnectionStatus().mode === "local") {
         closeHotkeysDialog();
         event.preventDefault();
         event.stopPropagation();
@@ -681,16 +726,21 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "r") {
-      runtime.enqueueRandomTurn();
+    if (
+      event.code === "Space" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
+      restorePreviousCommandSelection();
       event.preventDefault();
       event.stopPropagation();
       return;
     }
 
     if (key === "p" && runtime.readConnectionStatus().mode === "local") {
-      singlePlayerPaused = !singlePlayerPaused;
-      publishOverlaySnapshot();
+      singlePlayerPaused = true;
+      openHotkeysDialog();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -758,8 +808,7 @@ export function mountMinimalGame(
       );
 
       if (issuedCommand) {
-        recordCommandHistory(issuedCommand);
-        publishOverlaySnapshot();
+        completeIssuedCommand(issuedCommand);
         event.preventDefault();
       }
       return;
@@ -768,15 +817,6 @@ export function mountMinimalGame(
     if (key === "t") {
       tacticalOverlayEnabled = !tacticalOverlayEnabled;
       publishOverlaySnapshot();
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
-    if (key === "2") {
-      clearZoomToFitFocus();
-      cameraZoomTween.active = false;
-      setCameraMode(cameraControls, "strategic");
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -977,7 +1017,8 @@ export function mountMinimalGame(
           );
 
           if (issuedCommand) {
-            recordCommandHistory(issuedCommand);
+            completeIssuedCommand(issuedCommand);
+            return;
           }
         } else {
           selectedPlanetKey =
@@ -1005,8 +1046,7 @@ export function mountMinimalGame(
       );
 
       if (issuedCommand) {
-        recordCommandHistory(issuedCommand);
-        publishOverlaySnapshot();
+        completeIssuedCommand(issuedCommand);
       }
     }
   };
@@ -1687,37 +1727,17 @@ function writeZoomToFitFocusPosition(
     return target.set(0, 0, 0);
   }
 
-  let minX = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
+  target.set(0, 0, 0);
 
   for (const unit of units) {
-    minX = Math.min(minX, unit.position.x);
-    maxX = Math.max(maxX, unit.position.x);
-    minY = Math.min(minY, unit.position.y);
-    maxY = Math.max(maxY, unit.position.y);
-    minZ = Math.min(minZ, unit.position.z);
-    maxZ = Math.max(maxZ, unit.position.z);
+    target.add(unit.position);
   }
 
   for (const planet of planets) {
-    const fitRadius = planet.radius * PLANET_BODY_BILLBOARD_SCALE;
-    minX = Math.min(minX, planet.position.x - fitRadius);
-    maxX = Math.max(maxX, planet.position.x + fitRadius);
-    minY = Math.min(minY, planet.position.y - fitRadius);
-    maxY = Math.max(maxY, planet.position.y + fitRadius);
-    minZ = Math.min(minZ, planet.position.z - fitRadius);
-    maxZ = Math.max(maxZ, planet.position.z + fitRadius);
+    target.add(planet.position);
   }
 
-  return target.set(
-    (minX + maxX) / 2,
-    (minY + maxY) / 2,
-    (minZ + maxZ) / 2
-  );
+  return target.multiplyScalar(1 / (units.length + planets.length));
 }
 
 function writeCameraFocusPosition(

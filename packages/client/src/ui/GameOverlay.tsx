@@ -568,11 +568,9 @@ const HOTKEYS: readonly (readonly [string, string])[] = [
   ["C", "Capture selected planet"],
   ["G", "Guard selected planet"],
   ["T", "Toggle tactical overlay"],
-  ["P", "Pause/resume single-player"],
+  ["P", "Pause and show hotkeys"],
+  ["Space", "Reselect previous command group"],
   ["Tab", "Toggle tactical/strategic camera"],
-  ["2", "Strategic camera"],
-  ["R", "Randomize owned unit headings"],
-  ["Cmd Space", "Show hotkeys"],
 ];
 
 function createUnitGroups(

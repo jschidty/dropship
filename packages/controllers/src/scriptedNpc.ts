@@ -1,8 +1,11 @@
 import {
   SHIP_CLASS_IDS,
+  handleKey,
   sameHandle,
+  type EntityHandle,
   type PlayerId,
   type ScheduledCommand,
+  type StableHandleKey,
   type UnitOrderIntent,
 } from "@drop-ship/protocol";
 import {
@@ -75,6 +78,7 @@ export function createScriptedNpcCommands(
 
   const commands: ScheduledCommand[] = [];
   const localClientSeqByPlayer = new Map<PlayerId, number>();
+  const plannedDropShipTargets = new Map<StableHandleKey, EntityHandle>();
   const nextClientSeq =
     options.nextClientSeq ??
     ((playerId: PlayerId) => {
@@ -88,13 +92,25 @@ export function createScriptedNpcCommands(
       continue;
     }
 
-    const order = chooseScriptedNpcOrder(world, unit, {
-      aggroRangeWorldUnits: rules.aggroRangeWorldUnits,
-      dropShipThreatRangeWorldUnits: rules.dropShipThreatRangeWorldUnits,
-    });
+    const order = chooseScriptedNpcOrder(
+      world,
+      unit,
+      {
+        aggroRangeWorldUnits: rules.aggroRangeWorldUnits,
+        dropShipThreatRangeWorldUnits: rules.dropShipThreatRangeWorldUnits,
+      },
+      plannedDropShipTargets
+    );
 
     if (!order) {
       continue;
+    }
+
+    if (
+      unit.shipClassId === SHIP_CLASS_IDS.dropShip &&
+      order.type === "capturePlanet"
+    ) {
+      plannedDropShipTargets.set(handleKey(unit.handle), order.planet);
     }
 
     if (dedupeOrders && unit.moveOrder && sameUnitOrder(unit.moveOrder, order)) {
@@ -138,12 +154,17 @@ function chooseScriptedNpcOrder(
   rules: Pick<
     ReturnType<typeof readNpcRules>,
     "aggroRangeWorldUnits" | "dropShipThreatRangeWorldUnits"
-  >
+  >,
+  plannedDropShipTargets: ReadonlyMap<StableHandleKey, EntityHandle>
 ): UnitOrderIntent | null {
   const dropShip = findProtectedDropShip(world, unit);
 
   if (unit.shipClassId === SHIP_CLASS_IDS.dropShip) {
-    const targetPlanet = chooseDropShipTargetPlanet(world, unit);
+    const targetPlanet = chooseDropShipTargetPlanet(
+      world,
+      unit,
+      plannedDropShipTargets
+    );
 
     return targetPlanet
       ? {
@@ -244,19 +265,25 @@ function findProtectedDropShip(world: SimWorld, unit: SimUnit): SimUnit | null {
 
 function chooseDropShipTargetPlanet(
   world: SimWorld,
-  dropShip: SimUnit
+  dropShip: SimUnit,
+  plannedDropShipTargets: ReadonlyMap<StableHandleKey, EntityHandle>
 ): SimPlanet | null {
   let best: SimPlanet | null = null;
-  let bestScore: PlanetSafetyScore | null = null;
+  let bestScore: PlanetCaptureScore | null = null;
 
   for (const planet of getPlanetsInStableOrder(world)) {
     if (!planet.control.capturable) {
       continue;
     }
 
-    const score = scorePlanetSafety(world, dropShip, planet);
+    const score = scorePlanetCaptureOpportunity(
+      world,
+      dropShip,
+      planet,
+      plannedDropShipTargets
+    );
 
-    if (!bestScore || comparePlanetSafetyScores(score, bestScore) < 0) {
+    if (!bestScore || comparePlanetCaptureScores(score, bestScore) < 0) {
       best = planet;
       bestScore = score;
     }
@@ -265,43 +292,61 @@ function chooseDropShipTargetPlanet(
   return best;
 }
 
-type PlanetSafetyScore = Readonly<{
+type PlanetCaptureScore = Readonly<{
   ownerPriority: number;
+  friendlyAssignmentCount: number;
+  currentTargetPriority: number;
   contestedPriority: number;
-  enemyDistanceSquared: number;
   dropShipDistanceSquared: number;
+  enemyDistanceSquared: number;
 }>;
 
-function scorePlanetSafety(
+function scorePlanetCaptureOpportunity(
   world: SimWorld,
   dropShip: SimUnit,
-  planet: SimPlanet
-): PlanetSafetyScore {
+  planet: SimPlanet,
+  plannedDropShipTargets: ReadonlyMap<StableHandleKey, EntityHandle>
+): PlanetCaptureScore {
   return {
     ownerPriority: planet.control.owner === dropShip.owner ? 1 : 0,
+    friendlyAssignmentCount: countFriendlyDropShipAssignments(
+      world,
+      dropShip,
+      planet,
+      plannedDropShipTargets
+    ),
+    currentTargetPriority: isDropShipTargetingPlanet(dropShip, planet) ? 0 : 1,
     contestedPriority: isPlanetContestedByEnemy(planet, dropShip) ? 1 : 0,
-    enemyDistanceSquared: nearestEnemyDistanceSquared(world, dropShip, planet),
     dropShipDistanceSquared: distanceSquared(dropShip.position, planet.position),
+    enemyDistanceSquared: nearestEnemyDistanceSquared(world, dropShip, planet),
   };
 }
 
-function comparePlanetSafetyScores(
-  left: PlanetSafetyScore,
-  right: PlanetSafetyScore
+function comparePlanetCaptureScores(
+  left: PlanetCaptureScore,
+  right: PlanetCaptureScore
 ): number {
   if (left.ownerPriority !== right.ownerPriority) {
     return left.ownerPriority - right.ownerPriority;
+  }
+
+  if (left.friendlyAssignmentCount !== right.friendlyAssignmentCount) {
+    return left.friendlyAssignmentCount - right.friendlyAssignmentCount;
+  }
+
+  if (left.currentTargetPriority !== right.currentTargetPriority) {
+    return left.currentTargetPriority - right.currentTargetPriority;
   }
 
   if (left.contestedPriority !== right.contestedPriority) {
     return left.contestedPriority - right.contestedPriority;
   }
 
-  if (left.enemyDistanceSquared !== right.enemyDistanceSquared) {
-    return right.enemyDistanceSquared - left.enemyDistanceSquared;
+  if (left.dropShipDistanceSquared !== right.dropShipDistanceSquared) {
+    return left.dropShipDistanceSquared - right.dropShipDistanceSquared;
   }
 
-  return left.dropShipDistanceSquared - right.dropShipDistanceSquared;
+  return right.enemyDistanceSquared - left.enemyDistanceSquared;
 }
 
 function isPlanetContestedByEnemy(
@@ -313,6 +358,55 @@ function isPlanetContestedByEnemy(
     (planet.control.capturingPlayer !== 0 &&
       planet.control.capturingPlayer !== dropShip.owner)
   );
+}
+
+function countFriendlyDropShipAssignments(
+  world: SimWorld,
+  dropShip: SimUnit,
+  planet: SimPlanet,
+  plannedDropShipTargets: ReadonlyMap<StableHandleKey, EntityHandle>
+): number {
+  let count = 0;
+
+  for (const candidate of getUnitsInStableOrder(world)) {
+    if (
+      candidate.owner !== dropShip.owner ||
+      candidate.shipClassId !== SHIP_CLASS_IDS.dropShip ||
+      candidate.health.current <= 0 ||
+      sameHandle(candidate.handle, dropShip.handle)
+    ) {
+      continue;
+    }
+
+    const plannedTarget = plannedDropShipTargets.get(handleKey(candidate.handle));
+    const target = plannedTarget ?? readDropShipTargetHandle(candidate);
+
+    if (target && sameHandle(target, planet.handle)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function isDropShipTargetingPlanet(
+  dropShip: SimUnit,
+  planet: SimPlanet
+): boolean {
+  const target = readDropShipTargetHandle(dropShip);
+
+  return Boolean(target && sameHandle(target, planet.handle));
+}
+
+function readDropShipTargetHandle(dropShip: SimUnit): EntityHandle | null {
+  const order = dropShip.moveOrder;
+
+  return order &&
+    (order.type === "capturePlanet" ||
+      order.type === "guardPlanet" ||
+      order.type === "orbitPlanet")
+    ? order.planet
+    : null;
 }
 
 function nearestEnemyDistanceSquared(
@@ -370,7 +464,7 @@ function readDropShipTargetPlanet(
     }
   }
 
-  return chooseDropShipTargetPlanet(world, dropShip);
+  return chooseDropShipTargetPlanet(world, dropShip, new Map());
 }
 
 function findNearestEnemy(

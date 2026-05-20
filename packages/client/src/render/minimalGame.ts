@@ -4,9 +4,12 @@ import gasGiantNoiseTextureUrl from "../../../../content/images/red-gas-giant/no
 import {
   DEFAULT_CAPTURE_DEMO_RULES,
   PHASE_ONE_SIM_HZ,
+  SHIP_CLASS_IDS,
+  type CaptureDemoRules,
   type MatchConfig,
   type PlanetClass,
   type PlayerId,
+  type PlayerConfig,
   type SunConfig,
   type Vec3Data,
 } from "@drop-ship/protocol";
@@ -42,6 +45,7 @@ import {
   addProjectileEvents,
   createProjectileParticleRenderer,
   disposeProjectileParticleRenderer,
+  updateProjectileParticleRenderQuality,
   updateProjectileParticles,
 } from "./projectileParticles";
 import {
@@ -80,6 +84,7 @@ import {
   updateCameraPresetControls,
   updateSelectionBox,
   updateStatsLayer,
+  updateRenderModeControl,
   type CameraPresetControls,
   type CommandMenuControls,
   type PendingCommandMenuCommand,
@@ -121,6 +126,38 @@ type PlanetHoverRing = Readonly<{
   root: THREE.Group;
   ring: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
 }>;
+
+type CaptureProgressRing = Readonly<{
+  root: THREE.Group;
+  track: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  progress: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  progressPositions: Float32Array;
+  lastSeenFrame: number;
+}>;
+
+type MatchStatusControls = Readonly<{
+  root: HTMLElement;
+  timer: HTMLElement;
+  playerOne: HTMLElement;
+  playerTwo: HTMLElement;
+  result: HTMLElement;
+}>;
+
+type HotkeysDialogControls = Readonly<{
+  root: HTMLElement;
+  panel: HTMLElement;
+  closeButton: HTMLButtonElement;
+}>;
+
+type SelectionMode = "add" | "remove" | "replace";
+
+type CameraZoomTween = {
+  active: boolean;
+  mode: CameraControls["mode"];
+  from: number;
+  to: number;
+  startAt: number;
+};
 
 type SkyDome = Readonly<{
   scene: THREE.Scene;
@@ -189,6 +226,8 @@ const MAX_SIM_FRAME_DELTA_MS = 250;
 const PLANET_SELECTION_MIN_RADIUS_PX = 28;
 const PLANET_SELECTION_RADIUS_MULTIPLIER = 1.58;
 const CAMERA_FOCUS_TWEEN_MS = 720;
+const CAMERA_ZOOM_TWEEN_MS = 560;
+const CAMERA_ZOOM_TO_FIT_PADDING = 1.18;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
 const GRAVITY_OVERLAY_MIN_STRENGTH = 0.006;
 const GRAVITY_OVERLAY_VECTOR_LENGTH = 5.2;
@@ -200,6 +239,8 @@ const TACTICAL_GRID_DIVISIONS = 40;
 const TACTICAL_GRID_INTERSECTION_SEGMENTS = 128;
 const TACTICAL_GRID_MASK_RADIUS = 1;
 const TACTICAL_OVERLAY_COLOR_HEX = 0xfc3d21;
+const CAPTURE_PROGRESS_SEGMENTS = 96;
+const CAPTURE_PROGRESS_RADIUS_MULTIPLIER = 1.42;
 const PLANET_BODY_BILLBOARD_SCALE = 2.12;
 const PLANET_RING_INNER_RADIUS = 1.18;
 const PLANET_RING_OUTER_RADIUS = 2.05;
@@ -222,7 +263,7 @@ export function mountMinimalGame(
   options: MountMinimalGameOptions = {}
 ): MountedGame {
   const playerId = options.playerId ?? DEFAULT_LOCAL_PLAYER_ID;
-  const renderQuality =
+  let renderQuality =
     RENDER_QUALITY_CONFIGS[options.renderMode ?? DEFAULT_RENDER_QUALITY_MODE];
   const runtime =
     options.network || options.matchId
@@ -243,9 +284,9 @@ export function mountMinimalGame(
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
   const cameraControls: CameraControls = {
     mode: "strategic",
-    preset: "isometric",
-    yaw: CAMERA_PRESETS.isometric.yaw,
-    pitch: CAMERA_PRESETS.isometric.pitch,
+    preset: "top",
+    yaw: CAMERA_PRESETS.top.yaw,
+    pitch: CAMERA_PRESETS.top.pitch,
     viewHeights: {
       tactical: CAMERA_MODES.tactical.defaultViewHeight,
       strategic: CAMERA_MODES.strategic.defaultViewHeight,
@@ -284,20 +325,22 @@ export function mountMinimalGame(
   worldGroup.add(projectileParticles.root);
   const planetProxies = new Map<string, PlanetProxy>();
   const planetGeometry = new THREE.PlaneGeometry(1, 1);
-  const planetRingGeometry = createPlanetRingGeometry(renderQuality);
+  let planetRingGeometry = createPlanetRingGeometry(renderQuality);
   const gasGiantTextures = createGasGiantTextureSet();
   const planetMaterial = createPlanetBillboardMaterial(
     gasGiantTextures,
     renderQuality.mode
   );
-  const planetGlowMaterial = renderQuality.planetGlowEnabled
-    ? createPlanetGlowMaterial(gasGiantTextures, renderQuality.mode)
-    : null;
+  let planetGlowMaterial: THREE.ShaderMaterial | null =
+    renderQuality.planetGlowEnabled
+      ? createPlanetGlowMaterial(gasGiantTextures, renderQuality.mode)
+      : null;
   const planetRingMaterial = createPlanetRingMaterial();
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
   const planetHoverRing = createPlanetHoverRing();
   worldGroup.add(planetHoverRing.root);
+  const captureProgressRings = new Map<string, CaptureProgressRing>();
   const selectedUnitKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
   let commandMenuLeaderKey: string | null = null;
@@ -307,9 +350,16 @@ export function mountMinimalGame(
   let debugInfoEnabled = false;
   const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
-  const cameraPresetControls = createCameraPresetControls(container, (preset) => {
-    applyCameraPreset(cameraControls, preset);
-  });
+  const cameraPresetControls = createCameraPresetControls(
+    container,
+    (preset) => {
+      cancelCameraZoomTween();
+      applyCameraPreset(cameraControls, preset);
+    },
+    () => {
+      startZoomToFit(performance.now());
+    }
+  );
   const topLeftControls = createTopLeftControls(container);
   createDebugInfoControl(topLeftControls, (enabled) => {
     debugInfoEnabled = enabled;
@@ -326,7 +376,17 @@ export function mountMinimalGame(
     }
   );
   createRandomSeedControl(topLeftControls);
-  createRenderModeControl(topLeftControls, renderQuality.mode);
+  const renderModeControl = createRenderModeControl(
+    topLeftControls,
+    renderQuality.mode,
+    (renderMode) => {
+      applyRenderMode(renderMode);
+    }
+  );
+  const matchStatus = createMatchStatus(container);
+  const hotkeysDialog = createHotkeysDialog(container, () => {
+    closeHotkeysDialog();
+  });
   const leaderArrow = createSelectedLeaderArrow(container);
   const commandMenu = createCommandMenu(container, {
     onSelectLeader(unitKey) {
@@ -377,12 +437,107 @@ export function mountMinimalGame(
   let lastPerfDatasetUpdateAt = -PERF_DATASET_INTERVAL_MS;
   let lastPixelRatioAdjustAt = startedAt;
   let renderFrameIndex = 0;
+  let activeSelectionMode: SelectionMode = "replace";
+  let selectionDragStarted = false;
+  let hotkeysDialogOpen = false;
+  const cameraZoomTween: CameraZoomTween = {
+    active: false,
+    mode: cameraControls.mode,
+    from: cameraControls.viewHeights[cameraControls.mode],
+    to: cameraControls.viewHeights[cameraControls.mode],
+    startAt: startedAt,
+  };
+  function applyRenderMode(renderMode: RenderQualityMode): void {
+    if (renderMode === renderQuality.mode) {
+      return;
+    }
+
+    const nextRenderQuality = RENDER_QUALITY_CONFIGS[renderMode];
+    const previousPlanetRingGeometry = planetRingGeometry;
+    renderQuality = nextRenderQuality;
+    planetRingGeometry = createPlanetRingGeometry(renderQuality);
+    disposePlanetProxies(worldGroup, planetProxies);
+    previousPlanetRingGeometry.dispose();
+    planetGlowMaterial?.dispose();
+    planetGlowMaterial = renderQuality.planetGlowEnabled
+      ? createPlanetGlowMaterial(gasGiantTextures, renderQuality.mode)
+      : null;
+    updateProjectileParticleRenderQuality(projectileParticles, renderQuality);
+    activeRenderPixelRatio = getPreferredRenderPixelRatio(renderQuality);
+    lastPixelRatioAdjustAt = performance.now();
+    renderer.setPixelRatio(activeRenderPixelRatio);
+    renderer.setSize(container.clientWidth, container.clientHeight, false);
+    updateRenderModeControl(renderModeControl, renderQuality.mode);
+    updateRenderModeQuery(renderQuality.mode);
+    container.dataset.renderMode = renderQuality.mode;
+  }
+
+  function openHotkeysDialog(): void {
+    hotkeysDialogOpen = true;
+    hotkeysDialog.root.hidden = false;
+    hotkeysDialog.closeButton.focus();
+  }
+
+  function closeHotkeysDialog(): void {
+    hotkeysDialogOpen = false;
+    hotkeysDialog.root.hidden = true;
+    renderer.domElement.focus();
+  }
+
+  function isSinglePlayerPaused(): boolean {
+    return hotkeysDialogOpen && runtime.readConnectionStatus().mode === "local";
+  }
+
+  function cancelCameraZoomTween(): void {
+    cameraZoomTween.active = false;
+  }
+
+  function startZoomToFit(now: number): void {
+    const focus = cameraFocusTween.initialized
+      ? scratch.focus.copy(cameraFocusTween.current)
+      : writeCameraFocusPosition(
+          scratch.focus,
+          runtime.readUnits(),
+          runtime.readPlanets(),
+          selectedPlanetKey,
+          selectedUnitKeys
+        );
+    const targetHeight = readZoomToFitViewHeight(
+      runtime.readUnits(),
+      runtime.readPlanets(),
+      focus,
+      container,
+      cameraControls.mode
+    );
+
+    cameraZoomTween.active = true;
+    cameraZoomTween.mode = cameraControls.mode;
+    cameraZoomTween.from = cameraControls.viewHeights[cameraControls.mode];
+    cameraZoomTween.to = targetHeight;
+    cameraZoomTween.startAt = now;
+  }
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.repeat) {
       return;
     }
 
     const key = event.key.toLowerCase();
+
+    if (event.metaKey && event.code === "Space") {
+      hotkeysDialogOpen ? closeHotkeysDialog() : openHotkeysDialog();
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    if (hotkeysDialogOpen) {
+      if (key === "escape") {
+        closeHotkeysDialog();
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
 
     if (key === "escape") {
       pendingCommand = null;
@@ -400,14 +555,36 @@ export function mountMinimalGame(
     }
 
     if (key === "1") {
-      selectedUnitKeys.clear();
+      replaceSelectionWithOwnedUnits(selectedUnitKeys, runtime);
+      selectedPlanetKey = null;
+      commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+        commandMenuLeaderKey,
+        selectedUnitKeys
+      );
+      pendingCommand = null;
+      hoveredPlanetKey = null;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
 
-      for (const unit of runtime.readUnits()) {
-        if (unit.owner === runtime.playerId) {
-          selectedUnitKeys.add(unit.key);
-        }
-      }
-
+    if (key === "8" || key === "9" || key === "0") {
+      replaceSelectionWithOwnedUnits(
+        selectedUnitKeys,
+        runtime,
+        key === "8"
+          ? SHIP_CLASS_IDS.fighter
+          : key === "9"
+            ? SHIP_CLASS_IDS.battleship
+            : SHIP_CLASS_IDS.dropShip
+      );
+      selectedPlanetKey = null;
+      commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+        commandMenuLeaderKey,
+        selectedUnitKeys
+      );
+      pendingCommand = null;
+      hoveredPlanetKey = null;
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -450,6 +627,7 @@ export function mountMinimalGame(
     }
 
     if (key === "2") {
+      cameraZoomTween.active = false;
       setCameraMode(cameraControls, "strategic");
       event.preventDefault();
       event.stopPropagation();
@@ -458,6 +636,7 @@ export function mountMinimalGame(
 
     if (key === "tab") {
       event.preventDefault();
+      cameraZoomTween.active = false;
       setCameraMode(
         cameraControls,
         cameraControls.mode === "tactical" ? "strategic" : "tactical"
@@ -480,6 +659,8 @@ export function mountMinimalGame(
     cameraControls.lastPointerX = event.clientX;
     cameraControls.lastPointerY = event.clientY;
     cameraControls.dragDistancePx = 0;
+    activeSelectionMode = readSelectionMode(event);
+    selectionDragStarted = false;
     hideSelectionBox(selectionBox);
     renderer.domElement.setPointerCapture(event.pointerId);
   };
@@ -506,6 +687,7 @@ export function mountMinimalGame(
     cameraControls.lastPointerY = event.clientY;
 
     if (cameraControls.dragMode === "camera") {
+      cameraZoomTween.active = false;
       cameraControls.preset = null;
       cameraControls.yaw -= dx * 0.006;
       cameraControls.pitch = clamp(cameraControls.pitch + dy * 0.004, 0.28, 1.38);
@@ -517,6 +699,17 @@ export function mountMinimalGame(
       cameraControls.dragMode === "select" &&
       cameraControls.dragDistancePx > 5
     ) {
+      if (!selectionDragStarted) {
+        selectionDragStarted = true;
+
+        if (activeSelectionMode === "replace") {
+          selectedUnitKeys.clear();
+          commandMenuLeaderKey = null;
+          pendingCommand = null;
+          hoveredPlanetKey = null;
+        }
+      }
+
       updateSelectionBox(
         selectionBox,
         container,
@@ -583,7 +776,7 @@ export function mountMinimalGame(
         event.clientX,
         event.clientY,
         scratch,
-        readSelectionBoxMode(event)
+        activeSelectionMode
       );
       commandMenuLeaderKey = pruneCommandMenuLeaderKey(
         commandMenuLeaderKey,
@@ -608,8 +801,11 @@ export function mountMinimalGame(
       );
 
       if (selectedUnit) {
-        if (isSelectionRemoveModifier(event)) {
+        if (activeSelectionMode === "remove") {
           selectedUnitKeys.delete(selectedUnit.key);
+        } else if (activeSelectionMode === "replace") {
+          selectedUnitKeys.clear();
+          selectedUnitKeys.add(selectedUnit.key);
         } else {
           selectedUnitKeys.add(selectedUnit.key);
         }
@@ -667,6 +863,7 @@ export function mountMinimalGame(
   };
   const handleWheel = (event: WheelEvent) => {
     event.preventDefault();
+    cameraZoomTween.active = false;
     const config = CAMERA_MODES[cameraControls.mode];
     const currentHeight = cameraControls.viewHeights[cameraControls.mode];
     const nextHeight = clamp(
@@ -719,6 +916,11 @@ export function mountMinimalGame(
   };
 
   const advanceSimulation = (now: number, frameDeltaMs: number): number => {
+    if (runtime.world.matchResult || isSinglePlayerPaused()) {
+      simAccumulatorMs = 0;
+      return 0;
+    }
+
     simAccumulatorMs += Math.min(frameDeltaMs, MAX_SIM_FRAME_DELTA_MS);
     let simSteps = 0;
 
@@ -798,6 +1000,7 @@ export function mountMinimalGame(
       planetRingMaterial,
       renderQuality
     );
+    updateCameraZoomTween(cameraZoomTween, cameraControls, now);
     applyCameraControls(camera, cameraControls, container, displayedFocus, scratch);
     camera.updateMatrixWorld();
     updateSelectedLeaderArrow(
@@ -859,6 +1062,16 @@ export function mountMinimalGame(
       tacticalOverlayEnabled,
       cameraControls.preset
     );
+    updateCaptureProgressRings(
+      worldGroup,
+      captureProgressRings,
+      planets,
+      runtime.world.config.players,
+      runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES,
+      renderFrameIndex,
+      cameraControls.mode === "tactical" || tacticalOverlayEnabled,
+      cameraControls.preset
+    );
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
@@ -893,6 +1106,7 @@ export function mountMinimalGame(
       container.dataset.pendingCommand = pendingCommand ?? "none";
       container.dataset.renderMode = renderQuality.mode;
       container.dataset.debugInfo = debugInfoEnabled ? "on" : "off";
+      container.dataset.simPaused = isSinglePlayerPaused() ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
       container.dataset.connectionState = runtime.readConnectionStatus().state;
       container.dataset.simHz = observedSimHz.toFixed(1);
@@ -904,6 +1118,7 @@ export function mountMinimalGame(
         commandMenuLeaderKey,
         pendingCommand
       );
+      updateMatchStatus(matchStatus, runtime);
       lastHudUpdateAt = now;
     }
 
@@ -981,6 +1196,19 @@ export function mountMinimalGame(
     ),
     scratch
   );
+  cameraControls.viewHeights[cameraControls.mode] = readZoomToFitViewHeight(
+    runtime.readUnits(),
+    runtime.readPlanets(),
+    writeCameraFocusPosition(
+      scratch.focus,
+      runtime.readUnits(),
+      runtime.readPlanets(),
+      selectedPlanetKey,
+      selectedUnitKeys
+    ),
+    container,
+    cameraControls.mode
+  );
   resize();
   renderCurrentFrame(startedAt, 1);
   frameId = requestAnimationFrame(frame);
@@ -1003,6 +1231,7 @@ export function mountMinimalGame(
       disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
       disposePlanetHoverRing(planetHoverRing);
+      disposeCaptureProgressRings(worldGroup, captureProgressRings);
       disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
       planetGeometry.dispose();
@@ -1052,6 +1281,208 @@ function updateSelectedLeaderArrow(
 
   arrow.hidden = false;
   arrow.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+}
+
+function createHotkeysDialog(
+  container: HTMLElement,
+  onClose: () => void
+): HotkeysDialogControls {
+  const root = document.createElement("div");
+  const panel = document.createElement("section");
+  const title = document.createElement("h2");
+  const list = document.createElement("dl");
+  const closeButton = document.createElement("button");
+  const shortcuts: readonly [string, string][] = [
+    ["Meta + Space", "Hotkeys"],
+    ["1", "All units"],
+    ["8", "Fighters"],
+    ["9", "Battleships"],
+    ["0", "Drop ships"],
+    ["Shift + select", "Add"],
+    ["Ctrl + select", "Subtract"],
+    ["T", "Tactical overlay"],
+    ["Tab", "Tactical / strategic"],
+    ["C / G", "Capture / guard"],
+  ];
+
+  root.className = "hotkeys-dialog";
+  root.hidden = true;
+  panel.className = "hotkeys-dialog-panel";
+  title.className = "hotkeys-dialog-title";
+  title.textContent = "Hotkeys";
+  list.className = "hotkeys-dialog-list";
+  closeButton.type = "button";
+  closeButton.className = "hotkeys-dialog-close";
+  closeButton.textContent = "Close";
+  closeButton.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  closeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  });
+
+  for (const [key, action] of shortcuts) {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+
+    term.textContent = key;
+    description.textContent = action;
+    list.append(term, description);
+  }
+
+  panel.append(title, list, closeButton);
+  root.appendChild(panel);
+  container.appendChild(root);
+
+  return {
+    root,
+    panel,
+    closeButton,
+  };
+}
+
+function createMatchStatus(container: HTMLElement): MatchStatusControls {
+  const root = document.createElement("section");
+  const timer = document.createElement("div");
+  const playerOne = document.createElement("div");
+  const playerTwo = document.createElement("div");
+  const result = document.createElement("div");
+
+  root.className = "match-status";
+  timer.className = "match-status-timer";
+  playerOne.className = "match-status-player match-status-player-one";
+  playerTwo.className = "match-status-player match-status-player-two";
+  result.className = "match-status-result";
+  root.append(timer, playerOne, playerTwo, result);
+  container.appendChild(root);
+
+  return {
+    root,
+    timer,
+    playerOne,
+    playerTwo,
+    result,
+  };
+}
+
+function updateMatchStatus(
+  controls: MatchStatusControls,
+  runtime: LocalGameRuntime
+): void {
+  const rules =
+    runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES;
+  const remainingTicks = Math.max(
+    rules.matchDurationTicks - runtime.world.tick,
+    0
+  );
+  const playerOne = runtime.world.config.players.find(
+    (player) => player.id === 1
+  );
+  const playerTwo = runtime.world.config.players.find(
+    (player) => player.id === 2
+  );
+
+  controls.timer.textContent = formatMatchTime(remainingTicks);
+  writePlayerMatchStatus(
+    controls.playerOne,
+    runtime,
+    1,
+    playerOne?.color ?? "#74d9ff"
+  );
+  writePlayerMatchStatus(
+    controls.playerTwo,
+    runtime,
+    2,
+    playerTwo?.color ?? "#ff4fd8"
+  );
+
+  if (!runtime.world.matchResult) {
+    controls.result.textContent = "";
+    controls.root.dataset.result = "pending";
+    return;
+  }
+
+  controls.root.dataset.result =
+    runtime.world.matchResult.winner === 0
+      ? "draw"
+      : runtime.world.matchResult.winner === runtime.playerId
+        ? "win"
+        : "lose";
+  controls.result.textContent = formatMatchResult(runtime);
+}
+
+function writePlayerMatchStatus(
+  target: HTMLElement,
+  runtime: LocalGameRuntime,
+  playerId: PlayerId,
+  color: string
+): void {
+  const planets = runtime
+    .readPlanets()
+    .filter(
+      (planet) =>
+        planet.control.capturable && planet.control.owner === playerId
+    )
+    .length;
+  const units = runtime
+    .readUnits()
+    .filter((unit) => unit.owner === playerId && unit.health.current > 0)
+    .length;
+
+  target.style.setProperty("--team-color", color);
+  target.textContent = `P${playerId} ${planets}P ${units}U`;
+}
+
+function formatMatchTime(remainingTicks: number): string {
+  const totalSeconds = Math.ceil(remainingTicks / PHASE_ONE_SIM_HZ);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function formatMatchResult(runtime: LocalGameRuntime): string {
+  const result = runtime.world.matchResult;
+
+  if (!result) {
+    return "";
+  }
+
+  const label =
+    result.winner === 0
+      ? "Draw"
+      : result.winner === runtime.playerId
+        ? "Win"
+        : "Lose";
+
+  return `${label} ${formatMatchResultReason(result.reason)}`;
+}
+
+function formatMatchResultReason(reason: string): string {
+  switch (reason) {
+    case "allPlanetsCaptured":
+      return "all planets";
+    case "dropShipsLost":
+      return "drop ship lost";
+    case "timerPlanets":
+      return "planet count";
+    case "timerUnits":
+      return "unit count";
+    case "timerTie":
+      return "timer tie";
+    default:
+      return reason;
+  }
+}
+
+function updateRenderModeQuery(renderMode: RenderQualityMode): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("render", renderMode);
+  url.searchParams.delete("renderMode");
+  url.searchParams.delete("quality");
+  window.history.replaceState(window.history.state, "", url);
 }
 
 function createRenderScratch(): RenderScratch {
@@ -1175,6 +1606,65 @@ function applyCameraControls(
   camera.position.copy(focus).add(cameraOffset);
   camera.lookAt(focus);
   camera.updateProjectionMatrix();
+}
+
+function updateCameraZoomTween(
+  tween: CameraZoomTween,
+  cameraControls: CameraControls,
+  now: number
+): void {
+  if (!tween.active || tween.mode !== cameraControls.mode) {
+    return;
+  }
+
+  const progress = clamp((now - tween.startAt) / CAMERA_ZOOM_TWEEN_MS, 0, 1);
+  const eased = smoothstep(0, 1, progress);
+
+  cameraControls.viewHeights[tween.mode] =
+    tween.from + (tween.to - tween.from) * eased;
+
+  if (progress >= 1) {
+    tween.active = false;
+    cameraControls.viewHeights[tween.mode] = tween.to;
+  }
+}
+
+function readZoomToFitViewHeight(
+  units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  focus: THREE.Vector3,
+  container: HTMLElement,
+  mode: CameraControls["mode"]
+): number {
+  const aspect = container.clientWidth / Math.max(container.clientHeight, 1);
+  let halfWidth = 0;
+  let halfHeight = 0;
+
+  for (const unit of units) {
+    halfWidth = Math.max(halfWidth, Math.abs(unit.position.x - focus.x) + 12);
+    halfHeight = Math.max(halfHeight, Math.abs(unit.position.z - focus.z) + 12);
+  }
+
+  for (const planet of planets) {
+    halfWidth = Math.max(
+      halfWidth,
+      Math.abs(planet.position.x - focus.x) + planet.radius
+    );
+    halfHeight = Math.max(
+      halfHeight,
+      Math.abs(planet.position.z - focus.z) + planet.radius
+    );
+  }
+
+  const fitHeight = Math.max(halfHeight, halfWidth / Math.max(aspect, 0.1)) *
+    2 *
+    CAMERA_ZOOM_TO_FIT_PADDING;
+
+  return clamp(
+    fitHeight,
+    CAMERA_MODES[mode].minViewHeight,
+    CAMERA_MODES[mode].maxViewHeight
+  );
 }
 
 function writeCameraFocusPosition(
@@ -1579,13 +2069,28 @@ function selectOwnedUnitsInBox(
   }
 }
 
-function isSelectionRemoveModifier(event: PointerEvent): boolean {
-  return event.ctrlKey || event.metaKey;
+function replaceSelectionWithOwnedUnits(
+  selectedUnitKeys: Set<string>,
+  runtime: LocalGameRuntime,
+  shipClassId?: number
+): void {
+  selectedUnitKeys.clear();
+
+  for (const unit of runtime.readUnits()) {
+    if (
+      unit.owner === runtime.playerId &&
+      (shipClassId === undefined || unit.shipClassId === shipClassId)
+    ) {
+      selectedUnitKeys.add(unit.key);
+    }
+  }
 }
 
-function readSelectionBoxMode(
-  event: PointerEvent
-): "add" | "remove" | "replace" {
+function isSelectionRemoveModifier(event: PointerEvent): boolean {
+  return event.ctrlKey;
+}
+
+function readSelectionMode(event: PointerEvent): SelectionMode {
   if (isSelectionRemoveModifier(event)) {
     return "remove";
   }
@@ -2221,6 +2726,193 @@ function disposePlanetHoverRing(hoverRing: PlanetHoverRing): void {
   hoverRing.ring.geometry.dispose();
   hoverRing.ring.material.dispose();
   hoverRing.root.clear();
+}
+
+function updateCaptureProgressRings(
+  worldGroup: THREE.Group,
+  rings: Map<string, CaptureProgressRing>,
+  planets: readonly PlanetViewModel[],
+  players: readonly PlayerConfig[],
+  rules: CaptureDemoRules,
+  frameIndex: number,
+  enabled: boolean,
+  cameraPreset: CameraPreset | null
+): void {
+  for (const planet of planets) {
+    if (!planet.control.capturable) {
+      continue;
+    }
+
+    let ring = rings.get(planet.key);
+
+    if (!ring) {
+      ring = createCaptureProgressRing();
+      rings.set(planet.key, ring);
+      worldGroup.add(ring.root);
+    }
+
+    ring.lastSeenFrame = frameIndex;
+    ring.root.visible = enabled;
+    ring.root.position.copy(planet.position);
+    ring.root.scale.setScalar(
+      planet.radius * CAPTURE_PROGRESS_RADIUS_MULTIPLIER
+    );
+    writeTacticalPlaneQuaternion(ring.root.quaternion, cameraPreset);
+    ring.track.material.color.set(readPlanetStatusColor(planet, players));
+    ring.progress.material.color.set(
+      readPlayerColor(players, planet.control.capturingPlayer, "#ffffff")
+    );
+    ring.progress.visible =
+      enabled &&
+      planet.control.capturingPlayer !== 0 &&
+      !planet.control.contested;
+    writeCaptureProgressGeometry(
+      ring,
+      readPlanetCaptureProgress(planet, rules)
+    );
+  }
+
+  for (const [key, ring] of rings) {
+    if (ring.lastSeenFrame === frameIndex) {
+      continue;
+    }
+
+    disposeCaptureProgressRing(worldGroup, ring);
+    rings.delete(key);
+  }
+}
+
+function createCaptureProgressRing(): CaptureProgressRing {
+  const root = new THREE.Group();
+  const trackMaterial = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.36,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const progressMaterial = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.96,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const track = new THREE.LineLoop(
+    createTacticalIntersectionGeometry(),
+    trackMaterial
+  );
+  const progressPositions = new Float32Array(
+    (CAPTURE_PROGRESS_SEGMENTS + 1) * 3
+  );
+  const progressGeometry = new THREE.BufferGeometry();
+  const progress = new THREE.Line(progressGeometry, progressMaterial);
+
+  root.name = "planet-capture-progress-ring";
+  root.visible = false;
+  track.name = "planet capture status track";
+  track.frustumCulled = false;
+  track.renderOrder = 9.2;
+  progressGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(progressPositions, 3).setUsage(
+      THREE.DynamicDrawUsage
+    )
+  );
+  progressGeometry.setDrawRange(0, 0);
+  progress.name = "planet capture radial progress";
+  progress.frustumCulled = false;
+  progress.renderOrder = 9.3;
+  root.add(track, progress);
+
+  return {
+    root,
+    track,
+    progress,
+    progressPositions,
+    lastSeenFrame: 0,
+  };
+}
+
+function writeCaptureProgressGeometry(
+  ring: CaptureProgressRing,
+  progress: number
+): void {
+  const clampedProgress = clamp(progress, 0, 1);
+  const vertexCount =
+    clampedProgress <= 0
+      ? 0
+      : Math.max(2, Math.ceil(clampedProgress * CAPTURE_PROGRESS_SEGMENTS) + 1);
+
+  for (let index = 0; index < vertexCount; index += 1) {
+    const t =
+      vertexCount <= 1
+        ? 0
+        : Math.min(index / CAPTURE_PROGRESS_SEGMENTS, clampedProgress);
+    const angle = -Math.PI / 2 + t * Math.PI * 2;
+    const positionIndex = index * 3;
+
+    ring.progressPositions[positionIndex] = Math.cos(angle);
+    ring.progressPositions[positionIndex + 1] = 0;
+    ring.progressPositions[positionIndex + 2] = Math.sin(angle);
+  }
+
+  ring.progress.geometry.setDrawRange(0, vertexCount);
+  ring.progress.geometry.attributes.position.needsUpdate = true;
+}
+
+function readPlanetCaptureProgress(
+  planet: PlanetViewModel,
+  rules: CaptureDemoRules
+): number {
+  if (planet.control.capturingPlayer === 0 || planet.control.contested) {
+    return 0;
+  }
+
+  const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
+  return planet.control.captureTicks / Math.max(requiredTicks, 1);
+}
+
+function readPlanetStatusColor(
+  planet: PlanetViewModel,
+  players: readonly PlayerConfig[]
+): string {
+  if (planet.control.capturingPlayer !== 0) {
+    return readPlayerColor(players, planet.control.capturingPlayer, "#ffffff");
+  }
+
+  return readPlayerColor(players, planet.control.owner, "#d6dae8");
+}
+
+function readPlayerColor(
+  players: readonly PlayerConfig[],
+  playerId: PlayerId | 0,
+  fallback: string
+): string {
+  return players.find((player) => player.id === playerId)?.color ?? fallback;
+}
+
+function disposeCaptureProgressRings(
+  worldGroup: THREE.Group,
+  rings: Map<string, CaptureProgressRing>
+): void {
+  for (const ring of rings.values()) {
+    disposeCaptureProgressRing(worldGroup, ring);
+  }
+
+  rings.clear();
+}
+
+function disposeCaptureProgressRing(
+  worldGroup: THREE.Group,
+  ring: CaptureProgressRing
+): void {
+  worldGroup.remove(ring.root);
+  ring.track.geometry.dispose();
+  ring.track.material.dispose();
+  ring.progress.geometry.dispose();
+  ring.progress.material.dispose();
+  ring.root.clear();
 }
 
 function writeTacticalPlaneQuaternion(

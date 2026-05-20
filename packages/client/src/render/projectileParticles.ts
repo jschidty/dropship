@@ -71,6 +71,34 @@ export function createProjectileParticleRenderer(
   };
 }
 
+export function updateProjectileParticleRenderQuality(
+  renderer: ProjectileParticleRenderer,
+  renderQuality: RenderQualityConfig
+): void {
+  for (const mesh of renderer.meshes.values()) {
+    renderer.root.remove(mesh);
+    mesh.dispose();
+  }
+
+  for (const material of renderer.materials.values()) {
+    material.map?.dispose();
+    material.dispose();
+  }
+
+  renderer.meshes.clear();
+  renderer.materials.clear();
+  renderer.capacities.clear();
+  renderer.counts.clear();
+  renderer.materials.set(
+    1,
+    createProjectileParticleMaterial(0x74d9ff, renderQuality)
+  );
+  renderer.materials.set(
+    2,
+    createProjectileParticleMaterial(0xff4fd8, renderQuality)
+  );
+}
+
 function createProjectileParticleMaterial(
   color: number,
   renderQuality: RenderQualityConfig

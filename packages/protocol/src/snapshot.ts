@@ -3,6 +3,7 @@ import type { UnitOrderIntent } from "./commands";
 import type {
   CaptureDemoRules,
   GameMode,
+  MatchEndReason,
   MatchEnvironmentConfig,
   PlayerConfig,
   PlanetAppearanceConfig,
@@ -34,6 +35,12 @@ export type UnitFighterSpawnSnapshot = Readonly<{
   spawnedFighters: readonly EntityHandle[];
 }>;
 
+export type UnitOrbitStateSnapshot = Readonly<{
+  isOrbiting: boolean;
+  planet: EntityHandle | null;
+  orbitTicks: number;
+}>;
+
 export type UnitSnapshot = Readonly<{
   handle: EntityHandle;
   owner: PlayerId;
@@ -45,6 +52,7 @@ export type UnitSnapshot = Readonly<{
   moveOrder: UnitOrderSnapshot | null;
   health: HealthSnapshot;
   weaponCooldownTicks: number;
+  orbit: UnitOrbitStateSnapshot;
   fighterSpawn: UnitFighterSpawnSnapshot | null;
   render: RenderSnapshot;
   spawnedTick: number;
@@ -102,6 +110,6 @@ export type CompactSimSnapshot = Readonly<{
   matchResult?: Readonly<{
     winner: PlayerId | 0;
     completedTick: number;
-    reason: "allPlanetsCaptured" | "dropShipsDestroyed";
+    reason: MatchEndReason;
   }> | null;
 }>;

@@ -92,6 +92,7 @@ export type InitialPlanetConfig = Readonly<{
 export type GameMode = "minimalSkirmish" | "captureDemo";
 
 export type CaptureDemoRules = Readonly<{
+  matchDurationTicks: number;
   planetCaptureSeconds: number;
   captureOrbitMinRadiusMultiplier: number;
   captureOrbitMaxRadiusMultiplier: number;
@@ -103,6 +104,7 @@ export type CaptureDemoRules = Readonly<{
 }>;
 
 export const DEFAULT_CAPTURE_DEMO_RULES: CaptureDemoRules = {
+  matchDurationTicks: 5 * 60 * PHASE_ONE_SIM_HZ,
   planetCaptureSeconds: 25,
   captureOrbitMinRadiusMultiplier: 1.55,
   captureOrbitMaxRadiusMultiplier: 3.4,
@@ -112,6 +114,13 @@ export const DEFAULT_CAPTURE_DEMO_RULES: CaptureDemoRules = {
   npcThinkIntervalTicks: 15,
   npcAggroRange: 130,
 };
+
+export type MatchEndReason =
+  | "allPlanetsCaptured"
+  | "dropShipsLost"
+  | "timerPlanets"
+  | "timerUnits"
+  | "timerTie";
 
 export type MatchConfig = Readonly<{
   matchId: string;
@@ -135,6 +144,7 @@ export type CreateMinimalSkirmishConfigOptions = Readonly<{
 const DEFAULT_MATCH_SEED = 1337;
 const PLANET_NAMES = ["Aurora", "Vesper", "Caldera"];
 const MATCH_TAU = Math.PI * 2;
+const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.25;
 
 export function createMinimalSkirmishConfig(
   options: CreateMinimalSkirmishConfigOptions | number = {}
@@ -194,58 +204,63 @@ export function createCaptureDemoConfig(
 function createCaptureDemoUnits(
   primaryPlanetPosition: Vec3Data
 ): readonly InitialUnitConfig[] {
-  const offsets: readonly InitialUnitConfig[] = [
-    {
-      owner: 1,
+  const offsets: InitialUnitConfig[] = [];
+  const addFleet = (
+    owner: PlayerId,
+    anchor: Vec3Data,
+    facing: 1 | -1
+  ): void => {
+    offsets.push({
+      owner,
       templateId: TEMPLATE_IDS.dropShip,
-      position: { x: -82, y: 4, z: 92 },
-    },
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.fighterShip,
-      position: { x: -102, y: 8, z: 88 },
-    },
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.fighterShip,
-      position: { x: -94, y: -5, z: 112 },
-    },
-    {
-      owner: 1,
-      templateId: TEMPLATE_IDS.battleship,
-      position: { x: -132, y: 0, z: 126 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.dropShip,
-      position: { x: 74, y: 5, z: 52 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.fighterShip,
-      position: { x: 66, y: 6, z: 72 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.fighterShip,
-      position: { x: 86, y: -4, z: 92 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.fighterShip,
-      position: { x: 58, y: 8, z: 114 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.battleship,
-      position: { x: 116, y: 0, z: 96 },
-    },
-    {
-      owner: 2,
-      templateId: TEMPLATE_IDS.battleship,
-      position: { x: 142, y: 2, z: 126 },
-    },
-  ];
+      position: anchor,
+    });
+
+    const fighterOffsets: readonly Vec3Data[] = [
+      { x: -18, y: 5, z: -12 },
+      { x: -12, y: -5, z: 8 },
+      { x: 0, y: 8, z: -18 },
+      { x: 8, y: -7, z: 14 },
+      { x: 16, y: 4, z: -6 },
+      { x: 22, y: -3, z: 10 },
+    ];
+
+    for (const offset of fighterOffsets) {
+      offsets.push({
+        owner,
+        templateId: TEMPLATE_IDS.fighterShip,
+        position: {
+          x: anchor.x + offset.x * facing,
+          y: anchor.y + offset.y,
+          z: anchor.z + offset.z,
+        },
+      });
+    }
+
+    offsets.push(
+      {
+        owner,
+        templateId: TEMPLATE_IDS.battleship,
+        position: {
+          x: anchor.x - 32 * facing,
+          y: anchor.y,
+          z: anchor.z + 24,
+        },
+      },
+      {
+        owner,
+        templateId: TEMPLATE_IDS.battleship,
+        position: {
+          x: anchor.x + 34 * facing,
+          y: anchor.y + 2,
+          z: anchor.z + 30,
+        },
+      }
+    );
+  };
+
+  addFleet(1, { x: -360, y: 8, z: -260 }, 1);
+  addFleet(2, { x: 360, y: 8, z: 260 }, -1);
 
   return offsets.map((unit) => ({
     ...unit,
@@ -278,7 +293,9 @@ function generatePlanetarySystem(seed: number): {
     const radius = quantize(24 + random() * 20);
     const appearance = samplePlanetAppearance(random, radius, false);
     const orbitAxis = sampleOrbitAxis(random);
-    const orbitRadius = index === 0 ? 64 : 126 + index * 82 + random() * 34;
+    const orbitRadius =
+      (index === 0 ? 64 : 126 + index * 82 + random() * 34) *
+      DEFAULT_PLANET_DISTANCE_MULTIPLIER;
     const orbit: PlanetOrbitConfig = {
       center: sunOrbitCenter,
       radius: quantize(orbitRadius),
@@ -325,7 +342,9 @@ function generatePlanetarySystem(seed: number): {
       const moonRadius = quantize(radius * (0.22 + random() * 0.16));
       const appearance = samplePlanetAppearance(random, moonRadius, true);
       const moonAxis = sampleOrbitAxis(random);
-      const moonDistance = radius * (2.05 + random() * 1.2) + moonRadius;
+      const moonDistance =
+        (radius * (2.05 + random() * 1.2) + moonRadius) *
+        DEFAULT_PLANET_DISTANCE_MULTIPLIER;
       const moonOrbit: PlanetOrbitConfig = {
         center: position,
         radius: quantize(moonDistance),

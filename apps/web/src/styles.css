@@ -125,6 +125,78 @@ canvas {
   font-family: monospace;
 }
 
+.match-status {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 4;
+  display: grid;
+  grid-template-areas:
+    "timer timer"
+    "player-one player-two"
+    "result result";
+  grid-template-columns: minmax(76px, max-content) minmax(76px, max-content);
+  gap: 4px 12px;
+  min-width: 190px;
+  max-width: min(360px, calc(100vw - 300px));
+  padding: 6px 10px;
+  transform: translateX(-50%);
+  border: 1px solid rgb(252 61 33 / 72%);
+  border-radius: 0;
+  background: rgb(5 8 18 / 62%);
+  color: rgb(239 248 255 / 90%);
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.08;
+  pointer-events: none;
+  text-align: center;
+}
+
+.match-status-timer {
+  grid-area: timer;
+  color: #fc3d21;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.match-status-player {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--team-color, rgb(239 248 255 / 90%));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-status-player-one {
+  grid-area: player-one;
+}
+
+.match-status-player-two {
+  grid-area: player-two;
+}
+
+.match-status-result {
+  grid-area: result;
+  min-height: 12px;
+  overflow: hidden;
+  color: rgb(252 61 33 / 72%);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.match-status[data-result="win"] .match-status-result {
+  color: #74d9ff;
+}
+
+.match-status[data-result="lose"] .match-status-result {
+  color: #ff4fd8;
+}
+
+.match-status[data-result="draw"] .match-status-result {
+  color: #d6dae8;
+}
+
 .tactical-toggle {
   gap: 7px;
   padding: 0 10px 0 8px;
@@ -354,4 +426,77 @@ canvas {
 
 .selected-leader-arrow[hidden] {
   display: none;
+}
+
+.hotkeys-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  background: rgb(1 2 10 / 62%);
+  pointer-events: auto;
+}
+
+.hotkeys-dialog[hidden] {
+  display: none;
+}
+
+.hotkeys-dialog-panel {
+  width: min(360px, calc(100vw - 28px));
+  border: 1px solid rgb(252 61 33 / 82%);
+  background: rgb(5 8 18 / 88%);
+  color: rgb(239 248 255 / 92%);
+  font-family: monospace;
+  padding: 14px;
+}
+
+.hotkeys-dialog-title {
+  margin: 0 0 10px;
+  color: #fc3d21;
+  font-size: 14px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.hotkeys-dialog-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px 14px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.hotkeys-dialog-list dt {
+  color: #fc3d21;
+}
+
+.hotkeys-dialog-list dd {
+  margin: 0;
+}
+
+.hotkeys-dialog-close {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid rgb(252 61 33 / 72%);
+  background: rgb(252 61 33 / 12%);
+  color: rgb(252 61 33 / 92%);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.hotkeys-dialog-close:hover,
+.hotkeys-dialog-close:focus-visible {
+  border-color: rgb(252 61 33 / 100%);
+  background: rgb(252 61 33 / 20%);
+  outline: 0;
+}
+
+@media (max-width: 720px) {
+  .match-status {
+    top: 52px;
+    max-width: calc(100vw - 28px);
+  }
 }

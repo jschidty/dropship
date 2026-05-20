@@ -19,7 +19,7 @@ See [determinism.md](determinism.md), [command-hierarchy.md](command-hierarchy.m
 Phase 1 target:
 
 - 2 players
-- 10-15 minute match length
+- 5 minute match length for the current demo tuning
 - 1-4 capturable planets from match config
 - up to 1,000 live sim entities
 - one energy weapon family
@@ -33,7 +33,9 @@ Default objective:
 2. Each planet has a capture owner or is neutral.
 3. A drop ship can start capture while in a valid orbit band around a planet.
 4. If the same drop ship remains eligible for more than `PLANET_CAPTURE_SECONDS`, that planet changes owner.
-5. A match can end when one player owns all capturable planets, reaches a score threshold, or the demo timer expires.
+5. A captured planet spawns a new friendly drop ship in orbit.
+6. A match can end when one player owns all capturable planets, loses all drop ships, or the demo timer expires.
+7. Timer resolution compares captured planets first, then living units, then declares a draw if still tied.
 
 The demo should support both multiplayer and a local single-player attacker/defender mode. Single-player is not a different simulation path; it injects deterministic commands for Player 2.
 
@@ -43,6 +45,7 @@ Put demo rules in serializable config, not hardcoded client state. The first imp
 
 ```ts
 type CaptureDemoRules = {
+  matchDurationTicks: number;
   planetCaptureSeconds: number;
   captureOrbitMinRadiusMultiplier: number;
   captureOrbitMaxRadiusMultiplier: number;
@@ -57,6 +60,7 @@ type CaptureDemoRules = {
 Required default:
 
 ```ts
+const MATCH_DURATION_TICKS = 5 * 60 * PHASE_ONE_SIM_HZ;
 const PLANET_CAPTURE_SECONDS = 25;
 const PLANET_CAPTURE_TICKS = PLANET_CAPTURE_SECONDS * PHASE_ONE_SIM_HZ;
 ```
@@ -179,7 +183,8 @@ Eligibility for a drop ship:
 - unit owner matches the capturing player
 - unit template has the drop ship class
 - unit is alive
-- unit has an active `CapturePlanet` or `Orbit` order targeting the planet
+- unit has active `isOrbiting` state for the planet from `OrbitTrackingSystem`
+- orbit tracking comes from a `CapturePlanet`, `GuardPlanet`, or `Orbit` order targeting that planet
 - unit position is inside the configured orbit band
 - unit is not inside the planet collider or despawn state
 
@@ -190,7 +195,7 @@ Capture tick rule:
 3. If no ships are eligible, clear or decay progress according to the configured rule.
 4. If the current tracked drop ship is still eligible, increment `captureTicks`.
 5. If not, choose the first eligible drop ship in stable order for the capturing player and reset `captureTicks` to 1.
-6. When `captureTicks > PLANET_CAPTURE_TICKS`, assign planet owner, clear capture progress, and emit `PlanetCaptured`.
+6. When `captureTicks > PLANET_CAPTURE_TICKS`, assign planet owner, emit `PlanetCaptured`, spawn a friendly drop ship in orbit, and clear capture progress.
 
 This implements "a drop ship remains in orbit" literally: the same stable drop ship handle must maintain eligibility. A future design can switch to team-level capture progress, but that is a different rule and should change replay expectations.
 
@@ -216,8 +221,8 @@ type FighterSpawnState = {
 
 Rules:
 
-- `LifecycleSystem` owns actual spawn/despawn mutations.
-- `DropShipSpawnSystem` or `ResourceSystem` can request spawns by writing deterministic spawn intents.
+- Spawn systems own bounded spawn mutations through `spawnUnit` and emit deterministic `unitSpawned` events.
+- `LifecycleSystem` removes destroyed units in stable order.
 - Spawn positions are generated from stable parent handle, tick, and a named PRNG stream or deterministic formation offsets.
 - Spawned fighters inherit owner from the drop ship.
 - Keep a per-drop-ship cap so the demo cannot create unbounded entities.
@@ -269,19 +274,22 @@ Recommended order:
 6. `SteeringSystem`
 7. `PhysicsSystem`
 8. `CollisionSystem`
-9. `CombatSystem`
-10. `CaptureSystem`
-11. `DropShipSpawnSystem`
-12. `LifecycleSystem`
-13. `MatchEndSystem`
-14. `EventFlushSystem`
+9. `OrbitTrackingSystem`
+10. `CombatSystem`
+11. `CaptureSystem`
+12. `DropShipSpawnSystem`
+13. `MiningSystem`
+14. `ResourceSystem`
+15. `LifecycleSystem`
+16. `MatchEndSystem`
+17. `EventFlushSystem`
 
 Notes:
 
 - `NpcCommandSystem` must emit or apply the same order data as player commands. It may be compiled into local single-player only at first, but its outputs still have to be deterministic.
-- `CaptureSystem` runs after physics so orbit eligibility uses current positions.
+- `OrbitTrackingSystem` runs after collision so `CaptureSystem` consumes one stable orbit state.
 - `DropShipSpawnSystem` runs after combat so destroyed drop ships do not spawn fighters on the same tick.
-- `LifecycleSystem` performs actual entity creation/destruction after systems have produced deterministic intents.
+- `LifecycleSystem` removes destroyed units after capture and spawn systems have completed their deterministic mutations.
 - `MatchEndSystem` reads planet ownership and timer state, then emits deterministic match-result events.
 
 Do not let UI buttons, local debug controls, or NPC code mutate units directly. They should all enter through command batches or deterministic systems.
@@ -352,6 +360,7 @@ New deterministic state must round-trip through snapshots and participate in has
 - order queues and active order state
 - weapon cooldowns
 - health and pending despawn state
+- unit orbit state
 - planet ownership
 - capture progress and tracked drop ship handle
 - contested state if it affects future behavior

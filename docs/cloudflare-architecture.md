@@ -9,12 +9,14 @@ Phase 1 is a small, friendly lockstep game:
 - 10-15 minute match length
 - Friendly play; cheat resistance is explicitly out of scope
 - Client-side deterministic simulation, coordinated by one Durable Object per match
+- Headless matches are a first-class runtime for all-NPC games, balancing, CI,
+  soak tests, replay generation, and future server authority experiments
 
-The goal is to keep the platform design boring: small WebSocket messages, compact command logs, compact trusted snapshots, and no server-side simulation until the game proves it needs it.
+The goal is to keep the platform design boring: small WebSocket messages, compact command logs, compact trusted snapshots, and no server-side simulation until the game proves it needs it. Headless games should use the same sim path as browser games, not a separate test-only path.
 
 ## Where positions are calculated
 
-Positions, combat, mining, projectiles, AI, and win conditions are calculated on each client by the shared sim package.
+Positions, combat, mining, projectiles, AI, and win conditions are calculated by the shared sim package. In Phase 1 the active runtimes are browser clients and local/headless Node tools. A future authoritative server runtime can import the same package if the game needs it.
 
 The Durable Object (DO) is a coordinator:
 
@@ -27,6 +29,169 @@ The Durable Object (DO) is a coordinator:
 7. Coordinates reconnect, spectator catch-up, match end agreement, and retention cleanup.
 
 The DO does not run physics or validate winners in Phase 1. If both clients report the same match end tick, winner, and final hash, the DO records and broadcasts `matchEnd`. If one player disconnects, the remaining player can finish locally and the DO records the host/client result as trusted.
+
+## Headless games
+
+Headless games are not just replay diagnostics. They are an important product and engineering surface:
+
+- all-NPC local matches for tuning and simulation watching
+- bot-vs-bot regression tests in CI
+- deterministic balance sweeps across seeds and loadouts
+- replay generation and hash baselines
+- long-running soak tests for memory, entity caps, and snapshot budgets
+- a low-risk stepping stone toward server authority
+
+A headless match must:
+
+- create or receive the same resolved `MatchConfig` as a browser match
+- load the same validated content registry by version/hash
+- install the same fixed system order
+- give every occupied player seat a controller such as `human`, `npc`, `tool`, or `script`
+- advance ticks through the same `runTick(world, batch)` contract
+- emit the same command log, hashes, snapshots, events, and match result
+- avoid importing renderer, DOM, UI, audio, WebSocket, or Cloudflare APIs
+
+The only runtime-specific pieces should be input production, tick scheduling, and output sinks. A browser receives human input and renders frames. A headless runner produces NPC/tool commands, advances ticks as fast as possible or at a fixed wall-clock rate, and writes logs or metrics.
+
+## Centralized match behavior
+
+Every behavior that can change future simulation state must be centralized before match start. The target shape is:
+
+1. A match preset or creation request chooses a content pack, ruleset, seed, players, controllers, loadouts, and scenario.
+2. Match creation resolves that request into one serializable `MatchConfig`.
+3. Browser, headless, replay, spectator, and reconnect runtimes all consume that same config.
+4. Systems read sim-affecting values from `world.config` or validated content records, not from app globals, URL params, renderer state, or scattered constants.
+
+This gives us one source of truth for "what game are we running?" and lets headless games reproduce browser games exactly.
+
+### Configuration ownership
+
+| Concern | Owner | Notes |
+|---|---|---|
+| Protocol version, content version/hash, match ID, seed | `MatchConfig` | Stored in match metadata, snapshots, hashes, and replay headers. |
+| Players and controllers | `MatchConfig` | Player records should say whether a seat is controlled by `human`, `npc`, `tool`, `script`, or left empty. |
+| Initial planets, environment, spawn points, starting units | `MatchConfig` | Scenario data should be data, not embedded in runtime code. |
+| Initial unit loadouts and starting orders | `MatchConfig` using content IDs | Starting fleets should select template IDs, loadout IDs, component IDs, positions, rotations, and optional initial orders. |
+| Ship hulls, components, weapons, cargo, fuel, derived ship stats | content registry | Content owns reusable catalog data. Match creation chooses a content version and loadouts by stable numeric ID. |
+| One-off balance overrides for experiments | resolved content pack or explicit match override | If an experiment changes component stats, give it a content hash/version or serialize the override in `MatchConfig`; never hide it in local app state. |
+| Capture rules, spawning rules, match end rules, NPC rules | `MatchConfig` ruleset | Current `captureDemoRules` should grow into named rules/tuning profiles instead of accumulating system-local constants. |
+| Steering, gravity, boids, escort, orbit, avoidance, approach tuning | `MatchConfig` sim tuning profile | These values affect motion and combat outcomes, so they must be replayable and hashable. |
+| Renderer quality, camera, HUD, local accessibility | client/runtime settings | These must not affect sim state and should not appear in replay hashes. |
+| DO tick scheduling, retention, storage policy | server settings | These coordinate delivery and persistence; they are not gameplay rules except for `commandLeadTicks` when included in match config. |
+
+### Recommended config groups
+
+Keep the protocol compact, but group related knobs so they have an obvious home:
+
+```ts
+type MatchConfig = {
+  matchId: string;
+  seed: number;
+  protocolVersion: number;
+  contentVersion: number;
+  contentHash?: string;
+  commandLeadTicks: number;
+  players: readonly PlayerConfig[];
+  controllers: readonly PlayerControllerConfig[];
+  environment: MatchEnvironmentConfig;
+  initialPlanets: readonly InitialPlanetConfig[];
+  initialUnits: readonly InitialUnitConfig[];
+  rules: MatchRulesConfig;
+  tuning: SimTuningConfig;
+};
+```
+
+`InitialUnitConfig` should eventually carry enough data to recreate the exact starting fleet:
+
+```ts
+type InitialUnitConfig = {
+  owner: PlayerId;
+  templateId: number;
+  loadoutId?: number;
+  componentsBySlot?: Readonly<Record<string, number>>;
+  position: Vec3Data;
+  rotation?: QuaternionData;
+  initialOrder?: UnitOrderIntent;
+};
+```
+
+`SimTuningConfig` should collect the current movement constants into data:
+
+```ts
+type SimTuningConfig = {
+  movement: {
+    arrivalDistance: number;
+    slowRadius: number;
+    moveOrderWeight: number;
+    defaultOrbitWeight: number;
+  };
+  gravity: {
+    fieldScale: number;
+    rangeMultiplier: number;
+    minDistanceRatio: number;
+    maxStrength: number;
+    steeringWeight: number;
+  };
+  boids: {
+    neighborRadius: number;
+    separationRadius: number;
+    alignmentWeight: number;
+    cohesionWeight: number;
+    separationWeight: number;
+  };
+  escort: {
+    desiredRange: number;
+    innerRangeMultiplier: number;
+    outerRangeMultiplier: number;
+    matchVelocityWeight: number;
+    correctionSpeedRatio: number;
+  };
+  orbit: {
+    captureRadiusMultiplier: number;
+    guardRadiusMultiplier: number;
+    defaultMinRadiusMultiplier: number;
+    defaultRadiusJitterMultiplier: number;
+    radialCorrectionWeight: number;
+    verticalCorrectionWeight: number;
+    pulseAmplitude: number;
+  };
+  avoidance: {
+    planetMargin: number;
+    planetWeight: number;
+    shipRadius: number;
+    shipWeight: number;
+  };
+};
+```
+
+The exact names can evolve. The invariant is that sim-affecting behavior is resolved into serializable data at match creation.
+
+### Current knobs to migrate
+
+The current code already has the right package boundaries, but several knobs are still hardcoded in systems or preset builders. Move them toward the ownership model above:
+
+| Current area | Target |
+|---|---|
+| Match initial fleets in `createCaptureDemoConfig` and helper functions | Scenario/loadout data in `MatchConfig` or raw match preset files. |
+| Ship component and hull stats in the content registry | Keep in content, but load from content files and version/hash the resolved registry. |
+| Derived speed factors like speed/mass and cruise speed ratios | Content stat derivation config or ruleset tuning. |
+| Move arrival distance and slow radius | `tuning.movement`. |
+| Gravity field scale, range, min distance, max strength, and steering weight | `tuning.gravity`. |
+| Boids neighbor radius, separation radius, and weights | `tuning.boids`. |
+| Escort desired range and velocity/correction weights | `tuning.escort`. |
+| Orbit target radii, radial correction, vertical correction, pulse, and default orbit behavior | `tuning.orbit`. |
+| Planet and ship avoidance margins/weights | `tuning.avoidance`. |
+| NPC-controlled player IDs, think interval, aggro range, objective policy | `controllers` plus `rules.npc` or an NPC tuning profile. |
+| Capture, drop-ship spawning, and match-end rules | `rules.capture`, `rules.spawning`, and `rules.matchEnd`. |
+
+### Rules for adding a new knob
+
+- If a value affects `runTick` output, it belongs in content or `MatchConfig`.
+- Defaults are applied once at match creation. Systems should consume resolved values rather than silently inventing runtime defaults.
+- Use stable numeric IDs for content references. Avoid strings in snapshots and hot sim paths.
+- Quantize numeric tuning values before hashing when appropriate.
+- Include config/rules/tuning in replay metadata and snapshot round-trip tests.
+- Add a small headless replay or all-NPC fixture when a behavior has emergent outcomes.
 
 ## Per-match Durable Object
 
@@ -55,7 +220,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 
 | Message | Purpose |
 |---|---|
-| `{ type: "matchStart", seed, players, initialState }` | Begin match at tick 0 |
+| `{ type: "matchStart", playerId, serverTick, config, initialState }` | Begin from the resolved match config |
 | `{ type: "tickCommands", tick, commands }` | The complete command batch for tick N |
 | `{ type: "commandAck", clientSeq, executeTick }` | Optional UI/debug acknowledgement |
 | `{ type: "desync", tick, hashes }` | Hash mismatch detected |

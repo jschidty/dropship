@@ -5,8 +5,10 @@ import {
 } from "@drop-ship/content";
 import {
   compareHandles,
+  SHIP_CLASS_IDS,
   type CommandBatch,
   type EntityHandle,
+  type MatchEndReason,
   type MatchConfig,
   type PlanetAppearanceConfig,
   type PlanetOrbitConfig,
@@ -41,6 +43,12 @@ export type SimUnitOrder = UnitOrderIntent;
 export type SimFighterSpawnState = {
   nextSpawnTick: number;
   spawnedFighters: EntityHandle[];
+};
+
+export type SimOrbitState = {
+  isOrbiting: boolean;
+  planet: EntityHandle | null;
+  orbitTicks: number;
 };
 
 export type SimEvent =
@@ -91,6 +99,7 @@ export type SimUnit = {
     max: number;
   };
   weaponCooldownTicks: number;
+  orbit: SimOrbitState;
   fighterSpawn: SimFighterSpawnState | null;
   render: {
     meshId: number;
@@ -151,7 +160,7 @@ export type SimWorld = {
   matchResult: {
     winner: PlayerId | 0;
     completedTick: number;
-    reason: "allPlanetsCaptured" | "dropShipsDestroyed";
+    reason: MatchEndReason;
   } | null;
 };
 
@@ -198,6 +207,7 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
       });
     }
 
+    assignInitialCaptureDemoOrders(world);
     keepAllUnitsOutsidePlanets(world);
   }
 
@@ -244,6 +254,7 @@ export function spawnUnit(
     moveOrder?: SimUnitOrder | null;
     health?: { current: number; max: number };
     weaponCooldownTicks?: number;
+    orbit?: SimOrbitState;
     fighterSpawn?: SimFighterSpawnState | null;
     spawnedTick?: number;
   }>
@@ -278,6 +289,7 @@ export function spawnUnit(
       max: health.max,
     },
     weaponCooldownTicks: options.weaponCooldownTicks ?? 0,
+    orbit: copyOrbitState(options.orbit ?? null),
     fighterSpawn: copyFighterSpawnState(options.fighterSpawn ?? null),
     render: {
       meshId: template.render.meshId,
@@ -534,6 +546,20 @@ export function copyFighterSpawnState(
     : null;
 }
 
+export function copyOrbitState(state: SimOrbitState | null): SimOrbitState {
+  return state
+    ? {
+        isOrbiting: state.isOrbiting,
+        planet: state.planet ? { ...state.planet } : null,
+        orbitTicks: state.orbitTicks,
+      }
+    : {
+        isOrbiting: false,
+        planet: null,
+        orbitTicks: 0,
+      };
+}
+
 export function copyPlanetControl(
   control: SimPlanet["control"]
 ): SimPlanet["control"] {
@@ -548,6 +574,37 @@ export function copyPlanetControl(
     contested: control.contested,
     breakTicks: control.breakTicks,
   };
+}
+
+function assignInitialCaptureDemoOrders(world: SimWorld): void {
+  if (world.config.gameMode !== "captureDemo") {
+    return;
+  }
+
+  for (const player of world.config.players) {
+    const dropShip = getUnitsInStableOrder(world).find(
+      (unit) =>
+        unit.owner === player.id &&
+        unit.shipClassId === SHIP_CLASS_IDS.dropShip
+    );
+
+    if (!dropShip) {
+      continue;
+    }
+
+    for (const unit of getUnitsInStableOrder(world)) {
+      if (unit.owner !== player.id || unit.handle.id === dropShip.handle.id) {
+        continue;
+      }
+
+      if (unit.shipClassId === SHIP_CLASS_IDS.fighter) {
+        unit.moveOrder = {
+          type: "escort",
+          target: dropShip.handle,
+        };
+      }
+    }
+  }
 }
 
 function allocateRuntimeEntityId(world: SimWorld): RuntimeEntityId {

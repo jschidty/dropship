@@ -22,6 +22,11 @@ export type UnitViewModel = Readonly<{
   position: THREE.Vector3;
   prevPosition: THREE.Vector3;
   rotation: THREE.Quaternion;
+  orbit: Readonly<{
+    isOrbiting: boolean;
+    planet: EntityHandle | null;
+    orbitTicks: number;
+  }>;
   health: Readonly<{
     current: number;
     max: number;

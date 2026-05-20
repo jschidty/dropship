@@ -30,6 +30,7 @@ import {
   runTick,
   serializeWorld,
 } from "../packages/sim/src/index";
+import { createMinimalLocalGame } from "../packages/client/src/runtime/localGame";
 import { selectMoveOrderUnits } from "../packages/client/src/selection/commands";
 import type { UnitViewModel } from "../packages/client/src/index";
 
@@ -46,10 +47,15 @@ testOrbitPlanetOrderFacesAwayFromGravity();
 testCaptureDemoConfig();
 testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
+testOrbitTrackingState();
 testDropShipCapturesPlanet();
+testCapturedPlanetSpawnsDropShip();
 testDropShipSpawnsFighters();
 testSpawnedFightersEscortParentDropShip();
 testDropShipEliminationEndsMatch();
+testTimerPlanetCountWinner();
+testTimerUnitCountWinner();
+testLocalRuntimeStopsAfterMatchEnd();
 testNpcDefenderIssuesAttackOrders();
 testDeterministicReplayHash();
 testSnapshotRoundTrip();
@@ -249,7 +255,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "fbd8ad16");
+  assert.equal(first, "fb197175");
 }
 
 function testDefaultSteeringMovesUnits(): void {
@@ -444,15 +450,24 @@ function testCaptureDemoConfig(): void {
   });
 
   assert.equal(config.gameMode, "captureDemo");
-  assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip));
-  assert.equal(
-    world.units.filter(
-      (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
-    ).length,
-    1
-  );
-  assert.ok(world.units.some((unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship));
   assert.ok(world.planets.some((planet) => planet.control.capturable));
+
+  const playerOneDropShip = assertCaptureDemoFleet(world, 1);
+  const playerTwoDropShip = assertCaptureDemoFleet(world, 2);
+
+  assert.ok(
+    distance(playerOneDropShip.position, playerTwoDropShip.position) > 650,
+    "Expected starting fleets to begin far away from each other"
+  );
+
+  for (const unit of world.units) {
+    for (const planet of world.planets) {
+      assert.ok(
+        distance(unit.position, planet.position) > planet.radius + 120,
+        "Expected capture demo fleets to begin away from planets"
+      );
+    }
+  }
 }
 
 function testShipsSpawnOutsidePlanets(): void {
@@ -488,6 +503,28 @@ function testPlanetCollisionKeepsShipsOutside(): void {
   assertUnitsOutsidePlanets(world);
 }
 
+function testOrbitTrackingState(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.control.capturable);
+  const dropShip = world.units.find(
+    (entry) => entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(planet);
+  assert.ok(dropShip);
+
+  placeDropShipInCaptureOrbit(dropShip, planet);
+  runBatches(world, [], 1);
+
+  assert.equal(dropShip.orbit.isOrbiting, true);
+  assert.ok(dropShip.orbit.planet);
+  assert.ok(sameHandle(dropShip.orbit.planet, planet.handle));
+  assert.equal(dropShip.orbit.orbitTicks, 1);
+}
+
 function testDropShipCapturesPlanet(): void {
   const config = {
     ...createCaptureDemoConfig({ seed: 1337 }),
@@ -509,21 +546,60 @@ function testDropShipCapturesPlanet(): void {
   assert.ok(planet);
   assert.ok(dropShip);
 
-  dropShip.position = {
-    x: planet.position.x + planet.radius * 2.25,
-    y: planet.position.y,
-    z: planet.position.z,
-  };
-  dropShip.prevPosition = dropShip.position;
-  dropShip.velocity = { x: 0, y: 0, z: 0 };
-  dropShip.moveOrder = {
-    type: "capturePlanet",
-    planet: planet.handle,
-  };
+  placeDropShipInCaptureOrbit(dropShip, planet);
 
   runBatches(world, [], PHASE_ONE_SIM_HZ + 2);
 
   assert.equal(planet.control.owner, 1);
+}
+
+function testCapturedPlanetSpawnsDropShip(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      planetCaptureSeconds: 1,
+      fighterSpawnIntervalTicks: 10_000,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.control.capturable);
+  const dropShip = world.units.find(
+    (entry) => entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(planet);
+  assert.ok(dropShip);
+
+  const initialDropShips = world.units.filter(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  ).length;
+
+  placeDropShipInCaptureOrbit(dropShip, planet);
+  runBatches(world, [], PHASE_ONE_SIM_HZ + 2);
+
+  const playerDropShips = world.units.filter(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+  const spawnedDropShip = playerDropShips.find(
+    (unit) => !sameHandle(unit.handle, dropShip.handle)
+  );
+
+  assert.equal(planet.control.owner, 1);
+  assert.equal(playerDropShips.length, initialDropShips + 1);
+  assert.ok(spawnedDropShip);
+  assert.equal(spawnedDropShip.moveOrder?.type, "orbitPlanet");
+  assert.ok(
+    spawnedDropShip.moveOrder?.type === "orbitPlanet" &&
+      sameHandle(spawnedDropShip.moveOrder.planet, planet.handle)
+  );
+  assert.ok(
+    distance(spawnedDropShip.position, planet.position) > planet.radius,
+    "Expected captured-planet drop ship to spawn outside the planet body"
+  );
 }
 
 function testDropShipSpawnsFighters(): void {
@@ -604,7 +680,7 @@ function testDropShipEliminationEndsMatch(): void {
   runBatches(playerOneLost, [], 1);
 
   assert.equal(playerOneLost.matchResult?.winner, 2);
-  assert.equal(playerOneLost.matchResult?.reason, "dropShipsDestroyed");
+  assert.equal(playerOneLost.matchResult?.reason, "dropShipsLost");
 
   const playerTwoLost = createWorld({
     config: createCaptureDemoConfig({ seed: 1337 }),
@@ -620,7 +696,101 @@ function testDropShipEliminationEndsMatch(): void {
   runBatches(playerTwoLost, [], 1);
 
   assert.equal(playerTwoLost.matchResult?.winner, 1);
-  assert.equal(playerTwoLost.matchResult?.reason, "dropShipsDestroyed");
+  assert.equal(playerTwoLost.matchResult?.reason, "dropShipsLost");
+}
+
+function testTimerPlanetCountWinner(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      matchDurationTicks: 3,
+      fighterSpawnIntervalTicks: 10_000,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const playerOnePlanet = world.planets[0];
+  const neutralPlanet = world.planets[1];
+
+  assert.ok(playerOnePlanet);
+  assert.ok(neutralPlanet);
+
+  for (const planet of world.planets) {
+    planet.control.capturable = false;
+    planet.control.owner = 0;
+  }
+
+  playerOnePlanet.control.capturable = true;
+  playerOnePlanet.control.owner = 1;
+  neutralPlanet.control.capturable = true;
+  neutralPlanet.control.owner = 0;
+
+  runBatches(world, [], 3);
+
+  assert.equal(world.matchResult?.winner, 1);
+  assert.equal(world.matchResult?.completedTick, 2);
+  assert.equal(world.matchResult?.reason, "timerPlanets");
+}
+
+function testTimerUnitCountWinner(): void {
+  const config = {
+    ...createCaptureDemoConfig({ seed: 1337 }),
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      matchDurationTicks: 3,
+      fighterSpawnIntervalTicks: 10_000,
+    },
+  };
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const playerTwoFighter = world.units.find(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.fighter
+  );
+
+  assert.ok(playerTwoFighter);
+
+  for (const planet of world.planets) {
+    planet.control.capturable = true;
+    planet.control.owner = 0;
+  }
+
+  playerTwoFighter.health.current = 0;
+
+  runBatches(world, [], 3);
+
+  assert.equal(world.matchResult?.winner, 1);
+  assert.equal(world.matchResult?.completedTick, 2);
+  assert.equal(world.matchResult?.reason, "timerUnits");
+}
+
+function testLocalRuntimeStopsAfterMatchEnd(): void {
+  const runtime = createMinimalLocalGame(1, { seed: 1337 });
+  const playerTwoDropShips = runtime.world.units.filter(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(playerTwoDropShips.length > 0);
+
+  for (const unit of playerTwoDropShips) {
+    unit.health.current = 0;
+  }
+
+  runtime.stepTick();
+
+  const completedTick = runtime.world.tick;
+
+  assert.equal(runtime.world.matchResult?.winner, 1);
+
+  runtime.enqueueRandomTurn();
+  runtime.stepTick();
+
+  assert.equal(runtime.world.tick, completedTick);
+  runtime.dispose();
 }
 
 function testNpcDefenderIssuesAttackOrders(): void {
@@ -786,6 +956,68 @@ function createBudgetConfig(unitCount: number): MatchConfig {
     ...config,
     matchId: `${config.matchId}-budget-${unitCount}`,
     initialUnits,
+  };
+}
+
+function assertCaptureDemoFleet(
+  world: ReturnType<typeof createWorld>,
+  playerId: PlayerId
+): ReturnType<typeof createWorld>["units"][number] {
+  const playerUnits = world.units.filter((unit) => unit.owner === playerId);
+  const dropShips = playerUnits.filter(
+    (unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+  const fighters = playerUnits.filter(
+    (unit) => unit.shipClassId === SHIP_CLASS_IDS.fighter
+  );
+  const battleships = playerUnits.filter(
+    (unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship
+  );
+  const dropShip = dropShips[0];
+
+  assert.equal(dropShips.length, 1);
+  assert.equal(fighters.length, 6);
+  assert.equal(battleships.length, 2);
+  assert.ok(dropShip);
+
+  for (const fighter of fighters) {
+    assert.equal(fighter.moveOrder?.type, "escort");
+    assert.ok(
+      fighter.moveOrder?.type === "escort" &&
+        sameHandle(fighter.moveOrder.target, dropShip.handle)
+    );
+  }
+
+  for (const unit of playerUnits) {
+    assert.ok(
+      distance(unit.position, dropShip.position) < 80,
+      "Expected each starting fleet to spawn in a tight group"
+    );
+  }
+
+  return dropShip;
+}
+
+function placeDropShipInCaptureOrbit(
+  dropShip: ReturnType<typeof createWorld>["units"][number],
+  planet: ReturnType<typeof createWorld>["planets"][number]
+): void {
+  dropShip.position = {
+    x: planet.position.x + planet.radius * 2.25,
+    y: planet.position.y,
+    z: planet.position.z,
+  };
+  dropShip.prevPosition = { ...dropShip.position };
+  dropShip.velocity = { x: 0, y: 0, z: 0 };
+  dropShip.desiredVelocity = null;
+  dropShip.orbit = {
+    isOrbiting: false,
+    planet: null,
+    orbitTicks: 0,
+  };
+  dropShip.moveOrder = {
+    type: "capturePlanet",
+    planet: planet.handle,
   };
 }
 

@@ -6,6 +6,7 @@ import type { LocalGameRuntime, RenderQualityMode, UnitViewModel } from "../type
 export type CameraPresetControls = Readonly<{
   root: HTMLElement;
   buttons: Record<CameraPreset, HTMLButtonElement>;
+  zoomToFitButton: HTMLButtonElement;
 }>;
 
 export type TacticalOverlayControls = Readonly<{
@@ -113,12 +114,27 @@ export function updateStatsLayer(
 
 export function createCameraPresetControls(
   container: HTMLElement,
-  onSelect: (preset: CameraPreset) => void
+  onSelect: (preset: CameraPreset) => void,
+  onZoomToFit: () => void
 ): CameraPresetControls {
   const root = document.createElement("div");
   root.className = "camera-presets";
   root.setAttribute("aria-label", "Camera views");
   const buttons = {} as Record<CameraPreset, HTMLButtonElement>;
+  const zoomToFitButton = document.createElement("button");
+
+  zoomToFitButton.type = "button";
+  zoomToFitButton.className = "camera-preset-button camera-fit-button";
+  zoomToFitButton.textContent = "Fit";
+  zoomToFitButton.addEventListener("pointerdown", (event) => {
+    event.stopPropagation();
+  });
+  zoomToFitButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onZoomToFit();
+    zoomToFitButton.blur();
+  });
 
   for (const preset of Object.keys(CAMERA_PRESETS) as CameraPreset[]) {
     const button = document.createElement("button");
@@ -133,16 +149,17 @@ export function createCameraPresetControls(
       event.preventDefault();
       event.stopPropagation();
       onSelect(preset);
-      updateCameraPresetControls({ root, buttons }, preset);
+      updateCameraPresetControls({ root, buttons, zoomToFitButton }, preset);
       button.blur();
     });
     buttons[preset] = button;
     root.appendChild(button);
   }
 
+  root.appendChild(zoomToFitButton);
   container.appendChild(root);
-  updateCameraPresetControls({ root, buttons }, "isometric");
-  return { root, buttons };
+  updateCameraPresetControls({ root, buttons, zoomToFitButton }, "top");
+  return { root, buttons, zoomToFitButton };
 }
 
 export function updateCameraPresetControls(
@@ -240,26 +257,35 @@ export function createRandomSeedControl(container: HTMLElement): HTMLButtonEleme
 
 export function createRenderModeControl(
   container: HTMLElement,
-  renderMode: RenderQualityMode
+  renderMode: RenderQualityMode,
+  onSelect: (renderMode: RenderQualityMode) => void
 ): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "render-mode-button";
-  button.textContent = renderMode === "cinematic" ? "Cinematic" : "Interactive";
-  button.setAttribute("aria-pressed", String(renderMode === "cinematic"));
+  updateRenderModeControl(button, renderMode);
   button.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
   });
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    navigateToRenderMode(
-      renderMode === "cinematic" ? "interactive" : "cinematic"
+    onSelect(
+      button.dataset.renderMode === "cinematic" ? "interactive" : "cinematic"
     );
     button.blur();
   });
   container.appendChild(button);
   return button;
+}
+
+export function updateRenderModeControl(
+  button: HTMLButtonElement,
+  renderMode: RenderQualityMode
+): void {
+  button.dataset.renderMode = renderMode;
+  button.textContent = renderMode === "cinematic" ? "Cinematic" : "Interactive";
+  button.setAttribute("aria-pressed", String(renderMode === "cinematic"));
 }
 
 export function createCommandMenu(
@@ -591,14 +617,6 @@ function navigateToRandomSeed(): void {
     url.searchParams.set("match", `seed-${seed}`);
   }
 
-  window.location.assign(url.toString());
-}
-
-function navigateToRenderMode(renderMode: RenderQualityMode): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("render", renderMode);
-  url.searchParams.delete("renderMode");
-  url.searchParams.delete("quality");
   window.location.assign(url.toString());
 }
 

@@ -12,6 +12,7 @@ import {
 import {
   createEmptyWorld,
   copyMoveOrder,
+  copyOrbitState,
   copyPlanetOrbit,
   copyPlanetControl,
   getPlanetsInStableOrder,
@@ -81,6 +82,7 @@ export function hydrateWorldFromSnapshot(
       moveOrder: copyMoveOrder(unit.moveOrder),
       health: unit.health,
       weaponCooldownTicks: unit.weaponCooldownTicks,
+      orbit: copyOrbitState(unit.orbit ?? null),
       fighterSpawn: unit.fighterSpawn
         ? {
             nextSpawnTick: unit.fighterSpawn.nextSpawnTick,
@@ -130,6 +132,7 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
       max: unit.health.max,
     },
     weaponCooldownTicks: unit.weaponCooldownTicks,
+    orbit: copyOrbitState(unit.orbit),
     fighterSpawn: unit.fighterSpawn
       ? {
           nextSpawnTick: unit.fighterSpawn.nextSpawnTick,

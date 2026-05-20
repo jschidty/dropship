@@ -1,9 +1,17 @@
-import { PHASE_ONE_SIM_HZ, SHIP_CLASS_IDS, sameHandle } from "@drop-ship/protocol";
+import {
+  PHASE_ONE_SIM_HZ,
+  SHIP_CLASS_IDS,
+  TEMPLATE_IDS,
+  sameHandle,
+  type Vec3Data,
+} from "@drop-ship/protocol";
 import type { CaptureDemoRules } from "@drop-ship/protocol";
+import { SIM_TAU, deterministicCos, deterministicSin } from "../deterministicMath";
 import { distanceSquared } from "../movement";
 import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
+  spawnUnit,
   type SimPlanet,
   type SimSystem,
   type SimUnit,
@@ -85,6 +93,7 @@ function updatePlanetCapture(
       planet: planet.handle,
       owner: candidate.owner,
     });
+    spawnCapturedPlanetDropShip(world, planet, candidate.owner, tick);
     resetCaptureProgress(planet);
   }
 }
@@ -103,8 +112,9 @@ function getEligibleDropShips(
     if (
       unit.shipClassId !== SHIP_CLASS_IDS.dropShip ||
       unit.health.current <= 0 ||
-      unit.moveOrder?.type !== "capturePlanet" ||
-      !sameHandle(unit.moveOrder.planet, planet.handle)
+      !unit.orbit.isOrbiting ||
+      !unit.orbit.planet ||
+      !sameHandle(unit.orbit.planet, planet.handle)
     ) {
       return false;
     }
@@ -112,6 +122,49 @@ function getEligibleDropShips(
     const distance = distanceSquared(unit.position, planet.position);
     return distance >= minRadiusSquared && distance <= maxRadiusSquared;
   });
+}
+
+function spawnCapturedPlanetDropShip(
+  world: SimWorld,
+  planet: SimPlanet,
+  owner: SimUnit["owner"],
+  tick: number
+): void {
+  const dropShip = spawnUnit(world, {
+    owner,
+    templateId: TEMPLATE_IDS.dropShip,
+    position: computeCapturedDropShipPosition(planet, owner, tick),
+    moveOrder: {
+      type: "orbitPlanet",
+      planet: planet.handle,
+    },
+    spawnedTick: tick,
+  });
+
+  world.events.push({
+    type: "unitSpawned",
+    tick,
+    unit: dropShip.handle,
+    owner,
+    parent: null,
+  });
+}
+
+function computeCapturedDropShipPosition(
+  planet: SimPlanet,
+  owner: SimUnit["owner"],
+  tick: number
+): Vec3Data {
+  const angle =
+    ((planet.handle.id * 53 + owner * 97 + tick * 11) % 360) *
+    (SIM_TAU / 360);
+  const radius = planet.radius * 2.38;
+
+  return {
+    x: planet.position.x + deterministicSin(angle) * radius,
+    y: planet.position.y + planet.radius * 0.08,
+    z: planet.position.z + deterministicCos(angle) * radius,
+  };
 }
 
 function handleCaptureBreak(planet: SimPlanet, rules: CaptureDemoRules): void {

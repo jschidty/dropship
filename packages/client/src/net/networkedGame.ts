@@ -60,9 +60,14 @@ export function createNetworkedGame(options: {
       return world;
     },
     stepTick() {
+      if (world.matchResult) {
+        queuedBatches.clear();
+        return;
+      }
+
       let processed = 0;
 
-      while (processed < 8) {
+      while (processed < 8 && !world.matchResult) {
         const batch = queuedBatches.get(world.tick);
 
         if (!batch) {
@@ -92,8 +97,16 @@ export function createNetworkedGame(options: {
           });
         }
       }
+
+      if (world.matchResult) {
+        queuedBatches.clear();
+      }
     },
     enqueueRandomTurn() {
+      if (world.matchResult) {
+        return;
+      }
+
       clientSeq += 1;
       sendClientMessage({
         type: "command",
@@ -106,7 +119,7 @@ export function createNetworkedGame(options: {
       });
     },
     enqueueMoveUnits(unitHandles, target) {
-      if (unitHandles.length === 0) {
+      if (world.matchResult || unitHandles.length === 0) {
         return;
       }
 
@@ -124,7 +137,7 @@ export function createNetworkedGame(options: {
       });
     },
     enqueueUnitOrder(unitHandles, order) {
-      if (unitHandles.length === 0) {
+      if (world.matchResult || unitHandles.length === 0) {
         return;
       }
 
@@ -257,7 +270,7 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "tickCommands") {
-      if (message.batch.tick >= world.tick) {
+      if (!world.matchResult && message.batch.tick >= world.tick) {
         queuedBatches.set(message.batch.tick, message.batch);
       }
       return;
@@ -306,11 +319,15 @@ export function createNetworkedGame(options: {
       message.commands.map((batch) => [batch.tick, batch])
     );
 
-    while (world.tick < message.serverTick) {
+    while (world.tick < message.serverTick && !world.matchResult) {
       runTick(
         world,
         catchupBatches.get(world.tick) ?? createEmptyCommandBatch(world.tick)
       );
+    }
+
+    if (world.matchResult) {
+      queuedBatches.clear();
     }
 
     status = {

@@ -20,6 +20,11 @@ type MutableUnitViewModel = {
   position: THREE.Vector3;
   prevPosition: THREE.Vector3;
   rotation: THREE.Quaternion;
+  orbit: {
+    isOrbiting: boolean;
+    planet: EntityHandle | null;
+    orbitTicks: number;
+  };
   health: {
     current: number;
     max: number;
@@ -115,6 +120,11 @@ function syncUnitViewModels(
         position: new THREE.Vector3(),
         prevPosition: new THREE.Vector3(),
         rotation: new THREE.Quaternion(),
+        orbit: {
+          isOrbiting: unit.orbit.isOrbiting,
+          planet: unit.orbit.planet ? { ...unit.orbit.planet } : null,
+          orbitTicks: unit.orbit.orbitTicks,
+        },
         health: {
           current: unit.health.current,
           max: unit.health.max,
@@ -142,6 +152,9 @@ function syncUnitViewModels(
       unit.rotation.z,
       unit.rotation.w
     );
+    view.orbit.isOrbiting = unit.orbit.isOrbiting;
+    view.orbit.planet = unit.orbit.planet ? { ...unit.orbit.planet } : null;
+    view.orbit.orbitTicks = unit.orbit.orbitTicks;
     view.health.current = unit.health.current;
     view.health.max = unit.health.max;
     view.stats = template.stats;
@@ -257,6 +270,11 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
       position: toVector3(unit.position),
       prevPosition: toVector3(unit.prevPosition),
       rotation: toQuaternion(unit.rotation),
+      orbit: {
+        isOrbiting: unit.orbit.isOrbiting,
+        planet: unit.orbit.planet ? { ...unit.orbit.planet } : null,
+        orbitTicks: unit.orbit.orbitTicks,
+      },
       health: {
         current: unit.health.current,
         max: unit.health.max,

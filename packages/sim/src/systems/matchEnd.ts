@@ -5,6 +5,7 @@ import {
   type SimSystem,
   type SimWorld,
 } from "../world";
+import { readCaptureDemoRules } from "./captureRules";
 
 export const MatchEndSystem: SimSystem = {
   name: "MatchEndSystem",
@@ -25,7 +26,7 @@ export const MatchEndSystem: SimSystem = {
               ? 1
               : 2,
         completedTick: tick,
-        reason: "dropShipsDestroyed",
+        reason: "dropShipsLost",
       };
       return;
     }
@@ -45,9 +46,52 @@ export const MatchEndSystem: SimSystem = {
         completedTick: tick,
         reason: "allPlanetsCaptured",
       };
+      return;
+    }
+
+    const rules = readCaptureDemoRules(world);
+
+    if (tick + 1 >= rules.matchDurationTicks) {
+      const playerOnePlanets = countOwnedPlanets(world, 1);
+      const playerTwoPlanets = countOwnedPlanets(world, 2);
+
+      if (playerOnePlanets !== playerTwoPlanets) {
+        world.matchResult = {
+          winner: playerOnePlanets > playerTwoPlanets ? 1 : 2,
+          completedTick: tick,
+          reason: "timerPlanets",
+        };
+        return;
+      }
+
+      const playerOneUnits = countLivingUnits(world, 1);
+      const playerTwoUnits = countLivingUnits(world, 2);
+
+      world.matchResult = {
+        winner:
+          playerOneUnits === playerTwoUnits
+            ? 0
+            : playerOneUnits > playerTwoUnits
+              ? 1
+              : 2,
+        completedTick: tick,
+        reason: playerOneUnits === playerTwoUnits ? "timerTie" : "timerUnits",
+      };
     }
   },
 };
+
+function countOwnedPlanets(world: SimWorld, playerId: PlayerId): number {
+  return getPlanetsInStableOrder(world).filter(
+    (planet) => planet.control.capturable && planet.control.owner === playerId
+  ).length;
+}
+
+function countLivingUnits(world: SimWorld, playerId: PlayerId): number {
+  return getUnitsInStableOrder(world).filter(
+    (unit) => unit.owner === playerId && unit.health.current > 0
+  ).length;
+}
 
 function hasLivingDropShip(world: SimWorld, playerId: PlayerId): boolean {
   return getUnitsInStableOrder(world).some(

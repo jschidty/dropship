@@ -34,6 +34,10 @@ export function createMinimalLocalGame(
     playerId,
     world,
     stepTick() {
+      if (world.matchResult) {
+        return;
+      }
+
       const commands = pendingCommands.splice(0);
       runTick(
         world,
@@ -47,6 +51,10 @@ export function createMinimalLocalGame(
       pendingEvents.push(...world.events);
     },
     enqueueRandomTurn() {
+      if (world.matchResult) {
+        return;
+      }
+
       clientSeq += 1;
       pendingCommands.push({
         playerId,
@@ -57,7 +65,7 @@ export function createMinimalLocalGame(
       });
     },
     enqueueMoveUnits(unitHandles, target) {
-      if (unitHandles.length === 0) {
+      if (world.matchResult || unitHandles.length === 0) {
         return;
       }
 
@@ -73,7 +81,7 @@ export function createMinimalLocalGame(
       });
     },
     enqueueUnitOrder(unitHandles, order) {
-      if (unitHandles.length === 0) {
+      if (world.matchResult || unitHandles.length === 0) {
         return;
       }
 

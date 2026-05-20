@@ -1,6 +1,8 @@
 import {
   deriveShipStatsFromLoadout,
   type ContentRegistry,
+  type ShipComponentTemplate,
+  type ShipStats,
 } from "@drop-ship/content";
 import {
   type CaptureRulesConfig,
@@ -12,7 +14,10 @@ import {
   type SimTuningConfig,
   type SpawningRulesConfig,
 } from "@drop-ship/protocol";
-import { validateShipComponentOverride } from "./shipStats";
+import {
+  applyShipComponentOverride,
+  validateShipComponentOverride,
+} from "./shipStats";
 import type { SimWorld } from "./world";
 
 export function readSimTuning(world: SimWorld): SimTuningConfig {
@@ -92,11 +97,12 @@ function validateInitialUnitLoadouts(
     }
 
     const template = content.getUnitTemplate(unit.templateId);
-    deriveShipStatsFromLoadout(
+    const stats = deriveShipStatsFromLoadout(
       template,
       unit.componentsBySlot,
-      (componentId) => content.getShipComponent(componentId)
+      (componentId) => readConfiguredShipComponent(config, content, componentId)
     );
+    validateDerivedShipStats(template.slug, stats);
   }
 }
 
@@ -118,5 +124,37 @@ function validateContentOverrides(
       content.getShipComponent(override.componentId),
       override
     );
+  }
+
+  for (const template of content.unitTemplates) {
+    const stats = deriveShipStatsFromLoadout(
+      template,
+      template.defaultLoadout.componentsBySlot,
+      (componentId) => readConfiguredShipComponent(config, content, componentId)
+    );
+    validateDerivedShipStats(template.slug, stats);
+  }
+}
+
+function readConfiguredShipComponent(
+  config: MatchConfig,
+  content: ContentRegistry,
+  componentId: number
+): ShipComponentTemplate {
+  const component = content.getShipComponent(componentId);
+  const override = config.contentOverrides?.shipComponents?.find(
+    (entry) => entry.componentId === componentId
+  );
+
+  return override ? applyShipComponentOverride(component, override) : component;
+}
+
+function validateDerivedShipStats(templateSlug: string, stats: ShipStats): void {
+  for (const [statName, value] of Object.entries(stats)) {
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(
+        `Ship template ${templateSlug} derived stat ${statName} must be a non-negative finite number`
+      );
+    }
   }
 }

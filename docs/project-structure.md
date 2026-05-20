@@ -167,6 +167,7 @@ Dev-only utilities.
 
 ```text
 tools/src/
+|-- headless-match/     reusable headless match runner, metrics, replay output
 |-- replay-player/      headless replay to hash stream
 |-- hash-diff/          first divergent tick between two hash streams
 |-- snapshot-size/      worst-case snapshot size budget test

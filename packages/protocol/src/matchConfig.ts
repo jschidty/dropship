@@ -241,7 +241,7 @@ export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
     breakGraceTicks: 30,
   },
   spawning: {
-    fighterSpawnIntervalTicks: 180,
+    fighterSpawnIntervalTicks: 165,
     fighterSpawnCapPerDropShip: 4,
   },
   matchEnd: {
@@ -384,9 +384,24 @@ export type PartialSimTuningConfig = Readonly<{
 }>;
 
 const DEFAULT_MATCH_SEED = 1337;
-const PLANET_NAMES = ["Aurora", "Vesper", "Caldera"];
+const PLANET_NAMES = [
+  "Aurora",
+  "Vesper",
+  "Caldera",
+  "Meridian",
+  "Lumen",
+  "Nadir",
+  "Zenith",
+  "Obsidian",
+  "Solace",
+  "Icarus",
+];
 const MATCH_TAU = Math.PI * 2;
 const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.25;
+const MIN_GENERATED_PLANETS = 4;
+const MAX_GENERATED_PLANETS = 10;
+const MIN_PARENT_PLANETS = 4;
+const MAX_MOONS_PER_PLANET = 2;
 const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
   { id: 1, name: "Player 1", color: "#74d9ff" },
   { id: 2, name: "Player 2", color: "#ff4fd8" },
@@ -651,7 +666,14 @@ function generatePlanetarySystem(seed: number): {
   planets: readonly InitialPlanetConfig[];
 } {
   const random = createSeededRandom(seed, "match-system");
-  const planetCount = 1 + randomInt(random, 3);
+  const targetPlanetCount =
+    MIN_GENERATED_PLANETS +
+    randomInt(random, MAX_GENERATED_PLANETS - MIN_GENERATED_PLANETS + 1);
+  const targetMoonCount = randomInt(
+    random,
+    targetPlanetCount - MIN_PARENT_PLANETS + 1
+  );
+  const planetCount = targetPlanetCount - targetMoonCount;
   const sunDirection = sampleOrbitAxis(random);
   const sunDistance = quantize(1800 + random() * 1800);
   const sunOrbitCenter = {
@@ -660,8 +682,7 @@ function generatePlanetarySystem(seed: number): {
     z: quantize(sunDirection.z * 36),
   };
   const planets: InitialPlanetConfig[] = [];
-  let remainingBodies = 4 - planetCount;
-  let generatedMoonCount = 0;
+  let remainingMoons = targetMoonCount;
 
   for (let index = 0; index < planetCount; index += 1) {
     const radius = quantize(24 + random() * 20);
@@ -702,15 +723,16 @@ function generatePlanetarySystem(seed: number): {
 
     planets.push(planet);
 
-    const maxMoons = Math.min(2, remainingBodies);
-    let moonCount = randomInt(random, maxMoons + 1);
+    const remainingParentPlanets = planetCount - index - 1;
+    const maxMoons = Math.min(MAX_MOONS_PER_PLANET, remainingMoons);
+    const minMoons = Math.max(
+      0,
+      remainingMoons - remainingParentPlanets * MAX_MOONS_PER_PLANET
+    );
+    const moonCount =
+      minMoons + randomInt(random, maxMoons - minMoons + 1);
 
-    if (generatedMoonCount === 0 && maxMoons > 0) {
-      moonCount = Math.max(moonCount, 1);
-    }
-
-    remainingBodies -= moonCount;
-    generatedMoonCount += moonCount;
+    remainingMoons -= moonCount;
 
     for (let moonIndex = 0; moonIndex < moonCount; moonIndex += 1) {
       const moonRadius = quantize(radius * (0.22 + random() * 0.16));

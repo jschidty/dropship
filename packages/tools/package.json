@@ -2,5 +2,15 @@
   "name": "@drop-ship/tools",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./headless-match": "./src/headless-match/index.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@drop-ship/content": "workspace:*",
+    "@drop-ship/protocol": "workspace:*",
+    "@drop-ship/sim": "workspace:*"
+  }
 }

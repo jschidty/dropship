@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_CONTENT_REGISTRY,
   SHIP_COMPONENT_IDS,
+  TEMPLATE_IDS,
 } from "../packages/content/src/index";
 import {
   DEFAULT_CAPTURE_DEMO_RULES,
@@ -36,6 +37,10 @@ import {
   runTick,
   serializeWorld,
 } from "../packages/sim/src/index";
+import {
+  createHeadlessMatchRunner,
+  type HeadlessMatchController,
+} from "../packages/tools/src/index";
 import { createMinimalLocalGame } from "../packages/client/src/runtime/localGame";
 import { selectMoveOrderUnits } from "../packages/client/src/selection/commands";
 import type { UnitViewModel } from "../packages/client/src/index";
@@ -63,15 +68,21 @@ testTimerPlanetCountWinner();
 testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
 testNpcDefenderIssuesAttackOrders();
+testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
+testNpcFightersHoldEscortWhenDropShipIsNotThreatened();
 testNpcControllersCanOwnEveryPlayer();
 testLegacySnapshotHydratesResolvedConfig();
 testInitialLoadoutOverridesShipStats();
 testInvalidInitialLoadoutSlotRejected();
 testComponentStatOverridesAffectShipStats();
 testInvalidComponentStatOverrideRejected();
+testInvalidDerivedStatsFromComponentOverrideRejected();
 testDuplicateComponentStatOverrideRejected();
 testSimTuningAffectsHeadlessMotion();
 testDeterministicReplayHash();
+testHeadlessRunnerMatchesSmokeReplayHash();
+testHeadlessControllerCommandsUseCommandBatches();
+testHeadlessRunnerRunsAllNpcMatch();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
 
@@ -140,15 +151,16 @@ function testSeededMatchGeneration(): void {
   const moonCount = first.initialPlanets.filter(
     (planet) => planet.parentPlanetIndex !== null
   ).length;
+  const parentPlanetCount = first.initialPlanets.length - moonCount;
   const planetClasses = new Set<string>();
 
   assert.deepEqual(first.initialPlanets, second.initialPlanets);
   assert.deepEqual(first.environment, second.environment);
   assert.ok(Number.isFinite(first.environment.sun.orbitCenter.x));
-  assert.ok(first.initialPlanets.length >= 1);
-  assert.ok(first.initialPlanets.length <= 4);
-  assert.ok(moonCount >= 1);
-  assert.ok(moonCount <= 3);
+  assert.ok(first.initialPlanets.length >= 4);
+  assert.ok(first.initialPlanets.length <= 10);
+  assert.ok(parentPlanetCount >= 4);
+  assert.ok(moonCount <= 6);
   const ringedPlanets = first.initialPlanets.filter(
     (planet) => planet.appearance.hasRings
   );
@@ -182,6 +194,17 @@ function testSeededMatchGeneration(): void {
 
   for (const count of moonsByParent.values()) {
     assert.ok(count <= 2);
+  }
+
+  for (let seed = 0; seed < 128; seed += 1) {
+    const config = createMinimalSkirmishConfig({ seed });
+    const parentCount = config.initialPlanets.filter(
+      (planet) => planet.parentPlanetIndex === null
+    ).length;
+
+    assert.ok(config.initialPlanets.length >= 4);
+    assert.ok(config.initialPlanets.length <= 10);
+    assert.ok(parentCount >= 4);
   }
 }
 
@@ -269,7 +292,121 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "8a5cf64a");
+  assert.equal(first, "f3cc4795");
+}
+
+function testHeadlessRunnerMatchesSmokeReplayHash(): void {
+  const runner = createHeadlessMatchRunner({
+    config: createMinimalSkirmishConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+    maxTicks: 24,
+    hashIntervalTicks: 24,
+  });
+  const result = runner.run({
+    commandBatches: createReplayBatches(runner.world),
+  });
+
+  assert.equal(result.finalHash, "f3cc4795");
+  assert.deepEqual(result.hashes, [
+    {
+      tick: 24,
+      hash: "f3cc4795",
+    },
+  ]);
+  assert.equal(result.metrics.commandCount, 2);
+  assert.equal(result.metrics.nonEmptyCommandBatches, 2);
+  assert.equal(result.replay.version, 1);
+  assert.deepEqual(
+    result.replay.commandBatches,
+    createReplayBatches(runner.world)
+  );
+  assert.deepEqual(result.replay.expectedHashes, result.hashes);
+}
+
+function testHeadlessControllerCommandsUseCommandBatches(): void {
+  const target = {
+    x: -90,
+    y: 0,
+    z: -20,
+  };
+  const controller: HeadlessMatchController = {
+    id: "test-tool-controller",
+    commandsForTick(world) {
+      if (world.tick !== 0) {
+        return [];
+      }
+
+      const unit = world.units.find((entry) => entry.owner === 1);
+
+      assert.ok(unit);
+
+      return [
+        {
+          playerId: 1,
+          clientSeq: 1,
+          command: {
+            type: "moveUnits",
+            unitHandles: [unit.handle],
+            target,
+          },
+        },
+      ];
+    },
+  };
+  const runner = createHeadlessMatchRunner({
+    config: createMinimalSkirmishConfig(),
+    controllers: [controller],
+    maxTicks: 1,
+    hashIntervalTicks: 1,
+  });
+  const result = runner.run();
+  const unit = result.world.units.find((entry) => entry.owner === 1);
+
+  assert.ok(unit);
+  assert.equal(result.commandBatches.length, 1);
+  assert.equal(result.commandBatches[0]?.tick, 0);
+  assert.equal(result.commandBatches[0]?.commands[0]?.playerId, 1);
+  assert.equal(unit.moveOrder?.type, "moveTo");
+  assert.deepEqual(
+    unit.moveOrder?.type === "moveTo" ? unit.moveOrder.target : null,
+    target
+  );
+  assert.equal(result.hashes.length, 1);
+  assert.equal(result.metrics.commandCount, 1);
+}
+
+function testHeadlessRunnerRunsAllNpcMatch(): void {
+  const runner = createHeadlessMatchRunner({
+    config: createCaptureDemoConfig({
+      seed: 1337,
+      controllers: [
+        { playerId: 1, type: "npc" },
+        { playerId: 2, type: "npc" },
+      ],
+      rules: {
+        matchEnd: {
+          durationTicks: 3,
+        },
+        npc: {
+          aggroRangeWorldUnits: 1_000,
+        },
+        spawning: {
+          fighterSpawnIntervalTicks: 10_000,
+        },
+      },
+    }),
+    maxTicks: 3,
+    hashIntervalTicks: 1,
+  });
+  const result = runner.run();
+
+  assert.equal(result.metrics.completed, true);
+  assert.equal(result.metrics.ticksElapsed, 3);
+  assert.equal(result.hashes.length, 3);
+  assert.equal(result.commandBatches.length, 0);
+  assert.ok(
+    result.world.units.some((unit) => unit.moveOrder?.type === "attackTarget")
+  );
 }
 
 function testDefaultSteeringMovesUnits(): void {
@@ -840,10 +977,160 @@ function testNpcDefenderIssuesAttackOrders(): void {
 
   runBatches(world, [], 2);
 
-  const defender = world.units.find((unit) => unit.owner === 2);
+  const defender = world.units.find(
+    (unit) =>
+      unit.owner === 2 &&
+      unit.shipClassId !== SHIP_CLASS_IDS.dropShip &&
+      unit.moveOrder?.type === "attackTarget"
+  );
 
   assert.ok(defender);
-  assert.equal(defender.moveOrder?.type, "attackTarget");
+}
+
+function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
+  const base = createCaptureDemoConfig({ seed: 1337 });
+  const planetTemplate = base.initialPlanets.find(
+    (planet) => planet.parentPlanetIndex === null
+  );
+
+  assert.ok(planetTemplate);
+
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    initialPlanets: [
+      createStaticTestPlanet(planetTemplate, "Exposed", { x: 0, y: 0, z: 0 }),
+      createStaticTestPlanet(planetTemplate, "Safe", { x: 420, y: 0, z: 0 }),
+      createStaticTestPlanet(planetTemplate, "Contested", {
+        x: 840,
+        y: 0,
+        z: 0,
+      }),
+    ],
+    initialUnits: [
+      {
+        owner: 1,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 0, y: 8, z: 95 },
+      },
+      {
+        owner: 1,
+        templateId: TEMPLATE_IDS.fighterShip,
+        position: { x: 30, y: 8, z: 100 },
+      },
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 360, y: 8, z: 0 },
+      },
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.fighterShip,
+        position: { x: 372, y: 8, z: 12 },
+      },
+    ],
+    rules: {
+      npc: {
+        aggroRangeWorldUnits: 1_000,
+        thinkIntervalTicks: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const safePlanet = world.planets.find((planet) => planet.name === "Safe");
+  const contestedPlanet = world.planets.find(
+    (planet) => planet.name === "Contested"
+  );
+  const dropShip = world.units.find(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(safePlanet);
+  assert.ok(contestedPlanet);
+  assert.ok(dropShip);
+
+  contestedPlanet.control.contested = true;
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(dropShip.moveOrder?.type, "capturePlanet");
+  assert.ok(
+    dropShip.moveOrder?.type === "capturePlanet" &&
+      sameHandle(dropShip.moveOrder.planet, safePlanet.handle)
+  );
+}
+
+function testNpcFightersHoldEscortWhenDropShipIsNotThreatened(): void {
+  const base = createCaptureDemoConfig({ seed: 1337 });
+  const planetTemplate = base.initialPlanets.find(
+    (planet) => planet.parentPlanetIndex === null
+  );
+
+  assert.ok(planetTemplate);
+
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    initialPlanets: [
+      createStaticTestPlanet(planetTemplate, "Remote", { x: 600, y: 0, z: 0 }),
+    ],
+    initialUnits: [
+      {
+        owner: 1,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 500, y: 8, z: 0 },
+      },
+      {
+        owner: 1,
+        templateId: TEMPLATE_IDS.fighterShip,
+        position: { x: 220, y: 8, z: 0 },
+      },
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.dropShip,
+        position: { x: 0, y: 8, z: 120 },
+      },
+      {
+        owner: 2,
+        templateId: TEMPLATE_IDS.fighterShip,
+        position: { x: 140, y: 8, z: 0 },
+      },
+    ],
+    rules: {
+      npc: {
+        aggroRangeWorldUnits: 120,
+        thinkIntervalTicks: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const dropShip = world.units.find(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+  const fighter = world.units.find(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.fighter
+  );
+
+  assert.ok(dropShip);
+  assert.ok(fighter);
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(fighter.moveOrder?.type, "escort");
+  assert.ok(
+    fighter.moveOrder?.type === "escort" &&
+      sameHandle(fighter.moveOrder.target, dropShip.handle)
+  );
 }
 
 function testNpcControllersCanOwnEveryPlayer(): void {
@@ -1043,6 +1330,27 @@ function testInvalidComponentStatOverrideRejected(): void {
         content: DEFAULT_CONTENT_REGISTRY,
       }),
     /cannot override damage/
+  );
+}
+
+function testInvalidDerivedStatsFromComponentOverrideRejected(): void {
+  assert.throws(
+    () =>
+      createWorld({
+        config: createMinimalSkirmishConfig({
+          seed: 1337,
+          contentOverrides: {
+            shipComponents: [
+              {
+                componentId: SHIP_COMPONENT_IDS.ionEngineSmall,
+                powerDraw: 1_000,
+              },
+            ],
+          },
+        }),
+        content: DEFAULT_CONTENT_REGISTRY,
+      }),
+    /derived stat powerAvailable/
   );
 }
 
@@ -1319,6 +1627,28 @@ function placeDropShipInCaptureOrbit(
   dropShip.moveOrder = {
     type: "capturePlanet",
     planet: planet.handle,
+  };
+}
+
+function createStaticTestPlanet(
+  source: MatchConfig["initialPlanets"][number],
+  name: string,
+  position: MatchConfig["initialPlanets"][number]["position"]
+): MatchConfig["initialPlanets"][number] {
+  return {
+    ...source,
+    name,
+    position,
+    orbitAxis: { x: 0, y: 1, z: 0 },
+    orbit: {
+      center: position,
+      radius: 0,
+      phase: 0,
+      angularSpeed: 0,
+    },
+    parentPlanetIndex: null,
+    capturable: true,
+    initialOwner: 0,
   };
 }
 

@@ -16,23 +16,24 @@ Relevant architecture references:
 
 ## Current Headless Runner Status
 
-There is already a headless sim path, but it currently lives mostly in the smoke test harness rather than a reusable tool package.
+There is already a reusable headless sim path under `packages/tools`, with the original smoke-test harness kept as the reference for fixed batches, snapshot round trips, and deterministic hashes.
 
 Existing pieces:
 
 - [`tests/run-smoke.mjs`](../tests/run-smoke.mjs) bundles and executes [`tests/smoke.test.ts`](../tests/smoke.test.ts) in Node.
 - [`tests/smoke.test.ts`](../tests/smoke.test.ts) creates worlds with `createWorld`, advances them with `runTick`, builds fixed `CommandBatch` streams, computes hashes with `hashWorld`, and tests snapshot round trips.
+- [`packages/tools/src/headless-match`](../packages/tools/src/headless-match) wraps `createWorld`, `runTick`, command-producing controllers, hash streams, metrics, and `ReplayFile` output for Node-safe headless runs.
 - [`packages/sim/src/tick.ts`](../packages/sim/src/tick.ts) exposes the core `runTick(world, batch)` contract.
 - [`packages/sim/src/snapshot.ts`](../packages/sim/src/snapshot.ts) and [`packages/sim/src/hash.ts`](../packages/sim/src/hash.ts) serialize and hash the same sim state a headless run should report.
 - [`packages/protocol/src/replay.ts`](../packages/protocol/src/replay.ts) defines the replay file shape: resolved match config, command batches, and expected hashes.
 
-Planned but not implemented as reusable tools yet:
+Still planned as reusable tools or command-line wrappers:
 
 - [`packages/tools/src/replay-player`](../packages/tools/src/replay-player/.gitkeep)
 - [`packages/tools/src/hash-diff`](../packages/tools/src/hash-diff/.gitkeep)
 - [`packages/tools/src/snapshot-size`](../packages/tools/src/snapshot-size/.gitkeep)
 
-For RL work, start by extracting the smoke-test style headless loop into a proper `packages/tools/src/rl-runner` or `packages/tools/src/headless-match` module instead of growing more test-only helpers.
+For RL work, build on `packages/tools/src/headless-match` instead of growing more test-only helpers or adding model-specific sim paths.
 
 ## Recommended Model Shape
 
@@ -152,17 +153,20 @@ The learned policy should not bypass this path. That keeps single-player, replay
 
 ## Headless Runner Procedure
 
-Create a reusable runner under `packages/tools/src/headless-match` or `packages/tools/src/rl-runner`.
+The reusable runner lives under `packages/tools/src/headless-match`.
 
-Suggested modules:
+Current modules:
 
-- `environment.ts`: wraps `createWorld`, `runTick`, reset, step, observation, reward, done, and metrics.
+- `runner.ts`: wraps `createWorld`, `runTick`, reset, step, run, command collection, hash capture, and replay export.
+- `metrics.ts`: records match-level command counts, event counts, first capture tick, completion state, and final hash.
+- `replay.ts`: writes `ReplayFile` records using the protocol replay type.
+
+Future RL-specific modules should stay separate until training work begins:
+
 - `policy.ts`: interface for scripted, random, loaded-model, and remote-training policies.
 - `actions.ts`: action masks and action-to-command conversion.
 - `observations.ts`: fixed observation vector builder.
-- `metrics.ts`: match-level and tick-level balance metrics.
 - `league.ts`: runs policy-vs-policy batches over seeds and config variants.
-- `replay.ts`: writes `ReplayFile` records using the protocol replay type.
 
 Minimal step flow:
 

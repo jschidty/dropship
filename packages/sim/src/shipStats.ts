@@ -164,7 +164,7 @@ export function validateShipComponentOverride(
   }
 }
 
-function applyShipComponentOverride<T extends ShipComponentTemplate>(
+export function applyShipComponentOverride<T extends ShipComponentTemplate>(
   component: T,
   override: ShipComponentStatOverride
 ): T {

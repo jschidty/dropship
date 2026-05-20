@@ -76,7 +76,17 @@ importers:
         specifier: workspace:*
         version: link:../protocol
 
-  packages/tools: {}
+  packages/tools:
+    dependencies:
+      '@drop-ship/content':
+        specifier: workspace:*
+        version: link:../content
+      '@drop-ship/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@drop-ship/sim':
+        specifier: workspace:*
+        version: link:../sim
 
 packages:
 

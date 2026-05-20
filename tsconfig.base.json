@@ -13,7 +13,11 @@
       "@drop-ship/content": ["packages/content/src/index.ts"],
       "@drop-ship/protocol": ["packages/protocol/src/index.ts"],
       "@drop-ship/server": ["packages/server/src/index.ts"],
-      "@drop-ship/sim": ["packages/sim/src/index.ts"]
+      "@drop-ship/sim": ["packages/sim/src/index.ts"],
+      "@drop-ship/tools": ["packages/tools/src/index.ts"],
+      "@drop-ship/tools/headless-match": [
+        "packages/tools/src/headless-match/index.ts"
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 import { sameHandle } from "@drop-ship/protocol";
-import type { CaptureDemoRules } from "@drop-ship/protocol";
+import type { CaptureRulesConfig } from "@drop-ship/protocol";
 import { distanceSquared } from "../movement";
 import {
   findPlanetByHandle,
@@ -9,12 +9,12 @@ import {
   type SimUnit,
   type SimWorld,
 } from "../world";
-import { readCaptureDemoRules } from "./captureRules";
+import { readCaptureRules } from "./captureRules";
 
 export const OrbitTrackingSystem: SimSystem = {
   name: "OrbitTrackingSystem",
   run(world) {
-    const rules = readCaptureDemoRules(world);
+    const rules = readCaptureRules(world);
 
     for (const unit of getUnitsInStableOrder(world)) {
       updateUnitOrbitState(world, unit, rules);
@@ -25,7 +25,7 @@ export const OrbitTrackingSystem: SimSystem = {
 function updateUnitOrbitState(
   world: SimWorld,
   unit: SimUnit,
-  rules: CaptureDemoRules
+  rules: CaptureRulesConfig
 ): void {
   const planet = readOrderedPlanet(world, unit);
 
@@ -72,10 +72,10 @@ function readOrderedPlanet(world: SimWorld, unit: SimUnit): SimPlanet | null {
 function isInsideCaptureOrbitBand(
   unit: SimUnit,
   planet: SimPlanet,
-  rules: CaptureDemoRules
+  rules: CaptureRulesConfig
 ): boolean {
-  const minRadius = planet.radius * rules.captureOrbitMinRadiusMultiplier;
-  const maxRadius = planet.radius * rules.captureOrbitMaxRadiusMultiplier;
+  const minRadius = planet.radius * rules.orbitMinRadiusMultiplier;
+  const maxRadius = planet.radius * rules.orbitMaxRadiusMultiplier;
   const distance = distanceSquared(unit.position, planet.position);
 
   return distance >= minRadius * minRadius && distance <= maxRadius * maxRadius;

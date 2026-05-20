@@ -2,10 +2,9 @@ import * as THREE from "three";
 import gasGiantGrungeTextureUrl from "../../../../content/images/red-gas-giant/grunge.jpg?url";
 import gasGiantNoiseTextureUrl from "../../../../content/images/red-gas-giant/noise.png?url";
 import {
-  DEFAULT_CAPTURE_DEMO_RULES,
   PHASE_ONE_SIM_HZ,
   SHIP_CLASS_IDS,
-  type CaptureDemoRules,
+  type CaptureRulesConfig,
   type MatchConfig,
   type PlanetClass,
   type PlayerId,
@@ -17,6 +16,7 @@ import {
   PLANET_GRAVITY_MAX_STRENGTH,
   SIM_DT_MS,
   computePlanetGravityVector,
+  readCaptureRules,
 } from "@drop-ship/sim";
 import {
   CAMERA_MODES,
@@ -1067,7 +1067,7 @@ export function mountMinimalGame(
       captureProgressRings,
       planets,
       runtime.world.config.players,
-      runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES,
+      readCaptureRules(runtime.world),
       renderFrameIndex,
       cameraControls.mode === "tactical" || tacticalOverlayEnabled,
       cameraControls.preset
@@ -1371,10 +1371,9 @@ function updateMatchStatus(
   controls: MatchStatusControls,
   runtime: LocalGameRuntime
 ): void {
-  const rules =
-    runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES;
+  const rules = runtime.world.config.rules.matchEnd;
   const remainingTicks = Math.max(
-    rules.matchDurationTicks - runtime.world.tick,
+    rules.durationTicks - runtime.world.tick,
     0
   );
   const playerOne = runtime.world.config.players.find(
@@ -1882,8 +1881,7 @@ function formatSelectedPlanetStatus(
   }
 
   if (planet.control.capturingPlayer !== 0) {
-    const rules =
-      runtime.world.config.captureDemoRules ?? DEFAULT_CAPTURE_DEMO_RULES;
+    const rules = readCaptureRules(runtime.world);
     const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
     const progress = Math.min(
       100,
@@ -2733,7 +2731,7 @@ function updateCaptureProgressRings(
   rings: Map<string, CaptureProgressRing>,
   planets: readonly PlanetViewModel[],
   players: readonly PlayerConfig[],
-  rules: CaptureDemoRules,
+  rules: CaptureRulesConfig,
   frameIndex: number,
   enabled: boolean,
   cameraPreset: CameraPreset | null
@@ -2863,7 +2861,7 @@ function writeCaptureProgressGeometry(
 
 function readPlanetCaptureProgress(
   planet: PlanetViewModel,
-  rules: CaptureDemoRules
+  rules: CaptureRulesConfig
 ): number {
   if (planet.control.capturingPlayer === 0 || planet.control.contested) {
     return 0;

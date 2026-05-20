@@ -7,7 +7,7 @@ import {
   type SimSystem,
   type SimUnit,
 } from "../world";
-import { readCaptureDemoRules } from "./captureRules";
+import { readSpawningRules } from "./captureRules";
 
 export const DropShipSpawnSystem: SimSystem = {
   name: "DropShipSpawnSystem",
@@ -16,7 +16,7 @@ export const DropShipSpawnSystem: SimSystem = {
       return;
     }
 
-    const rules = readCaptureDemoRules(world);
+    const rules = readSpawningRules(world);
 
     for (const dropShip of getUnitsInStableOrder(world)) {
       if (

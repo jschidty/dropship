@@ -1,5 +1,6 @@
 import { getPlanetsInStableOrder, getUnitsInStableOrder, type SimSystem } from "../world";
-import { readCaptureDemoRules } from "./captureRules";
+import { isPlayerControlledBy } from "../config";
+import { readNpcRules } from "./captureRules";
 import { findNearestEnemy } from "./targeting";
 
 export const NpcCommandSystem: SimSystem = {
@@ -9,9 +10,9 @@ export const NpcCommandSystem: SimSystem = {
       return;
     }
 
-    const rules = readCaptureDemoRules(world);
+    const rules = readNpcRules(world);
 
-    if (tick % rules.npcThinkIntervalTicks !== 0) {
+    if (tick % rules.thinkIntervalTicks !== 0) {
       return;
     }
 
@@ -20,11 +21,14 @@ export const NpcCommandSystem: SimSystem = {
     );
 
     for (const unit of getUnitsInStableOrder(world)) {
-      if (unit.owner !== 2 || unit.health.current <= 0) {
+      if (
+        !isPlayerControlledBy(world, unit.owner, "npc") ||
+        unit.health.current <= 0
+      ) {
         continue;
       }
 
-      const target = findNearestEnemy(world, unit, rules.npcAggroRange);
+      const target = findNearestEnemy(world, unit, rules.aggroRangeWorldUnits);
 
       if (target) {
         unit.moveOrder = {

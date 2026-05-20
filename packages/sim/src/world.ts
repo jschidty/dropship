@@ -26,6 +26,8 @@ import {
   type RuntimeEntityId,
 } from "./ids";
 import { createPrngStream, type PrngStream } from "./prng";
+import { readSimTuning, validateResolvedMatchConfig } from "./config";
+import { readShipStatsForLoadout } from "./shipStats";
 import {
   deterministicCos,
   deterministicSqrt,
@@ -88,6 +90,7 @@ export type SimUnit = {
   owner: PlayerId;
   templateId: number;
   shipClassId: number;
+  componentsBySlot: Readonly<Record<string, number>> | null;
   position: Vec3Data;
   prevPosition: Vec3Data;
   velocity: Vec3Data;
@@ -185,7 +188,10 @@ export function createWorld(options: CreateWorldOptions = {}): SimWorld {
       spawnUnit(world, {
         owner: initialUnit.owner,
         templateId: initialUnit.templateId,
+        componentsBySlot: initialUnit.componentsBySlot,
         position: initialUnit.position,
+        rotation: initialUnit.rotation,
+        moveOrder: initialUnit.initialOrder ?? null,
       });
     }
 
@@ -219,6 +225,8 @@ export function createEmptyWorld(options: {
   content: ContentRegistry;
   nextEntityId?: number;
 }): SimWorld {
+  validateResolvedMatchConfig(options.config, options.content);
+
   return {
     config: options.config,
     content: options.content,
@@ -247,6 +255,7 @@ export function spawnUnit(
   options: Readonly<{
     owner: PlayerId;
     templateId: number;
+    componentsBySlot?: Readonly<Record<string, number>> | null;
     position: Vec3Data;
     handle?: EntityHandle;
     velocity?: Vec3Data;
@@ -260,17 +269,24 @@ export function spawnUnit(
   }>
 ): SimUnit {
   const template = world.content.getUnitTemplate(options.templateId);
+  const componentsBySlot = copyComponentsBySlot(options.componentsBySlot ?? null);
+  const stats = readShipStatsForLoadout(
+    world,
+    new Map(),
+    options.templateId,
+    componentsBySlot
+  );
   const handle = options.handle ?? allocateHandle(world.ids);
   const runtimeEntityId = allocateRuntimeEntityId(world);
   const position = keepPositionOutsidePlanets(
     world,
     options.position,
-    template.stats.colliderRadius,
+    stats.colliderRadius,
     handle.id
   );
   const health = options.health ?? {
-    current: template.stats.maxHealth,
-    max: template.stats.maxHealth,
+    current: stats.maxHealth,
+    max: stats.maxHealth,
   };
   const unit: SimUnit = {
     runtimeEntityId,
@@ -278,6 +294,7 @@ export function spawnUnit(
     owner: options.owner,
     templateId: options.templateId,
     shipClassId: template.shipClassId,
+    componentsBySlot,
     position,
     prevPosition: copyVec3(position),
     velocity: copyVec3(options.velocity ?? template.initialVelocity),
@@ -423,8 +440,15 @@ export function capturePrevPositions(world: SimWorld): void {
 }
 
 export function keepAllUnitsOutsidePlanets(world: SimWorld): void {
+  const shipStats = new Map<number | string, ReturnType<typeof readShipStatsForLoadout>>();
+
   for (const unit of getUnitsInStableOrder(world)) {
-    const stats = world.content.getUnitTemplate(unit.templateId).stats;
+    const stats = readShipStatsForLoadout(
+      world,
+      shipStats,
+      unit.templateId,
+      unit.componentsBySlot
+    );
     unit.position = keepPositionOutsidePlanets(
       world,
       unit.position,
@@ -442,9 +466,13 @@ export function keepPositionOutsidePlanets(
   fallbackSeed: number
 ): Vec3Data {
   let adjusted = copyVec3(position);
+  const tuning = readSimTuning(world);
 
   for (const planet of getPlanetsInStableOrder(world)) {
-    const minimumDistance = planet.radius + colliderRadius + 0.35;
+    const minimumDistance =
+      planet.radius +
+      colliderRadius +
+      tuning.avoidance.collisionPaddingWorldUnits;
     const offsetX = adjusted.x - planet.position.x;
     const offsetY = adjusted.y - planet.position.y;
     const offsetZ = adjusted.z - planet.position.z;
@@ -483,6 +511,12 @@ export function copyVec3(vector: Vec3Data): Vec3Data {
     y: vector.y,
     z: vector.z,
   };
+}
+
+export function copyComponentsBySlot(
+  componentsBySlot: Readonly<Record<string, number>> | null | undefined
+): Readonly<Record<string, number>> | null {
+  return componentsBySlot ? { ...componentsBySlot } : null;
 }
 
 export function copyPlanetOrbit(orbit: PlanetOrbitConfig): PlanetOrbitConfig {
@@ -597,7 +631,7 @@ function assignInitialCaptureDemoOrders(world: SimWorld): void {
         continue;
       }
 
-      if (unit.shipClassId === SHIP_CLASS_IDS.fighter) {
+      if (unit.shipClassId === SHIP_CLASS_IDS.fighter && !unit.moveOrder) {
         unit.moveOrder = {
           type: "escort",
           target: dropShip.handle,

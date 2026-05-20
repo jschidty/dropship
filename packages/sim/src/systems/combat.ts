@@ -8,7 +8,7 @@ import { findWeaponTarget } from "./targeting";
 export const CombatSystem: SimSystem = {
   name: "CombatSystem",
   run(world, tick) {
-    const weaponProfiles = new Map<number, UnitWeaponProfile>();
+    const weaponProfiles = new Map<number | string, UnitWeaponProfile>();
 
     for (const unit of getUnitsInStableOrder(world)) {
       if (unit.weaponCooldownTicks > 0) {

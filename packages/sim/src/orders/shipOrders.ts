@@ -10,8 +10,6 @@ import {
   subtract,
   clamp,
   unitScalar,
-  MOVE_ORDER_ARRIVAL_DISTANCE,
-  MOVE_ORDER_SLOW_RADIUS,
 } from "../movement";
 import {
   findPlanetByHandle,
@@ -25,10 +23,12 @@ import {
   readUnitWeaponProfile,
   type UnitWeaponProfile,
 } from "../shipStats";
+import { readSimTuning } from "../config";
 
 export function updateShipOrderIntents(world: SimWorld, tick: number): void {
-  const shipStats = new Map<number, ShipStats>();
-  const weaponProfiles = new Map<number, UnitWeaponProfile>();
+  const shipStats = new Map<number | string, ShipStats>();
+  const weaponProfiles = new Map<number | string, UnitWeaponProfile>();
+  const tuning = readSimTuning(world);
 
   for (const unit of getUnitsInStableOrder(world)) {
     const stats = readUnitShipStats(world, shipStats, unit);
@@ -37,7 +37,8 @@ export function updateShipOrderIntents(world: SimWorld, tick: number): void {
       world,
       tick,
       stats,
-      readUnitWeaponProfile(world, weaponProfiles, unit)
+      readUnitWeaponProfile(world, weaponProfiles, unit),
+      tuning
     );
   }
 }
@@ -47,7 +48,8 @@ function computeOrderVelocity(
   world: SimWorld,
   tick: number,
   stats: ShipStats,
-  weaponProfile: UnitWeaponProfile | null
+  weaponProfile: UnitWeaponProfile | null,
+  tuning: ReturnType<typeof readSimTuning>
 ): Vec3Data | null {
   const order = unit.moveOrder;
 
@@ -67,7 +69,8 @@ function computeOrderVelocity(
       unit,
       target.position,
       stats,
-      Math.max((weaponProfile?.range ?? 42) * 0.78, 12)
+      Math.max((weaponProfile?.range ?? 42) * 0.78, 12),
+      tuning.movement
     );
   }
 
@@ -83,13 +86,16 @@ function computeOrderVelocity(
       return null;
     }
 
-    let targetRadius = planet.radius * 3.05;
+    let targetRadius = planet.radius * tuning.orbit.guardRadiusMultiplier;
 
     if (order.type === "capturePlanet") {
-      targetRadius = planet.radius * 2.25;
+      targetRadius = planet.radius * tuning.orbit.captureRadiusMultiplier;
     } else if (order.type === "orbitPlanet") {
       targetRadius =
-        planet.radius * (2.62 + unitScalar(unit, 0x85ebca6b) * 0.32);
+        planet.radius *
+        (tuning.orbit.activeOrbitBaseMultiplier +
+          unitScalar(unit, 0x85ebca6b) *
+            tuning.orbit.activeOrbitJitterMultiplier);
     }
 
     return computeOrbitVelocityAroundPlanet(
@@ -97,7 +103,8 @@ function computeOrderVelocity(
       planet,
       tick,
       stats,
-      targetRadius
+      targetRadius,
+      tuning.orbit
     );
   }
 
@@ -109,20 +116,31 @@ function computeOrderVelocity(
       return null;
     }
 
-    return computeEscortVelocity(unit, target, stats);
+    return computeEscortVelocity(
+      unit,
+      target,
+      stats,
+      tuning.movement,
+      tuning.escort
+    );
   }
 
   const target = order.target;
   const offset = subtract(target, unit.position);
   const distance = length(offset);
 
-  if (distance <= MOVE_ORDER_ARRIVAL_DISTANCE) {
+  if (distance <= tuning.movement.arrivalDistanceWorldUnits) {
     unit.moveOrder = null;
     return null;
   }
 
   const speed =
-    stats.cruiseSpeed * clamp(distance / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
+    stats.cruiseSpeed *
+    clamp(
+      distance / tuning.movement.slowRadiusWorldUnits,
+      tuning.movement.approachMinSpeedRatio,
+      1
+    );
 
   return scale(normalize(offset), speed);
 }

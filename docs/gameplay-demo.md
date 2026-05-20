@@ -44,16 +44,24 @@ The demo should support both multiplayer and a local single-player attacker/defe
 Put demo rules in serializable config, not hardcoded client state. The first implementation can keep defaults near the sim, but the target shape is:
 
 ```ts
-type CaptureDemoRules = {
-  matchDurationTicks: number;
-  planetCaptureSeconds: number;
-  captureOrbitMinRadiusMultiplier: number;
-  captureOrbitMaxRadiusMultiplier: number;
-  captureBreakGraceTicks: number;
-  fighterSpawnIntervalTicks: number;
-  fighterSpawnCapPerDropShip: number;
-  npcThinkIntervalTicks: number;
-  npcAggroRange: number;
+type MatchRulesConfig = {
+  capture: {
+    planetCaptureSeconds: number;
+    orbitMinRadiusMultiplier: number;
+    orbitMaxRadiusMultiplier: number;
+    breakGraceTicks: number;
+  };
+  spawning: {
+    fighterSpawnIntervalTicks: number;
+    fighterSpawnCapPerDropShip: number;
+  };
+  matchEnd: {
+    durationTicks: number;
+  };
+  npc: {
+    thinkIntervalTicks: number;
+    aggroRangeWorldUnits: number;
+  };
 };
 ```
 
@@ -228,7 +236,7 @@ Rules:
 - Keep a per-drop-ship cap so the demo cannot create unbounded entities.
 - Remove destroyed fighter handles from the parent spawn list in stable order.
 
-If spawned fighters are free in the demo, that rule belongs in `CaptureDemoRules`. If they later consume cargo, crew, or energy, those costs must become sim state before spawning.
+If spawned fighters are free in the demo, that rule belongs in `rules.spawning`. If they later consume cargo, crew, or energy, those costs must become sim state before spawning.
 
 ## Commands And Orders
 
@@ -305,8 +313,8 @@ Single-player attacker/defender mode is a match config preset:
 
 NPC behavior:
 
-- every `npcThinkIntervalTicks`, scan Player 2 ships in stable handle order
-- find the nearest enemy within `npcAggroRange`
+- every `rules.npc.thinkIntervalTicks`, scan Player 2 ships in stable handle order
+- find the nearest enemy within `rules.npc.aggroRangeWorldUnits`
 - if one exists, issue or maintain `AttackTarget`
 - otherwise fighters maintain `GuardPlanet` or `Escort`
 - battleships maintain `GuardPlanet`
@@ -337,7 +345,7 @@ type InitialPlanetConfig = {
 type MatchConfig = {
   ...
   gameMode?: "minimalSkirmish" | "captureDemo";
-  captureDemoRules?: CaptureDemoRules;
+  rules: MatchRulesConfig;
 };
 ```
 

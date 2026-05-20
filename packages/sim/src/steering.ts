@@ -1,5 +1,10 @@
 import {
+  DEFAULT_SIM_TUNING,
   PHASE_ONE_SIM_HZ,
+  type SimAvoidanceTuningConfig,
+  type SimBoidsTuningConfig,
+  type SimGravityTuningConfig,
+  type SimTuningConfig,
   type PlayerId,
   type Vec3Data,
 } from "@drop-ship/protocol";
@@ -13,6 +18,7 @@ import {
   type SimWorld,
   yawRotation,
 } from "./world";
+import { readSimTuning } from "./config";
 import {
   deterministicAtan2,
   deterministicFloor,
@@ -21,7 +27,6 @@ import {
   quantizeSimFloat,
 } from "./deterministicMath";
 import {
-  MOVE_ORDER_ARRIVAL_DISTANCE,
   SIM_EPSILON as EPSILON,
   addNormalizedScaled,
   addScaled,
@@ -39,31 +44,12 @@ import {
   type MutableVec3,
 } from "./movement";
 import {
-  readShipStats,
   readUnitShipStats,
 } from "./shipStats";
 
 export const SIM_DT_SECONDS = 1 / PHASE_ONE_SIM_HZ;
-export const PLANET_GRAVITY_MAX_STRENGTH = 14;
-
-const DEFAULT_ORBIT_WEIGHT = 0.95;
-const MOVE_ORDER_WEIGHT = 1.35;
-const GRAVITY_STEERING_WEIGHT = 1.15;
-const PLANET_GRAVITY_FIELD_SCALE = 0.000003;
-const PLANET_GRAVITY_RANGE_MULTIPLIER = 9;
-const PLANET_GRAVITY_MIN_DISTANCE_RATIO = 0.8;
-const BOID_NEIGHBOR_RADIUS = 34;
-const BOID_SEPARATION_RADIUS = 8;
-const BOID_SEPARATION_RADIUS_SQUARED =
-  BOID_SEPARATION_RADIUS * BOID_SEPARATION_RADIUS;
-const BOID_ALIGNMENT_WEIGHT = 0.34;
-const BOID_COHESION_WEIGHT = 0.22;
-const BOID_SEPARATION_WEIGHT = 0.9;
-const PLANET_AVOIDANCE_MARGIN = 14;
-const PLANET_AVOIDANCE_WEIGHT = 1.9;
-const SHIP_AVOIDANCE_RADIUS = 5.5;
-const SHIP_AVOIDANCE_WEIGHT = 0.85;
-const SPATIAL_INDEX_MIN_UNITS = 48;
+export const PLANET_GRAVITY_MAX_STRENGTH =
+  DEFAULT_SIM_TUNING.gravity.maxStrength;
 
 export type GravitySource = Readonly<{
   position: Vec3Data;
@@ -86,11 +72,13 @@ type UnitSpatialIndex = Readonly<{
 }>;
 
 type SpatialCells = Map<number, Map<number, Map<number, SimUnit[]>>>;
+const SPATIAL_INDEX_MIN_UNITS = 48;
 
 export function computePlanetGravityVector(
   point: Vec3Data,
   planets: readonly GravitySource[],
-  target: MutableVec3 = createZero()
+  target: MutableVec3 = createZero(),
+  gravity: SimGravityTuningConfig = DEFAULT_SIM_TUNING.gravity
 ): Vec3Data {
   target.x = 0;
   target.y = 0;
@@ -104,14 +92,14 @@ export function computePlanetGravityVector(
       towardPlanetX * towardPlanetX +
       towardPlanetY * towardPlanetY +
       towardPlanetZ * towardPlanetZ;
-    const influenceRange = planet.radius * PLANET_GRAVITY_RANGE_MULTIPLIER;
+    const influenceRange = planet.radius * gravity.rangeRadiusMultiplier;
 
     if (distanceSquaredValue > influenceRange * influenceRange) {
       continue;
     }
 
     const minimumDistance = Math.max(
-      planet.radius * PLANET_GRAVITY_MIN_DISTANCE_RATIO,
+      planet.radius * gravity.minDistanceRatio,
       1
     );
     const distance = Math.max(
@@ -125,11 +113,11 @@ export function computePlanetGravityVector(
 
     const rangeFalloff = clamp(1 - distance / influenceRange, 0, 1);
     const rawStrength =
-      (planet.mass * PLANET_GRAVITY_FIELD_SCALE) / (distance * distance);
+      (planet.mass * gravity.fieldStrengthScale) / (distance * distance);
     const strength = clamp(
       rawStrength * rangeFalloff,
       0,
-      PLANET_GRAVITY_MAX_STRENGTH
+      gravity.maxStrength
     );
 
     if (strength <= EPSILON) {
@@ -152,9 +140,10 @@ export function computePlanetGravityVector(
 export function steerUnits(world: SimWorld, tick: number): void {
   const units = getUnitsInStableOrder(world);
   const planets = getPlanetsInStableOrder(world);
-  const spatialIndex = createUnitSpatialIndex(units);
+  const tuning = readSimTuning(world);
+  const spatialIndex = createUnitSpatialIndex(units, tuning.boids);
   const nextVelocities: Vec3Data[] = [];
-  const shipStats = new Map<number, ShipStats>();
+  const shipStats = new Map<number | string, ShipStats>();
   const gravityVector = createZero();
 
   for (const unit of units) {
@@ -163,28 +152,34 @@ export function steerUnits(world: SimWorld, tick: number): void {
     const orderVelocity = unit.desiredVelocity;
 
     if (orderVelocity) {
-      addScaled(desiredVelocity, orderVelocity, MOVE_ORDER_WEIGHT);
+      addScaled(desiredVelocity, orderVelocity, tuning.movement.moveOrderWeight);
     } else {
       addScaled(
         desiredVelocity,
-        computeDefaultMotionVelocity(unit, planets, tick, stats),
-        DEFAULT_ORBIT_WEIGHT
+        computeDefaultMotionVelocity(unit, planets, tick, stats, tuning),
+        tuning.movement.defaultOrbitWeight
       );
     }
 
     addScaled(
       desiredVelocity,
-      computePlanetGravityVector(unit.position, planets, gravityVector),
-      GRAVITY_STEERING_WEIGHT
+      computePlanetGravityVector(
+        unit.position,
+        planets,
+        gravityVector,
+        tuning.gravity
+      ),
+      tuning.gravity.steeringWeight
     );
-    addBoidForces(desiredVelocity, unit, spatialIndex, stats);
+    addBoidForces(desiredVelocity, unit, spatialIndex, stats, tuning.boids);
     addObjectAvoidance(
       desiredVelocity,
       unit,
       world,
       planets,
       spatialIndex,
-      shipStats
+      shipStats,
+      tuning.avoidance
     );
 
     const limitedDesired = limitLength(desiredVelocity, stats.maxSpeed);
@@ -203,6 +198,8 @@ export function steerUnits(world: SimWorld, tick: number): void {
 }
 
 export function integrateUnitMotion(world: SimWorld): void {
+  const tuning = readSimTuning(world);
+
   for (const unit of getUnitsInStableOrder(world)) {
     unit.position = {
       x: quantizeSimFloat(unit.position.x + unit.velocity.x * SIM_DT_SECONDS),
@@ -231,7 +228,8 @@ export function integrateUnitMotion(world: SimWorld): void {
     if (
       unit.moveOrder?.type === "moveTo" &&
       distanceSquared(unit.position, unit.moveOrder.target) <=
-        MOVE_ORDER_ARRIVAL_DISTANCE * MOVE_ORDER_ARRIVAL_DISTANCE
+        tuning.movement.arrivalDistanceWorldUnits *
+          tuning.movement.arrivalDistanceWorldUnits
     ) {
       unit.moveOrder = null;
     }
@@ -242,12 +240,16 @@ function computeDefaultMotionVelocity(
   unit: SimUnit,
   planets: readonly SimPlanet[],
   tick: number,
-  stats: ShipStats
+  stats: ShipStats,
+  tuning: SimTuningConfig
 ): Vec3Data {
   const planet = findNearestPlanet(unit, planets);
 
   if (!planet) {
-    return scale(forwardFromRotation(unit), stats.cruiseSpeed * 0.55);
+    return scale(
+      forwardFromRotation(unit),
+      stats.cruiseSpeed * tuning.movement.defaultForwardSpeedRatio
+    );
   }
 
   return computeOrbitVelocityAroundPlanet(
@@ -255,7 +257,10 @@ function computeDefaultMotionVelocity(
     planet,
     tick,
     stats,
-    planet.radius * (2.65 + unitScalar(unit, 0x9e3779b9) * 1.15)
+    planet.radius *
+      (tuning.orbit.defaultMinRadiusMultiplier +
+        unitScalar(unit, 0x9e3779b9) * tuning.orbit.defaultRadiusJitterMultiplier),
+    tuning.orbit
   );
 }
 
@@ -263,7 +268,8 @@ function addBoidForces(
   desiredVelocity: MutableVec3,
   unit: SimUnit,
   spatialIndex: UnitSpatialIndex,
-  stats: ShipStats
+  stats: ShipStats,
+  boids: SimBoidsTuningConfig
 ): void {
   let separationX = 0;
   let separationY = 0;
@@ -279,7 +285,7 @@ function addBoidForces(
   spatialIndex.forEachOwnerRadius(
     unit.owner,
     unit.position,
-    BOID_NEIGHBOR_RADIUS,
+    boids.neighborRadiusWorldUnits,
     (other) => {
       if (other === unit) {
         return;
@@ -308,7 +314,10 @@ function addBoidForces(
         alignmentZ += other.velocity.z;
       }
 
-      if (distanceSquaredValue < BOID_SEPARATION_RADIUS_SQUARED) {
+      if (
+        distanceSquaredValue <
+        boids.separationRadiusWorldUnits * boids.separationRadiusWorldUnits
+      ) {
         const distance = deterministicSqrt(distanceSquaredValue);
 
         if (distance <= EPSILON) {
@@ -316,7 +325,8 @@ function addBoidForces(
         }
 
         const separationStrength = deterministicSquare(
-          (BOID_SEPARATION_RADIUS - distance) / BOID_SEPARATION_RADIUS
+          (boids.separationRadiusWorldUnits - distance) /
+            boids.separationRadiusWorldUnits
         );
         const inverseDistance = 1 / distance;
         separationX -= offsetX * inverseDistance * separationStrength;
@@ -335,21 +345,21 @@ function addBoidForces(
     alignmentX,
     alignmentY,
     alignmentZ,
-    stats.cruiseSpeed * BOID_ALIGNMENT_WEIGHT
+    stats.cruiseSpeed * boids.alignmentWeight
   );
   addNormalizedScaled(
     desiredVelocity,
     cohesionX / neighborCount - unit.position.x,
     cohesionY / neighborCount - unit.position.y,
     cohesionZ / neighborCount - unit.position.z,
-    stats.cruiseSpeed * BOID_COHESION_WEIGHT
+    stats.cruiseSpeed * boids.cohesionWeight
   );
   addNormalizedScaled(
     desiredVelocity,
     separationX,
     separationY,
     separationZ,
-    stats.maxSpeed * BOID_SEPARATION_WEIGHT
+    stats.maxSpeed * boids.separationWeight
   );
 }
 
@@ -359,7 +369,8 @@ function addObjectAvoidance(
   world: SimWorld,
   planets: readonly SimPlanet[],
   spatialIndex: UnitSpatialIndex,
-  shipStats: Map<number, ShipStats>
+  shipStats: Map<number | string, ShipStats>,
+  avoidance: SimAvoidanceTuningConfig
 ): void {
   let avoidanceX = 0;
   let avoidanceY = 0;
@@ -371,7 +382,7 @@ function addObjectAvoidance(
     const offsetZ = unit.position.z - planet.position.z;
     const distanceSquaredValue =
       offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
-    const avoidDistance = planet.radius + PLANET_AVOIDANCE_MARGIN;
+    const avoidDistance = planet.radius + avoidance.planetMarginWorldUnits;
 
     if (
       distanceSquaredValue > avoidDistance * avoidDistance ||
@@ -383,7 +394,7 @@ function addObjectAvoidance(
     const distance = deterministicSqrt(distanceSquaredValue);
     const strength =
       deterministicSquare((avoidDistance - distance) / avoidDistance) *
-      PLANET_AVOIDANCE_WEIGHT;
+      avoidance.planetWeight;
     const scaledStrength = strength / distance;
     avoidanceX += offsetX * scaledStrength;
     avoidanceY += offsetY * scaledStrength;
@@ -392,42 +403,44 @@ function addObjectAvoidance(
 
   const ownStats = readUnitShipStats(world, shipStats, unit);
 
-  spatialIndex.forEachRadius(unit.position, SHIP_AVOIDANCE_RADIUS, (other) => {
-    if (other === unit) {
-      return;
+  spatialIndex.forEachRadius(
+    unit.position,
+    avoidance.shipRadiusWorldUnits,
+    (other) => {
+      if (other === unit) {
+        return;
+      }
+
+      const otherStats = readUnitShipStats(world, shipStats, other);
+      const avoidDistance = Math.max(
+        avoidance.shipRadiusWorldUnits,
+        ownStats.colliderRadius +
+          otherStats.colliderRadius +
+          avoidance.shipPaddingWorldUnits
+      );
+      const offsetX = unit.position.x - other.position.x;
+      const offsetY = unit.position.y - other.position.y;
+      const offsetZ = unit.position.z - other.position.z;
+      const distanceSquaredValue =
+        offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
+
+      if (
+        distanceSquaredValue > avoidDistance * avoidDistance ||
+        distanceSquaredValue <= EPSILON
+      ) {
+        return;
+      }
+
+      const distance = deterministicSqrt(distanceSquaredValue);
+      const strength =
+        deterministicSquare((avoidDistance - distance) / avoidDistance) *
+        avoidance.shipWeight;
+      const scaledStrength = strength / distance;
+      avoidanceX += offsetX * scaledStrength;
+      avoidanceY += offsetY * scaledStrength;
+      avoidanceZ += offsetZ * scaledStrength;
     }
-
-    const otherStats = readShipStats(
-      world,
-      shipStats,
-      other.templateId
-    );
-    const avoidDistance = Math.max(
-      SHIP_AVOIDANCE_RADIUS,
-      ownStats.colliderRadius + otherStats.colliderRadius + 2.4
-    );
-    const offsetX = unit.position.x - other.position.x;
-    const offsetY = unit.position.y - other.position.y;
-    const offsetZ = unit.position.z - other.position.z;
-    const distanceSquaredValue =
-      offsetX * offsetX + offsetY * offsetY + offsetZ * offsetZ;
-
-    if (
-      distanceSquaredValue > avoidDistance * avoidDistance ||
-      distanceSquaredValue <= EPSILON
-    ) {
-      return;
-    }
-
-    const distance = deterministicSqrt(distanceSquaredValue);
-    const strength =
-      deterministicSquare((avoidDistance - distance) / avoidDistance) *
-      SHIP_AVOIDANCE_WEIGHT;
-    const scaledStrength = strength / distance;
-    avoidanceX += offsetX * scaledStrength;
-    avoidanceY += offsetY * scaledStrength;
-    avoidanceZ += offsetZ * scaledStrength;
-  });
+  );
 
   addNormalizedScaled(
     desiredVelocity,
@@ -438,7 +451,10 @@ function addObjectAvoidance(
   );
 }
 
-function createUnitSpatialIndex(units: readonly SimUnit[]): UnitSpatialIndex {
+function createUnitSpatialIndex(
+  units: readonly SimUnit[],
+  boids: SimBoidsTuningConfig
+): UnitSpatialIndex {
   if (units.length < SPATIAL_INDEX_MIN_UNITS) {
     return {
       forEachRadius(center, radius, visitor) {
@@ -465,7 +481,7 @@ function createUnitSpatialIndex(units: readonly SimUnit[]): UnitSpatialIndex {
     };
   }
 
-  const cellSize = BOID_NEIGHBOR_RADIUS;
+  const cellSize = boids.neighborRadiusWorldUnits;
   const cells: SpatialCells = new Map();
   const ownerCells = new Map<PlayerId, SpatialCells>();
 

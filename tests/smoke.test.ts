@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { DEFAULT_CONTENT_REGISTRY } from "../packages/content/src/index";
+import {
+  DEFAULT_CONTENT_REGISTRY,
+  SHIP_COMPONENT_IDS,
+} from "../packages/content/src/index";
 import {
   DEFAULT_CAPTURE_DEMO_RULES,
+  DEFAULT_SIM_TUNING,
   PHASE_ONE_SIM_HZ,
   SHIP_CLASS_IDS,
   createEmptyCommandBatch,
@@ -27,6 +31,8 @@ import {
   computePlanetGravityVector,
   hashWorld,
   hydrateWorldFromSnapshot,
+  readUnitShipStats,
+  readUnitWeaponProfile,
   runTick,
   serializeWorld,
 } from "../packages/sim/src/index";
@@ -57,6 +63,14 @@ testTimerPlanetCountWinner();
 testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
 testNpcDefenderIssuesAttackOrders();
+testNpcControllersCanOwnEveryPlayer();
+testLegacySnapshotHydratesResolvedConfig();
+testInitialLoadoutOverridesShipStats();
+testInvalidInitialLoadoutSlotRejected();
+testComponentStatOverridesAffectShipStats();
+testInvalidComponentStatOverrideRejected();
+testDuplicateComponentStatOverrideRejected();
+testSimTuningAffectsHeadlessMotion();
 testDeterministicReplayHash();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
@@ -255,7 +269,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "fb197175");
+  assert.equal(first, "8a5cf64a");
 }
 
 function testDefaultSteeringMovesUnits(): void {
@@ -526,14 +540,17 @@ function testOrbitTrackingState(): void {
 }
 
 function testDropShipCapturesPlanet(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      planetCaptureSeconds: 1,
-      fighterSpawnIntervalTicks: 10_000,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      capture: {
+        planetCaptureSeconds: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -554,14 +571,17 @@ function testDropShipCapturesPlanet(): void {
 }
 
 function testCapturedPlanetSpawnsDropShip(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      planetCaptureSeconds: 1,
-      fighterSpawnIntervalTicks: 10_000,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      capture: {
+        planetCaptureSeconds: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -603,14 +623,15 @@ function testCapturedPlanetSpawnsDropShip(): void {
 }
 
 function testDropShipSpawnsFighters(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      fighterSpawnIntervalTicks: 2,
-      fighterSpawnCapPerDropShip: 2,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      spawning: {
+        fighterSpawnIntervalTicks: 2,
+        fighterSpawnCapPerDropShip: 2,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -629,14 +650,15 @@ function testDropShipSpawnsFighters(): void {
 }
 
 function testSpawnedFightersEscortParentDropShip(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      fighterSpawnIntervalTicks: 2,
-      fighterSpawnCapPerDropShip: 1,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      spawning: {
+        fighterSpawnIntervalTicks: 2,
+        fighterSpawnCapPerDropShip: 1,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -700,14 +722,17 @@ function testDropShipEliminationEndsMatch(): void {
 }
 
 function testTimerPlanetCountWinner(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      matchDurationTicks: 3,
-      fighterSpawnIntervalTicks: 10_000,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      matchEnd: {
+        durationTicks: 3,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -736,14 +761,17 @@ function testTimerPlanetCountWinner(): void {
 }
 
 function testTimerUnitCountWinner(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      matchDurationTicks: 3,
-      fighterSpawnIntervalTicks: 10_000,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      matchEnd: {
+        durationTicks: 3,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -794,14 +822,17 @@ function testLocalRuntimeStopsAfterMatchEnd(): void {
 }
 
 function testNpcDefenderIssuesAttackOrders(): void {
-  const config = {
-    ...createCaptureDemoConfig({ seed: 1337 }),
-    captureDemoRules: {
-      ...DEFAULT_CAPTURE_DEMO_RULES,
-      npcAggroRange: 1_000,
-      fighterSpawnIntervalTicks: 10_000,
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      npc: {
+        aggroRangeWorldUnits: 1_000,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
     },
-  };
+  });
   const world = createWorld({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
@@ -813,6 +844,276 @@ function testNpcDefenderIssuesAttackOrders(): void {
 
   assert.ok(defender);
   assert.equal(defender.moveOrder?.type, "attackTarget");
+}
+
+function testNpcControllersCanOwnEveryPlayer(): void {
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    controllers: [
+      { playerId: 1, type: "npc" },
+      { playerId: 2, type: "npc" },
+    ],
+    rules: {
+      npc: {
+        aggroRangeWorldUnits: 1_000,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  runBatches(world, [], 2);
+
+  assert.ok(
+    world.units.some(
+      (unit) => unit.owner === 1 && unit.moveOrder?.type === "attackTarget"
+    )
+  );
+  assert.ok(
+    world.units.some(
+      (unit) => unit.owner === 2 && unit.moveOrder?.type === "attackTarget"
+    )
+  );
+}
+
+function testLegacySnapshotHydratesResolvedConfig(): void {
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      npc: {
+        aggroRangeWorldUnits: 1_000,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const legacySnapshot = {
+    ...serializeWorld(world),
+    controllers: undefined,
+    rules: undefined,
+    tuning: undefined,
+    captureDemoRules: {
+      ...DEFAULT_CAPTURE_DEMO_RULES,
+      fighterSpawnIntervalTicks: config.rules.spawning.fighterSpawnIntervalTicks,
+      npcAggroRange: config.rules.npc.aggroRangeWorldUnits,
+    },
+  };
+  const hydrated = hydrateWorldFromSnapshot(
+    legacySnapshot,
+    DEFAULT_CONTENT_REGISTRY
+  );
+
+  assert.equal(
+    hydrated.config.controllers.find((controller) => controller.playerId === 2)
+      ?.type,
+    "npc"
+  );
+  assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 1_000);
+
+  runBatches(hydrated, [], 2);
+
+  assert.ok(
+    hydrated.units.some(
+      (unit) => unit.owner === 2 && unit.moveOrder?.type === "attackTarget"
+    )
+  );
+}
+
+function testInitialLoadoutOverridesShipStats(): void {
+  const baseConfig = createMinimalSkirmishConfig({ seed: 1337 });
+  const firstUnit = baseConfig.initialUnits[0];
+
+  assert.ok(firstUnit);
+
+  const template = DEFAULT_CONTENT_REGISTRY.getUnitTemplate(firstUnit.templateId);
+  const componentsBySlot: Record<string, number> = {
+    ...template.defaultLoadout.componentsBySlot,
+  };
+  delete componentsBySlot["weapon-1"];
+
+  const world = createWorld({
+    config: {
+      ...baseConfig,
+      initialUnits: [
+        {
+          ...firstUnit,
+          componentsBySlot,
+        },
+      ],
+    },
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units[0];
+
+  assert.ok(unit);
+  assert.equal(unit.componentsBySlot?.["weapon-1"], undefined);
+  assert.equal(
+    readUnitShipStats(world, new Map(), unit).weaponCount,
+    template.stats.weaponCount - 1
+  );
+  assert.equal(readUnitWeaponProfile(world, new Map(), unit), null);
+}
+
+function testInvalidInitialLoadoutSlotRejected(): void {
+  const baseConfig = createMinimalSkirmishConfig({ seed: 1337 });
+  const firstUnit = baseConfig.initialUnits[0];
+
+  assert.ok(firstUnit);
+
+  const template = DEFAULT_CONTENT_REGISTRY.getUnitTemplate(firstUnit.templateId);
+
+  assert.throws(
+    () =>
+      createWorld({
+        config: {
+          ...baseConfig,
+          initialUnits: [
+            {
+              ...firstUnit,
+              componentsBySlot: {
+                ...template.defaultLoadout.componentsBySlot,
+                "not-a-slot": SHIP_COMPONENT_IDS.ionEngineSmall,
+              },
+            },
+          ],
+        },
+        content: DEFAULT_CONTENT_REGISTRY,
+      }),
+    /unknown slot/
+  );
+}
+
+function testComponentStatOverridesAffectShipStats(): void {
+  const baseWorld = createWorld({
+    config: createMinimalSkirmishConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const tunedWorld = createWorld({
+    config: createMinimalSkirmishConfig({
+      seed: 1337,
+      contentOverrides: {
+        shipComponents: [
+          {
+            componentId: SHIP_COMPONENT_IDS.ionEngineSmall,
+            thrust: 1_296,
+          },
+        ],
+      },
+    }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const baseUnit = baseWorld.units[0];
+  const tunedUnit = tunedWorld.units[0];
+
+  assert.ok(baseUnit);
+  assert.ok(tunedUnit);
+
+  const baseStats = readUnitShipStats(baseWorld, new Map(), baseUnit);
+  const tunedStats = readUnitShipStats(tunedWorld, new Map(), tunedUnit);
+
+  assert.ok(tunedStats.maxSpeed > baseStats.maxSpeed);
+  assert.ok(tunedStats.maxAcceleration > baseStats.maxAcceleration);
+}
+
+function testInvalidComponentStatOverrideRejected(): void {
+  assert.throws(
+    () =>
+      createWorld({
+        config: createMinimalSkirmishConfig({
+          seed: 1337,
+          contentOverrides: {
+            shipComponents: [
+              {
+                componentId: SHIP_COMPONENT_IDS.ionEngineSmall,
+                damage: 1,
+              },
+            ],
+          },
+        }),
+        content: DEFAULT_CONTENT_REGISTRY,
+      }),
+    /cannot override damage/
+  );
+}
+
+function testDuplicateComponentStatOverrideRejected(): void {
+  assert.throws(
+    () =>
+      createWorld({
+        config: createMinimalSkirmishConfig({
+          seed: 1337,
+          contentOverrides: {
+            shipComponents: [
+              {
+                componentId: SHIP_COMPONENT_IDS.ionEngineSmall,
+                thrust: 1_296,
+              },
+              {
+                componentId: SHIP_COMPONENT_IDS.ionEngineSmall,
+                thrust: 1_944,
+              },
+            ],
+          },
+        }),
+        content: DEFAULT_CONTENT_REGISTRY,
+      }),
+    /multiple stat overrides/
+  );
+}
+
+function testSimTuningAffectsHeadlessMotion(): void {
+  const defaultWorld = createWorld({
+    config: createMinimalSkirmishConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const tunedWorld = createWorld({
+    config: createMinimalSkirmishConfig({
+      seed: 1337,
+      tuning: {
+        movement: {
+          defaultOrbitWeight: 0,
+        },
+        gravity: {
+          steeringWeight: 0,
+        },
+        boids: {
+          alignmentWeight: 0,
+          cohesionWeight: 0,
+          separationWeight: 0,
+        },
+        avoidance: {
+          planetWeight: 0,
+          shipWeight: 0,
+        },
+      },
+    }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+
+  runTick(defaultWorld, createEmptyCommandBatch(defaultWorld.tick));
+  runTick(tunedWorld, createEmptyCommandBatch(tunedWorld.tick));
+
+  const defaultUnit = defaultWorld.units[0];
+  const tunedUnit = tunedWorld.units[0];
+
+  assert.ok(defaultUnit);
+  assert.ok(tunedUnit);
+  assert.ok(distance(defaultUnit.velocity, { x: 0, y: 0, z: 0 }) > 0);
+  assert.deepEqual(tunedUnit.velocity, { x: 0, y: 0, z: 0 });
+  assert.equal(
+    tunedWorld.config.tuning?.movement.arrivalDistanceWorldUnits,
+    DEFAULT_SIM_TUNING.movement.arrivalDistanceWorldUnits
+  );
 }
 
 function testSnapshotRoundTrip(): void {

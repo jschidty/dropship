@@ -3,12 +3,16 @@ import type { UnitOrderIntent } from "./commands";
 import type {
   CaptureDemoRules,
   GameMode,
+  MatchContentOverrides,
   MatchEndReason,
   MatchEnvironmentConfig,
+  MatchRulesConfig,
   PlayerConfig,
+  PlayerControllerConfig,
   PlanetAppearanceConfig,
   PlanetOrbitConfig,
   QuaternionData,
+  SimTuningConfig,
   Vec3Data,
 } from "./matchConfig";
 
@@ -46,6 +50,7 @@ export type UnitSnapshot = Readonly<{
   owner: PlayerId;
   templateId: number;
   shipClassId: number;
+  componentsBySlot: Readonly<Record<string, number>> | null;
   position: Vec3Data;
   velocity: Vec3Data;
   rotation: QuaternionData;
@@ -98,8 +103,13 @@ export type CompactSimSnapshot = Readonly<{
   seed: number;
   protocolVersion: number;
   contentVersion: number;
+  contentHash?: string;
   commandLeadTicks: number;
   gameMode?: GameMode;
+  controllers?: readonly PlayerControllerConfig[];
+  rules?: MatchRulesConfig;
+  tuning?: SimTuningConfig;
+  contentOverrides?: MatchContentOverrides;
   captureDemoRules?: CaptureDemoRules;
   nextEntityId: number;
   players: readonly PlayerConfig[];

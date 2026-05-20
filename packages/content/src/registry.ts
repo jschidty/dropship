@@ -356,14 +356,16 @@ export function createContentRegistry(options: {
 }): ContentRegistry {
   const { shipComponents, planetTemplates } = options;
   const shipComponentsById = new Map(
-    shipComponents.map((component) => [component.id, component])
+    shipComponents.map((component) => [component.id, component]),
   );
   const unitTemplates = options.unitTemplates.map((template) =>
-    resolveShipTemplate(template, shipComponentsById)
+    resolveShipTemplate(template, shipComponentsById),
   );
-  const templatesById = new Map(unitTemplates.map((template) => [template.id, template]));
+  const templatesById = new Map(
+    unitTemplates.map((template) => [template.id, template]),
+  );
   const planetTemplatesById = new Map(
-    planetTemplates.map((template) => [template.id, template])
+    planetTemplates.map((template) => [template.id, template]),
   );
 
   return {
@@ -403,17 +405,32 @@ export function createContentRegistry(options: {
 
 function resolveShipTemplate(
   template: ShipTemplateDefinition,
-  componentsById: ReadonlyMap<number, ShipComponentTemplate>
+  componentsById: ReadonlyMap<number, ShipComponentTemplate>,
 ): ShipTemplate {
   return {
     ...template,
-    stats: deriveShipStats(template, componentsById),
+    stats: deriveShipStatsFromLoadout(
+      template,
+      template.defaultLoadout.componentsBySlot,
+      (componentId) => {
+        const component = componentsById.get(componentId);
+
+        if (!component) {
+          throw new Error(
+            `Ship template ${template.slug} references unknown component ${componentId}`,
+          );
+        }
+
+        return component;
+      },
+    ),
   };
 }
 
-function deriveShipStats(
+export function deriveShipStatsFromLoadout(
   template: ShipTemplateDefinition,
-  componentsById: ReadonlyMap<number, ShipComponentTemplate>
+  componentsBySlot: Readonly<Record<string, number>>,
+  getComponent: (componentId: number) => ShipComponentTemplate,
 ): ShipStats {
   let dryMass = template.hull.baseMass;
   let powerDraw = 0;
@@ -423,25 +440,28 @@ function deriveShipStats(
   let weaponCount = 0;
   let engineThrust = 0;
   let turnThrust = 0;
+  const slotIds = new Set(template.slots.map((slot) => slot.id));
+
+  for (const slotId of Object.keys(componentsBySlot)) {
+    if (!slotIds.has(slotId)) {
+      throw new Error(
+        `Ship template ${template.slug} loadout references unknown slot ${slotId}`,
+      );
+    }
+  }
 
   for (const slot of template.slots) {
-    const componentId = template.defaultLoadout.componentsBySlot[slot.id];
+    const componentId = componentsBySlot[slot.id];
 
     if (componentId === undefined) {
       continue;
     }
 
-    const component = componentsById.get(componentId);
-
-    if (!component) {
-      throw new Error(
-        `Ship template ${template.slug} references unknown component ${componentId}`
-      );
-    }
+    const component = getComponent(componentId);
 
     if (component.type !== slot.type || component.size !== slot.size) {
       throw new Error(
-        `Ship template ${template.slug} slot ${slot.id} cannot mount ${component.slug}`
+        `Ship template ${template.slug} slot ${slot.id} cannot mount ${component.slug}`,
       );
     }
 
@@ -469,8 +489,9 @@ function deriveShipStats(
   }
 
   const maxAcceleration = dryMass > 0 ? engineThrust / dryMass : 0;
-  const maxSpeed =
+  const baseMaxSpeed =
     dryMass > 0 ? engineThrust / (dryMass * SHIP_SPEED_MASS_FACTOR) : 0;
+  const maxSpeed = baseMaxSpeed;
 
   return {
     maxHealth: template.hull.maxHealth,

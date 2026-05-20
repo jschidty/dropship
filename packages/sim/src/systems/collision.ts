@@ -7,6 +7,7 @@ import {
 } from "../deterministicMath";
 import { distanceSquared } from "../movement";
 import { readUnitShipStats } from "../shipStats";
+import { readSimTuning } from "../config";
 import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
@@ -22,13 +23,17 @@ export const CollisionSystem: SimSystem = {
 };
 
 function resolvePlanetCollisions(world: SimWorld): void {
-  const shipStats = new Map<number, ShipStats>();
+  const shipStats = new Map<number | string, ShipStats>();
+  const tuning = readSimTuning(world);
 
   for (const unit of getUnitsInStableOrder(world)) {
     const stats = readUnitShipStats(world, shipStats, unit);
 
     for (const planet of getPlanetsInStableOrder(world)) {
-      const minimumDistance = planet.radius + stats.colliderRadius + 0.35;
+      const minimumDistance =
+        planet.radius +
+        stats.colliderRadius +
+        tuning.avoidance.collisionPaddingWorldUnits;
       const distanceSquaredValue = distanceSquared(unit.position, planet.position);
 
       if (distanceSquaredValue >= minimumDistance * minimumDistance) {

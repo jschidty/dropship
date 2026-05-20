@@ -1,5 +1,11 @@
 import type { ShipStats } from "@drop-ship/content";
-import type { Vec3Data } from "@drop-ship/protocol";
+import {
+  DEFAULT_SIM_TUNING,
+  type SimEscortTuningConfig,
+  type SimMovementTuningConfig,
+  type SimOrbitTuningConfig,
+  type Vec3Data,
+} from "@drop-ship/protocol";
 import {
   SIM_TAU,
   deterministicAtan2,
@@ -11,14 +17,10 @@ import {
 import type { SimPlanet, SimUnit } from "./world";
 
 export const SIM_EPSILON = 0.000001;
-export const MOVE_ORDER_ARRIVAL_DISTANCE = 1.8;
-export const MOVE_ORDER_SLOW_RADIUS = 24;
-
-const ESCORT_DESIRED_RANGE = 24;
-const ESCORT_INNER_RANGE_MULTIPLIER = 0.72;
-const ESCORT_OUTER_RANGE_MULTIPLIER = 1.28;
-const ESCORT_MATCH_VELOCITY_WEIGHT = 0.82;
-const ESCORT_CORRECTION_SPEED_RATIO = 0.34;
+export const MOVE_ORDER_ARRIVAL_DISTANCE =
+  DEFAULT_SIM_TUNING.movement.arrivalDistanceWorldUnits;
+export const MOVE_ORDER_SLOW_RADIUS =
+  DEFAULT_SIM_TUNING.movement.slowRadiusWorldUnits;
 
 export type MutableVec3 = {
   x: number;
@@ -30,19 +32,24 @@ export function computeApproachVelocity(
   unit: SimUnit,
   target: Vec3Data,
   stats: ShipStats,
-  desiredRange: number
+  desiredRange: number,
+  movement: SimMovementTuningConfig = DEFAULT_SIM_TUNING.movement
 ): Vec3Data | null {
   const offset = subtract(target, unit.position);
   const distance = length(offset);
 
-  if (distance <= Math.max(desiredRange, MOVE_ORDER_ARRIVAL_DISTANCE)) {
-    return scale(normalize(offset), stats.cruiseSpeed * 0.12);
+  if (distance <= Math.max(desiredRange, movement.arrivalDistanceWorldUnits)) {
+    return scale(normalize(offset), stats.cruiseSpeed * movement.approachHoldSpeedRatio);
   }
 
   const remaining = distance - desiredRange;
   const speed =
     stats.cruiseSpeed *
-    clamp(remaining / MOVE_ORDER_SLOW_RADIUS, 0.35, 1);
+    clamp(
+      remaining / movement.slowRadiusWorldUnits,
+      movement.approachMinSpeedRatio,
+      1
+    );
 
   return scale(normalize(offset), speed);
 }
@@ -50,15 +57,19 @@ export function computeApproachVelocity(
 export function computeEscortVelocity(
   unit: SimUnit,
   target: SimUnit,
-  stats: ShipStats
+  stats: ShipStats,
+  movement: SimMovementTuningConfig = DEFAULT_SIM_TUNING.movement,
+  escort: SimEscortTuningConfig = DEFAULT_SIM_TUNING.escort
 ): Vec3Data | null {
   const offset = subtract(target.position, unit.position);
   const distance = length(offset);
   const desiredRange =
-    ESCORT_DESIRED_RANGE + target.health.max / Math.max(unit.health.max, 1);
-  const innerRange = desiredRange * ESCORT_INNER_RANGE_MULTIPLIER;
-  const outerRange = desiredRange * ESCORT_OUTER_RANGE_MULTIPLIER;
-  const velocity = scale(target.velocity, ESCORT_MATCH_VELOCITY_WEIGHT);
+    escort.desiredRangeWorldUnits +
+    (target.health.max / Math.max(unit.health.max, 1)) *
+      escort.targetHealthRangeWeight;
+  const innerRange = desiredRange * escort.innerRangeMultiplier;
+  const outerRange = desiredRange * escort.outerRangeMultiplier;
+  const velocity = scale(target.velocity, escort.matchVelocityWeight);
 
   if (distance <= SIM_EPSILON) {
     return velocity;
@@ -69,7 +80,11 @@ export function computeEscortVelocity(
       velocity,
       normalize(offset),
       stats.cruiseSpeed *
-        clamp((distance - desiredRange) / MOVE_ORDER_SLOW_RADIUS, 0.28, 1)
+        clamp(
+          (distance - desiredRange) / movement.slowRadiusWorldUnits,
+          escort.catchUpMinSpeedRatio,
+          1
+        )
     );
     return velocity;
   }
@@ -78,7 +93,7 @@ export function computeEscortVelocity(
     addScaled(
       velocity,
       normalize(offset),
-      -stats.cruiseSpeed * ESCORT_CORRECTION_SPEED_RATIO
+      -stats.cruiseSpeed * escort.correctionSpeedRatio
     );
   }
 
@@ -90,7 +105,8 @@ export function computeOrbitVelocityAroundPlanet(
   planet: SimPlanet,
   tick: number,
   stats: ShipStats,
-  targetRadius: number
+  targetRadius: number,
+  orbit: SimOrbitTuningConfig = DEFAULT_SIM_TUNING.orbit
 ): Vec3Data {
   const x = unit.position.x - planet.position.x;
   const z = unit.position.z - planet.position.z;
@@ -100,25 +116,33 @@ export function computeOrbitVelocityAroundPlanet(
   const orbitSign = unit.owner === 1 ? 1 : -1;
   const radialError = radius - targetRadius;
   const radialCorrection =
-    -clamp(radialError / Math.max(planet.radius, 1), -0.95, 0.95) * 0.58;
+    -clamp(
+      radialError / Math.max(planet.radius, 1),
+      -orbit.radialCorrectionMax,
+      orbit.radialCorrectionMax
+    ) * orbit.radialCorrectionWeight;
   const targetY =
     planet.position.y +
-    planet.radius * ((unitScalar(unit, 0xc2b2ae35) - 0.5) * 0.28);
+    planet.radius *
+      ((unitScalar(unit, 0xc2b2ae35) - 0.5) * orbit.verticalBandMultiplier);
   const verticalCorrection = clamp(
-    (targetY - unit.position.y) / Math.max(planet.radius * 0.5, 1),
-    -0.42,
-    0.42
+    (targetY - unit.position.y) /
+      Math.max(planet.radius * orbit.verticalCorrectionRangeMultiplier, 1),
+    -orbit.verticalCorrectionMax,
+    orbit.verticalCorrectionMax
   );
   const pulse =
-    deterministicSin(tick * 0.037 + unitScalar(unit, 0x41c64e6d) * SIM_TAU) *
-    0.08;
+    deterministicSin(
+      tick * orbit.pulseFrequencyPerTick +
+        unitScalar(unit, 0x41c64e6d) * SIM_TAU
+    ) * orbit.pulseAmplitude;
   const direction = normalize({
     x: -radialZ * orbitSign + radialX * radialCorrection,
-    y: verticalCorrection + pulse * 0.25,
+    y: verticalCorrection + pulse * orbit.pulseVerticalWeight,
     z: radialX * orbitSign + radialZ * radialCorrection,
   });
 
-  return scale(direction, stats.cruiseSpeed * (0.72 + pulse));
+  return scale(direction, stats.cruiseSpeed * (orbit.speedBaseRatio + pulse));
 }
 
 export function findNearestPlanet(

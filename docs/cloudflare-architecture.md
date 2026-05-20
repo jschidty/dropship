@@ -74,7 +74,7 @@ This gives us one source of truth for "what game are we running?" and lets headl
 | Initial unit loadouts and starting orders | `MatchConfig` using content IDs | Starting fleets should select template IDs, loadout IDs, component IDs, positions, rotations, and optional initial orders. |
 | Ship hulls, components, weapons, cargo, fuel, derived ship stats | content registry | Content owns reusable catalog data. Match creation chooses a content version and loadouts by stable numeric ID. |
 | One-off balance overrides for experiments | resolved content pack or explicit match override | If an experiment changes component stats, give it a content hash/version or serialize the override in `MatchConfig`; never hide it in local app state. |
-| Capture rules, spawning rules, match end rules, NPC rules | `MatchConfig` ruleset | Current `captureDemoRules` should grow into named rules/tuning profiles instead of accumulating system-local constants. |
+| Capture rules, spawning rules, match end rules, NPC rules | `MatchConfig` ruleset | Keep these as named rule groups instead of accumulating mode-local constants. |
 | Steering, gravity, boids, escort, orbit, avoidance, approach tuning | `MatchConfig` sim tuning profile | These values affect motion and combat outcomes, so they must be replayable and hashable. |
 | Renderer quality, camera, HUD, local accessibility | client/runtime settings | These must not affect sim state and should not appear in replay hashes. |
 | DO tick scheduling, retention, storage policy | server settings | These coordinate delivery and persistence; they are not gameplay rules except for `commandLeadTicks` when included in match config. |
@@ -115,32 +115,56 @@ type InitialUnitConfig = {
 };
 ```
 
+`MatchRulesConfig` should group gameplay rules by domain, not by demo mode:
+
+```ts
+type MatchRulesConfig = {
+  capture: {
+    planetCaptureSeconds: number;
+    orbitMinRadiusMultiplier: number;
+    orbitMaxRadiusMultiplier: number;
+    breakGraceTicks: number;
+  };
+  spawning: {
+    fighterSpawnIntervalTicks: number;
+    fighterSpawnCapPerDropShip: number;
+  };
+  matchEnd: {
+    durationTicks: number;
+  };
+  npc: {
+    thinkIntervalTicks: number;
+    aggroRangeWorldUnits: number;
+  };
+};
+```
+
 `SimTuningConfig` should collect the current movement constants into data:
 
 ```ts
 type SimTuningConfig = {
   movement: {
-    arrivalDistance: number;
-    slowRadius: number;
+    arrivalDistanceWorldUnits: number;
+    slowRadiusWorldUnits: number;
     moveOrderWeight: number;
     defaultOrbitWeight: number;
   };
   gravity: {
-    fieldScale: number;
-    rangeMultiplier: number;
+    fieldStrengthScale: number;
+    rangeRadiusMultiplier: number;
     minDistanceRatio: number;
     maxStrength: number;
     steeringWeight: number;
   };
   boids: {
-    neighborRadius: number;
-    separationRadius: number;
+    neighborRadiusWorldUnits: number;
+    separationRadiusWorldUnits: number;
     alignmentWeight: number;
     cohesionWeight: number;
     separationWeight: number;
   };
   escort: {
-    desiredRange: number;
+    desiredRangeWorldUnits: number;
     innerRangeMultiplier: number;
     outerRangeMultiplier: number;
     matchVelocityWeight: number;
@@ -153,12 +177,13 @@ type SimTuningConfig = {
     defaultRadiusJitterMultiplier: number;
     radialCorrectionWeight: number;
     verticalCorrectionWeight: number;
+    pulseFrequencyPerTick: number;
     pulseAmplitude: number;
   };
   avoidance: {
-    planetMargin: number;
+    planetMarginWorldUnits: number;
     planetWeight: number;
-    shipRadius: number;
+    shipRadiusWorldUnits: number;
     shipWeight: number;
   };
 };

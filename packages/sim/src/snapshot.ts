@@ -3,7 +3,10 @@ import {
   type ContentRegistry,
 } from "@drop-ship/content";
 import {
+  createDefaultControllersForGame,
   DEFAULT_COMMAND_LEAD_TICKS,
+  resolveMatchRules,
+  resolveSimTuning,
   type CompactSimSnapshot,
   type MatchConfig,
   type PlanetSnapshot,
@@ -11,6 +14,7 @@ import {
 } from "@drop-ship/protocol";
 import {
   createEmptyWorld,
+  copyComponentsBySlot,
   copyMoveOrder,
   copyOrbitState,
   copyPlanetOrbit,
@@ -31,9 +35,13 @@ export function serializeWorld(world: SimWorld): CompactSimSnapshot {
     seed: world.config.seed,
     protocolVersion: world.config.protocolVersion,
     contentVersion: world.config.contentVersion,
+    contentHash: world.config.contentHash,
     commandLeadTicks: world.config.commandLeadTicks,
     gameMode: world.config.gameMode,
-    captureDemoRules: world.config.captureDemoRules,
+    controllers: world.config.controllers,
+    rules: world.config.rules,
+    tuning: world.config.tuning,
+    contentOverrides: world.config.contentOverrides,
     nextEntityId: world.ids.nextId,
     players: world.config.players,
     environment: world.config.environment,
@@ -53,9 +61,15 @@ export function hydrateWorldFromSnapshot(
     seed: snapshot.seed,
     protocolVersion: snapshot.protocolVersion,
     contentVersion: snapshot.contentVersion,
+    contentHash: snapshot.contentHash,
     commandLeadTicks: snapshot.commandLeadTicks ?? DEFAULT_COMMAND_LEAD_TICKS,
     gameMode: snapshot.gameMode,
-    captureDemoRules: snapshot.captureDemoRules,
+    controllers:
+      snapshot.controllers ??
+      createDefaultControllersForGame(snapshot.players, snapshot.gameMode),
+    rules: snapshot.rules ?? resolveMatchRules(undefined, snapshot.captureDemoRules),
+    tuning: snapshot.tuning ?? resolveSimTuning(undefined),
+    contentOverrides: snapshot.contentOverrides,
     players: snapshot.players,
     environment: snapshot.environment,
     initialUnits: [],
@@ -75,6 +89,7 @@ export function hydrateWorldFromSnapshot(
     spawnUnit(world, {
       owner: unit.owner,
       templateId: unit.templateId,
+      componentsBySlot: unit.componentsBySlot ?? null,
       position: unit.position,
       handle: unit.handle,
       velocity: unit.velocity,
@@ -123,6 +138,7 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     owner: unit.owner,
     templateId: unit.templateId,
     shipClassId: unit.shipClassId,
+    componentsBySlot: copyComponentsBySlot(unit.componentsBySlot),
     position: unit.position,
     velocity: unit.velocity,
     rotation: unit.rotation,

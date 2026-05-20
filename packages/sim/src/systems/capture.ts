@@ -5,7 +5,7 @@ import {
   sameHandle,
   type Vec3Data,
 } from "@drop-ship/protocol";
-import type { CaptureDemoRules } from "@drop-ship/protocol";
+import type { CaptureRulesConfig } from "@drop-ship/protocol";
 import { SIM_TAU, deterministicCos, deterministicSin } from "../deterministicMath";
 import { distanceSquared } from "../movement";
 import {
@@ -17,7 +17,7 @@ import {
   type SimUnit,
   type SimWorld,
 } from "../world";
-import { readCaptureDemoRules } from "./captureRules";
+import { readCaptureRules } from "./captureRules";
 
 export const CaptureSystem: SimSystem = {
   name: "CaptureSystem",
@@ -26,7 +26,7 @@ export const CaptureSystem: SimSystem = {
       return;
     }
 
-    const rules = readCaptureDemoRules(world);
+    const rules = readCaptureRules(world);
     const requiredTicks = Math.floor(
       rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ
     );
@@ -44,7 +44,7 @@ export const CaptureSystem: SimSystem = {
 function updatePlanetCapture(
   world: SimWorld,
   planet: SimPlanet,
-  rules: CaptureDemoRules,
+  rules: CaptureRulesConfig,
   requiredTicks: number,
   tick: number
 ): void {
@@ -101,10 +101,10 @@ function updatePlanetCapture(
 function getEligibleDropShips(
   world: SimWorld,
   planet: SimPlanet,
-  rules: CaptureDemoRules
+  rules: CaptureRulesConfig
 ): readonly SimUnit[] {
-  const minRadius = planet.radius * rules.captureOrbitMinRadiusMultiplier;
-  const maxRadius = planet.radius * rules.captureOrbitMaxRadiusMultiplier;
+  const minRadius = planet.radius * rules.orbitMinRadiusMultiplier;
+  const maxRadius = planet.radius * rules.orbitMaxRadiusMultiplier;
   const minRadiusSquared = minRadius * minRadius;
   const maxRadiusSquared = maxRadius * maxRadius;
 
@@ -167,10 +167,10 @@ function computeCapturedDropShipPosition(
   };
 }
 
-function handleCaptureBreak(planet: SimPlanet, rules: CaptureDemoRules): void {
+function handleCaptureBreak(planet: SimPlanet, rules: CaptureRulesConfig): void {
   if (
     planet.control.capturingDropShip &&
-    planet.control.breakTicks < rules.captureBreakGraceTicks
+    planet.control.breakTicks < rules.breakGraceTicks
   ) {
     planet.control.breakTicks += 1;
     return;

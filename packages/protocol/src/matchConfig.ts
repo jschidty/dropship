@@ -1,4 +1,5 @@
 import type { PlayerId } from "./handles";
+import type { UnitOrderIntent } from "./commands";
 
 export const PROTOCOL_VERSION = 1;
 export const CONTENT_VERSION = 1;
@@ -41,6 +42,14 @@ export type PlayerConfig = Readonly<{
   color: string;
 }>;
 
+export type PlayerControllerType = "human" | "npc" | "tool" | "script";
+
+export type PlayerControllerConfig = Readonly<{
+  playerId: PlayerId;
+  type: PlayerControllerType;
+  profile?: string;
+}>;
+
 export type SunConfig = Readonly<{
   position: Vec3Data;
   orbitCenter: Vec3Data;
@@ -55,7 +64,10 @@ export type MatchEnvironmentConfig = Readonly<{
 export type InitialUnitConfig = Readonly<{
   owner: PlayerId;
   templateId: number;
+  componentsBySlot?: Readonly<Record<string, number>>;
   position: Vec3Data;
+  rotation?: QuaternionData;
+  initialOrder?: UnitOrderIntent;
 }>;
 
 export type PlanetOrbitConfig = Readonly<{
@@ -91,6 +103,27 @@ export type InitialPlanetConfig = Readonly<{
 
 export type GameMode = "minimalSkirmish" | "captureDemo";
 
+export type CaptureRulesConfig = Readonly<{
+  planetCaptureSeconds: number;
+  orbitMinRadiusMultiplier: number;
+  orbitMaxRadiusMultiplier: number;
+  breakGraceTicks: number;
+}>;
+
+export type SpawningRulesConfig = Readonly<{
+  fighterSpawnIntervalTicks: number;
+  fighterSpawnCapPerDropShip: number;
+}>;
+
+export type MatchEndRulesConfig = Readonly<{
+  durationTicks: number;
+}>;
+
+export type NpcRulesConfig = Readonly<{
+  thinkIntervalTicks: number;
+  aggroRangeWorldUnits: number;
+}>;
+
 export type CaptureDemoRules = Readonly<{
   matchDurationTicks: number;
   planetCaptureSeconds: number;
@@ -103,16 +136,197 @@ export type CaptureDemoRules = Readonly<{
   npcAggroRange: number;
 }>;
 
+export type MatchRulesConfig = Readonly<{
+  capture: CaptureRulesConfig;
+  spawning: SpawningRulesConfig;
+  matchEnd: MatchEndRulesConfig;
+  npc: NpcRulesConfig;
+}>;
+
+export type SimMovementTuningConfig = Readonly<{
+  arrivalDistanceWorldUnits: number;
+  slowRadiusWorldUnits: number;
+  moveOrderWeight: number;
+  defaultOrbitWeight: number;
+  approachHoldSpeedRatio: number;
+  approachMinSpeedRatio: number;
+  defaultForwardSpeedRatio: number;
+}>;
+
+export type SimGravityTuningConfig = Readonly<{
+  fieldStrengthScale: number;
+  rangeRadiusMultiplier: number;
+  minDistanceRatio: number;
+  maxStrength: number;
+  steeringWeight: number;
+}>;
+
+export type SimBoidsTuningConfig = Readonly<{
+  neighborRadiusWorldUnits: number;
+  separationRadiusWorldUnits: number;
+  alignmentWeight: number;
+  cohesionWeight: number;
+  separationWeight: number;
+}>;
+
+export type SimEscortTuningConfig = Readonly<{
+  desiredRangeWorldUnits: number;
+  targetHealthRangeWeight: number;
+  innerRangeMultiplier: number;
+  outerRangeMultiplier: number;
+  matchVelocityWeight: number;
+  correctionSpeedRatio: number;
+  catchUpMinSpeedRatio: number;
+}>;
+
+export type SimOrbitTuningConfig = Readonly<{
+  captureRadiusMultiplier: number;
+  guardRadiusMultiplier: number;
+  activeOrbitBaseMultiplier: number;
+  activeOrbitJitterMultiplier: number;
+  defaultMinRadiusMultiplier: number;
+  defaultRadiusJitterMultiplier: number;
+  radialCorrectionMax: number;
+  radialCorrectionWeight: number;
+  verticalBandMultiplier: number;
+  verticalCorrectionRangeMultiplier: number;
+  verticalCorrectionMax: number;
+  pulseFrequencyPerTick: number;
+  pulseAmplitude: number;
+  pulseVerticalWeight: number;
+  speedBaseRatio: number;
+}>;
+
+export type SimAvoidanceTuningConfig = Readonly<{
+  planetMarginWorldUnits: number;
+  planetWeight: number;
+  shipRadiusWorldUnits: number;
+  shipWeight: number;
+  shipPaddingWorldUnits: number;
+  collisionPaddingWorldUnits: number;
+}>;
+
+export type SimTuningConfig = Readonly<{
+  movement: SimMovementTuningConfig;
+  gravity: SimGravityTuningConfig;
+  boids: SimBoidsTuningConfig;
+  escort: SimEscortTuningConfig;
+  orbit: SimOrbitTuningConfig;
+  avoidance: SimAvoidanceTuningConfig;
+}>;
+
+export type ShipComponentStatOverride = Readonly<{
+  componentId: number;
+  mass?: number;
+  powerDraw?: number;
+  thrust?: number;
+  turnThrust?: number;
+  fuelUsePerSecond?: number;
+  fuelCapacity?: number;
+  cargoCapacity?: number;
+  damage?: number;
+  cooldownTicks?: number;
+  range?: number;
+}>;
+
+export type MatchContentOverrides = Readonly<{
+  shipComponents?: readonly ShipComponentStatOverride[];
+}>;
+
+export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
+  capture: {
+    planetCaptureSeconds: 25,
+    orbitMinRadiusMultiplier: 1.55,
+    orbitMaxRadiusMultiplier: 3.4,
+    breakGraceTicks: 30,
+  },
+  spawning: {
+    fighterSpawnIntervalTicks: 180,
+    fighterSpawnCapPerDropShip: 4,
+  },
+  matchEnd: {
+    durationTicks: 5 * 60 * PHASE_ONE_SIM_HZ,
+  },
+  npc: {
+    thinkIntervalTicks: 15,
+    aggroRangeWorldUnits: 130,
+  },
+};
+
 export const DEFAULT_CAPTURE_DEMO_RULES: CaptureDemoRules = {
-  matchDurationTicks: 5 * 60 * PHASE_ONE_SIM_HZ,
-  planetCaptureSeconds: 25,
-  captureOrbitMinRadiusMultiplier: 1.55,
-  captureOrbitMaxRadiusMultiplier: 3.4,
-  captureBreakGraceTicks: 30,
-  fighterSpawnIntervalTicks: 180,
-  fighterSpawnCapPerDropShip: 4,
-  npcThinkIntervalTicks: 15,
-  npcAggroRange: 130,
+  matchDurationTicks: DEFAULT_MATCH_RULES.matchEnd.durationTicks,
+  planetCaptureSeconds: DEFAULT_MATCH_RULES.capture.planetCaptureSeconds,
+  captureOrbitMinRadiusMultiplier:
+    DEFAULT_MATCH_RULES.capture.orbitMinRadiusMultiplier,
+  captureOrbitMaxRadiusMultiplier:
+    DEFAULT_MATCH_RULES.capture.orbitMaxRadiusMultiplier,
+  captureBreakGraceTicks: DEFAULT_MATCH_RULES.capture.breakGraceTicks,
+  fighterSpawnIntervalTicks:
+    DEFAULT_MATCH_RULES.spawning.fighterSpawnIntervalTicks,
+  fighterSpawnCapPerDropShip:
+    DEFAULT_MATCH_RULES.spawning.fighterSpawnCapPerDropShip,
+  npcThinkIntervalTicks: DEFAULT_MATCH_RULES.npc.thinkIntervalTicks,
+  npcAggroRange: DEFAULT_MATCH_RULES.npc.aggroRangeWorldUnits,
+};
+
+export const DEFAULT_SIM_TUNING: SimTuningConfig = {
+  movement: {
+    arrivalDistanceWorldUnits: 1.8,
+    slowRadiusWorldUnits: 24,
+    moveOrderWeight: 1.35,
+    defaultOrbitWeight: 0.95,
+    approachHoldSpeedRatio: 0.12,
+    approachMinSpeedRatio: 0.35,
+    defaultForwardSpeedRatio: 0.55,
+  },
+  gravity: {
+    fieldStrengthScale: 0.000003,
+    rangeRadiusMultiplier: 9,
+    minDistanceRatio: 0.8,
+    maxStrength: 14,
+    steeringWeight: 1.15,
+  },
+  boids: {
+    neighborRadiusWorldUnits: 34,
+    separationRadiusWorldUnits: 8,
+    alignmentWeight: 0.34,
+    cohesionWeight: 0.22,
+    separationWeight: 0.9,
+  },
+  escort: {
+    desiredRangeWorldUnits: 24,
+    targetHealthRangeWeight: 1,
+    innerRangeMultiplier: 0.72,
+    outerRangeMultiplier: 1.28,
+    matchVelocityWeight: 0.82,
+    correctionSpeedRatio: 0.34,
+    catchUpMinSpeedRatio: 0.28,
+  },
+  orbit: {
+    captureRadiusMultiplier: 2.25,
+    guardRadiusMultiplier: 3.05,
+    activeOrbitBaseMultiplier: 2.62,
+    activeOrbitJitterMultiplier: 0.32,
+    defaultMinRadiusMultiplier: 2.65,
+    defaultRadiusJitterMultiplier: 1.15,
+    radialCorrectionMax: 0.95,
+    radialCorrectionWeight: 0.58,
+    verticalBandMultiplier: 0.28,
+    verticalCorrectionRangeMultiplier: 0.5,
+    verticalCorrectionMax: 0.42,
+    pulseFrequencyPerTick: 0.037,
+    pulseAmplitude: 0.08,
+    pulseVerticalWeight: 0.25,
+    speedBaseRatio: 0.72,
+  },
+  avoidance: {
+    planetMarginWorldUnits: 14,
+    planetWeight: 1.9,
+    shipRadiusWorldUnits: 5.5,
+    shipWeight: 0.85,
+    shipPaddingWorldUnits: 2.4,
+    collisionPaddingWorldUnits: 0.35,
+  },
 };
 
 export type MatchEndReason =
@@ -127,9 +341,13 @@ export type MatchConfig = Readonly<{
   seed: number;
   protocolVersion: number;
   contentVersion: number;
+  contentHash?: string;
   commandLeadTicks: number;
   gameMode?: GameMode;
-  captureDemoRules?: CaptureDemoRules;
+  controllers: readonly PlayerControllerConfig[];
+  rules: MatchRulesConfig;
+  tuning: SimTuningConfig;
+  contentOverrides?: MatchContentOverrides;
   players: readonly PlayerConfig[];
   environment: MatchEnvironmentConfig;
   initialUnits: readonly InitialUnitConfig[];
@@ -139,47 +357,85 @@ export type MatchConfig = Readonly<{
 export type CreateMinimalSkirmishConfigOptions = Readonly<{
   matchId?: string;
   seed?: number;
+  contentHash?: string;
+  players?: readonly PlayerConfig[];
+  controllers?: readonly PlayerControllerConfig[];
+  rules?: PartialMatchRulesConfig;
+  tuning?: PartialSimTuningConfig;
+  contentOverrides?: MatchContentOverrides;
+  initialUnits?: readonly InitialUnitConfig[];
+  initialPlanets?: readonly InitialPlanetConfig[];
+}>;
+
+export type PartialMatchRulesConfig = Readonly<{
+  capture?: Partial<CaptureRulesConfig>;
+  spawning?: Partial<SpawningRulesConfig>;
+  matchEnd?: Partial<MatchEndRulesConfig>;
+  npc?: Partial<NpcRulesConfig>;
+}>;
+
+export type PartialSimTuningConfig = Readonly<{
+  movement?: Partial<SimMovementTuningConfig>;
+  gravity?: Partial<SimGravityTuningConfig>;
+  boids?: Partial<SimBoidsTuningConfig>;
+  escort?: Partial<SimEscortTuningConfig>;
+  orbit?: Partial<SimOrbitTuningConfig>;
+  avoidance?: Partial<SimAvoidanceTuningConfig>;
 }>;
 
 const DEFAULT_MATCH_SEED = 1337;
 const PLANET_NAMES = ["Aurora", "Vesper", "Caldera"];
 const MATCH_TAU = Math.PI * 2;
 const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.25;
+const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
+  { id: 1, name: "Player 1", color: "#74d9ff" },
+  { id: 2, name: "Player 2", color: "#ff4fd8" },
+];
 
 export function createMinimalSkirmishConfig(
   options: CreateMinimalSkirmishConfigOptions | number = {}
 ): MatchConfig {
-  const seed = normalizeSeed(typeof options === "number" ? options : options.seed);
+  const normalizedOptions =
+    typeof options === "number" ? { seed: options } : options;
+  const seed = normalizeSeed(normalizedOptions.seed);
   const matchId =
-    typeof options === "number" || !options.matchId
+    !normalizedOptions.matchId
       ? `local-minimal-skirmish-${seed}`
-      : options.matchId;
-  const players: readonly PlayerConfig[] = [
-    { id: 1, name: "Player 1", color: "#74d9ff" },
-    { id: 2, name: "Player 2", color: "#ff4fd8" },
-  ];
+      : normalizedOptions.matchId;
+  const players = normalizedOptions.players ?? DEFAULT_PLAYERS;
   const generated = generatePlanetarySystem(seed);
-  const initialUnits = createInitialUnits(
-    generated.planets[0]?.position ?? { x: 0, y: 0, z: 0 }
-  );
+  const initialUnits =
+    normalizedOptions.initialUnits ??
+    createInitialUnits(generated.planets[0]?.position ?? { x: 0, y: 0, z: 0 });
+  const rules = resolveMatchRules(normalizedOptions.rules);
+  const tuning = resolveSimTuning(normalizedOptions.tuning);
 
   return {
     matchId,
     seed,
     protocolVersion: PROTOCOL_VERSION,
     contentVersion: CONTENT_VERSION,
+    contentHash: normalizedOptions.contentHash,
     commandLeadTicks: DEFAULT_COMMAND_LEAD_TICKS,
     gameMode: "minimalSkirmish",
+    controllers:
+      normalizedOptions.controllers ??
+      createDefaultControllersForGame(players, "minimalSkirmish"),
+    rules,
+    tuning,
+    contentOverrides: normalizedOptions.contentOverrides,
     players,
     environment: generated.environment,
     initialUnits,
-    initialPlanets: generated.planets,
+    initialPlanets: normalizedOptions.initialPlanets ?? generated.planets,
   };
 }
 
 export function createCaptureDemoConfig(
   options: CreateMinimalSkirmishConfigOptions | number = {}
 ): MatchConfig {
+  const normalizedOptions =
+    typeof options === "number" ? { seed: options } : options;
   const base = createMinimalSkirmishConfig(options);
   const primaryPlanet = base.initialPlanets.find(
     (planet) => planet.parentPlanetIndex === null
@@ -191,13 +447,131 @@ export function createCaptureDemoConfig(
     ...base,
     matchId: base.matchId.replace("minimal-skirmish", "capture-demo"),
     gameMode: "captureDemo",
-    captureDemoRules: DEFAULT_CAPTURE_DEMO_RULES,
-    initialUnits,
-    initialPlanets: base.initialPlanets.map((planet, index) => ({
-      ...planet,
-      capturable: planet.parentPlanetIndex === null,
-      initialOwner: index === 0 ? 0 : undefined,
-    })),
+    controllers:
+      normalizedOptions.controllers ??
+      createDefaultControllersForGame(base.players, "captureDemo"),
+    rules: base.rules,
+    initialUnits:
+      normalizedOptions.initialUnits ? normalizedOptions.initialUnits : initialUnits,
+    initialPlanets:
+      normalizedOptions.initialPlanets
+        ? normalizedOptions.initialPlanets
+        : base.initialPlanets.map((planet, index) => ({
+            ...planet,
+            capturable: planet.parentPlanetIndex === null,
+            initialOwner: index === 0 ? 0 : undefined,
+          })),
+  };
+}
+
+export function createDefaultControllersForGame(
+  players: readonly PlayerConfig[],
+  gameMode: GameMode | undefined
+): readonly PlayerControllerConfig[] {
+  return createDefaultControllers(
+    players,
+    "human",
+    gameMode === "captureDemo"
+      ? new Map<PlayerId, PlayerControllerType>([[2, "npc"]])
+      : new Map<PlayerId, PlayerControllerType>()
+  );
+}
+
+export function createDefaultControllers(
+  players: readonly PlayerConfig[],
+  fallbackType: PlayerControllerType,
+  overrides: ReadonlyMap<PlayerId, PlayerControllerType> = new Map()
+): readonly PlayerControllerConfig[] {
+  return players.map((player) => ({
+    playerId: player.id,
+    type: overrides.get(player.id) ?? fallbackType,
+  }));
+}
+
+export function resolveMatchRules(
+  overrides: PartialMatchRulesConfig | undefined,
+  legacyCaptureDemoRules?: CaptureDemoRules
+): MatchRulesConfig {
+  const legacyRules = legacyCaptureDemoRules
+    ? captureDemoRulesToMatchRules(legacyCaptureDemoRules)
+    : undefined;
+
+  return {
+    capture: {
+      ...DEFAULT_MATCH_RULES.capture,
+      ...legacyRules?.capture,
+      ...overrides?.capture,
+    },
+    spawning: {
+      ...DEFAULT_MATCH_RULES.spawning,
+      ...legacyRules?.spawning,
+      ...overrides?.spawning,
+    },
+    matchEnd: {
+      ...DEFAULT_MATCH_RULES.matchEnd,
+      ...legacyRules?.matchEnd,
+      ...overrides?.matchEnd,
+    },
+    npc: {
+      ...DEFAULT_MATCH_RULES.npc,
+      ...legacyRules?.npc,
+      ...overrides?.npc,
+    },
+  };
+}
+
+function captureDemoRulesToMatchRules(
+  rules: CaptureDemoRules
+): MatchRulesConfig {
+  return {
+    capture: {
+      planetCaptureSeconds: rules.planetCaptureSeconds,
+      orbitMinRadiusMultiplier: rules.captureOrbitMinRadiusMultiplier,
+      orbitMaxRadiusMultiplier: rules.captureOrbitMaxRadiusMultiplier,
+      breakGraceTicks: rules.captureBreakGraceTicks,
+    },
+    spawning: {
+      fighterSpawnIntervalTicks: rules.fighterSpawnIntervalTicks,
+      fighterSpawnCapPerDropShip: rules.fighterSpawnCapPerDropShip,
+    },
+    matchEnd: {
+      durationTicks: rules.matchDurationTicks,
+    },
+    npc: {
+      thinkIntervalTicks: rules.npcThinkIntervalTicks,
+      aggroRangeWorldUnits: rules.npcAggroRange,
+    },
+  };
+}
+
+export function resolveSimTuning(
+  overrides: PartialSimTuningConfig | undefined
+): SimTuningConfig {
+  return {
+    movement: {
+      ...DEFAULT_SIM_TUNING.movement,
+      ...overrides?.movement,
+    },
+    gravity: {
+      ...DEFAULT_SIM_TUNING.gravity,
+      ...overrides?.gravity,
+    },
+    boids: {
+      ...DEFAULT_SIM_TUNING.boids,
+      ...overrides?.boids,
+    },
+    escort: {
+      ...DEFAULT_SIM_TUNING.escort,
+      ...overrides?.escort,
+    },
+    orbit: {
+      ...DEFAULT_SIM_TUNING.orbit,
+      ...overrides?.orbit,
+    },
+    avoidance: {
+      ...DEFAULT_SIM_TUNING.avoidance,
+      ...overrides?.avoidance,
+    },
   };
 }
 

@@ -15,7 +15,7 @@ export const CommandIntakeSystem: SimSystem = {
   run(world) {
     const commands = world.commandBatch?.commands ?? [];
     const commandPrng = findPrngStream(world.prngStreams, "command");
-    const shipStats = new Map<number, ShipStats>();
+    const shipStats = new Map<number | string, ShipStats>();
 
     for (const scheduled of commands) {
       if (scheduled.command.type === "randomTurnOwnedUnits") {

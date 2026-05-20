@@ -5,7 +5,7 @@ import {
   type SimSystem,
   type SimWorld,
 } from "../world";
-import { readCaptureDemoRules } from "./captureRules";
+import { readMatchEndRules } from "./captureRules";
 
 export const MatchEndSystem: SimSystem = {
   name: "MatchEndSystem",
@@ -49,9 +49,9 @@ export const MatchEndSystem: SimSystem = {
       return;
     }
 
-    const rules = readCaptureDemoRules(world);
+    const rules = readMatchEndRules(world);
 
-    if (tick + 1 >= rules.matchDurationTicks) {
+    if (tick + 1 >= rules.durationTicks) {
       const playerOnePlanets = countOwnedPlanets(world, 1);
       const playerTwoPlanets = countOwnedPlanets(world, 2);
 

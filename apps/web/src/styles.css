@@ -27,6 +27,12 @@ canvas {
   position: relative;
 }
 
+.game-ui-root {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .game-canvas {
   position: absolute;
   inset: 0;
@@ -64,6 +70,7 @@ canvas {
   display: flex;
   gap: 6px;
   font-family: monospace;
+  pointer-events: auto;
 }
 
 .camera-preset-button,
@@ -123,6 +130,7 @@ canvas {
   align-items: center;
   gap: 8px;
   font-family: monospace;
+  pointer-events: auto;
 }
 
 .match-status {
@@ -255,6 +263,7 @@ canvas {
   font-family: monospace;
   font-size: 12px;
   line-height: 1.2;
+  pointer-events: auto;
 }
 
 .command-menu-content {

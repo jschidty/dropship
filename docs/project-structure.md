@@ -121,7 +121,7 @@ Forbidden imports: `three`, `window`, `document`, `navigator`, `localStorage`, `
 
 ### `packages/client`
 
-Browser-only code: three.js, React or DOM UI, input, audio, network client, and render-only prediction experiments.
+Browser-only code: three.js, Preact/React or DOM UI, input, audio, network client, and render-only prediction experiments.
 
 ```text
 client/src/

@@ -11,6 +11,7 @@
     "@drop-ship/content": "workspace:*",
     "@drop-ship/protocol": "workspace:*",
     "@drop-ship/sim": "workspace:*",
+    "preact": "^10.29.2",
     "three": "^0.181.2"
   },
   "devDependencies": {

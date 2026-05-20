@@ -233,7 +233,7 @@ By default, show local-player orders. Spectator mode can show all.
 
 ## UI overlay
 
-UI can use React or plain DOM. It reads sim through selector functions and local client state.
+UI uses Preact for DOM overlays, and plain DOM remains acceptable for narrow render/input affordances such as drag selection. It reads sim through selector functions and local client state. Preact components receive snapshots and action callbacks, not the sim world or three.js objects.
 
 Phase 1 UI:
 

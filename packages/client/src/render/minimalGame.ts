@@ -69,27 +69,20 @@ import {
   updateUnitBatches,
 } from "./unitBatches";
 import {
-  createCameraPresetControls,
-  createDebugInfoControl,
-  createRandomSeedControl,
-  createRenderModeControl,
   createSelectionBox,
-  createStatsLayer,
-  createTacticalOverlayControls,
-  createCommandMenu,
-  createTopLeftControls,
   hideSelectionBox,
-  setTacticalOverlayEnabled,
-  updateCommandMenu,
-  updateCameraPresetControls,
   updateSelectionBox,
-  updateStatsLayer,
-  updateRenderModeControl,
-  type CameraPresetControls,
-  type CommandMenuControls,
-  type PendingCommandMenuCommand,
-  type TacticalOverlayControls,
 } from "../ui/controls";
+import {
+  createInitialOverlaySnapshot,
+  mountGameOverlay,
+  type PendingCommandMenuCommand,
+} from "../ui/GameOverlay";
+import {
+  createMatchStatusSnapshot,
+  createStatsText,
+} from "../ui/overlaySelectors";
+import { createUiStore } from "../ui/store";
 import { createMinimalLocalGame } from "../runtime/localGame";
 import { DEFAULT_LOCAL_PLAYER_ID } from "../runtime/matchConfig";
 import { selectMoveOrderUnits } from "../selection/commands";
@@ -127,27 +120,13 @@ type PlanetHoverRing = Readonly<{
   ring: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
 }>;
 
-type CaptureProgressRing = Readonly<{
-  root: THREE.Group;
-  track: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-  progress: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-  progressPositions: Float32Array;
+type CaptureProgressRing = {
+  readonly root: THREE.Group;
+  readonly track: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  readonly progress: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  readonly progressPositions: Float32Array;
   lastSeenFrame: number;
-}>;
-
-type MatchStatusControls = Readonly<{
-  root: HTMLElement;
-  timer: HTMLElement;
-  playerOne: HTMLElement;
-  playerTwo: HTMLElement;
-  result: HTMLElement;
-}>;
-
-type HotkeysDialogControls = Readonly<{
-  root: HTMLElement;
-  panel: HTMLElement;
-  closeButton: HTMLButtonElement;
-}>;
+};
 
 type SelectionMode = "add" | "remove" | "replace";
 
@@ -348,51 +327,44 @@ export function mountMinimalGame(
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = false;
   let debugInfoEnabled = false;
-  const statsLayer = createStatsLayer(container);
   const selectionBox = createSelectionBox(container);
-  const cameraPresetControls = createCameraPresetControls(
-    container,
-    (preset) => {
+  const leaderArrow = createSelectedLeaderArrow(container);
+  const overlayStore = createUiStore(
+    createInitialOverlaySnapshot(
+      renderQuality.mode,
+      runtime.readConnectionStatus()
+    )
+  );
+  const overlay = mountGameOverlay(container, overlayStore, {
+    selectCameraPreset(preset) {
       cancelCameraZoomTween();
       applyCameraPreset(cameraControls, preset);
+      publishOverlaySnapshot();
     },
-    () => {
+    zoomToFit() {
       startZoomToFit(performance.now());
-    }
-  );
-  const topLeftControls = createTopLeftControls(container);
-  createDebugInfoControl(topLeftControls, (enabled) => {
-    debugInfoEnabled = enabled;
-    statsLayer.hidden = !enabled;
-  });
-  const tacticalOverlayControls = createTacticalOverlayControls(
-    topLeftControls,
-    (enabled) => {
-      tacticalOverlayEnabled = enabled;
-      setTacticalOverlayEnabled(
-        tacticalOverlayControls,
-        enabled
-      );
-    }
-  );
-  createRandomSeedControl(topLeftControls);
-  const renderModeControl = createRenderModeControl(
-    topLeftControls,
-    renderQuality.mode,
-    (renderMode) => {
-      applyRenderMode(renderMode);
-    }
-  );
-  const matchStatus = createMatchStatus(container);
-  const hotkeysDialog = createHotkeysDialog(container, () => {
-    closeHotkeysDialog();
-  });
-  const leaderArrow = createSelectedLeaderArrow(container);
-  const commandMenu = createCommandMenu(container, {
-    onSelectLeader(unitKey) {
-      commandMenuLeaderKey = unitKey;
     },
-    onDeselectUnit(unitKey) {
+    setDebugInfoEnabled(enabled) {
+      debugInfoEnabled = enabled;
+      publishOverlaySnapshot();
+    },
+    setTacticalOverlayEnabled(enabled) {
+      tacticalOverlayEnabled = enabled;
+      publishOverlaySnapshot();
+    },
+    navigateToRandomSeed() {
+      navigateToRandomMatchSeed();
+    },
+    toggleRenderMode() {
+      applyRenderMode(
+        renderQuality.mode === "cinematic" ? "interactive" : "cinematic"
+      );
+    },
+    selectCommandLeader(unitKey) {
+      commandMenuLeaderKey = unitKey;
+      publishOverlaySnapshot();
+    },
+    deselectUnit(unitKey) {
       selectedUnitKeys.delete(unitKey);
 
       if (commandMenuLeaderKey === unitKey) {
@@ -403,12 +375,21 @@ export function mountMinimalGame(
         pendingCommand = null;
         hoveredPlanetKey = null;
       }
+      publishOverlaySnapshot();
     },
-    onEscortLeader() {
+    escortLeader() {
       issueEscortLeaderOrder(runtime, selectedUnitKeys, commandMenuLeaderKey);
     },
-    onOrbitPlanet() {
+    toggleOrbitPlanetCommand() {
+      if (selectedUnitKeys.size === 0) {
+        return;
+      }
+
       pendingCommand = pendingCommand === "orbitPlanet" ? null : "orbitPlanet";
+      publishOverlaySnapshot();
+    },
+    closeHotkeysDialog() {
+      closeHotkeysDialog();
     },
   });
   const renderResolution = new THREE.Vector2();
@@ -447,6 +428,40 @@ export function mountMinimalGame(
     to: cameraControls.viewHeights[cameraControls.mode],
     startAt: startedAt,
   };
+
+  function publishOverlaySnapshot(): void {
+    const units = runtime.readUnits();
+    const planets = runtime.readPlanets();
+    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
+    const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+
+    overlayStore.setSnapshot({
+      activeCameraPreset: cameraControls.preset,
+      tacticalOverlayEnabled,
+      debugInfoEnabled,
+      renderMode: renderQuality.mode,
+      selectedUnits,
+      commandMenuLeaderKey,
+      pendingCommand,
+      matchStatus: createMatchStatusSnapshot(runtime, units, planets),
+      stats: {
+        text: createStatsText(
+          runtime,
+          estimatedFps,
+          observedSimHz,
+          estimatedRenderMs,
+          renderer.info.render.calls,
+          renderer.getPixelRatio(),
+          renderQuality.mode,
+          formatSelectedPlanetStatus(runtime, selectedPlanet),
+          selectedUnitKeys.size
+        ),
+      },
+      hotkeysOpen: hotkeysDialogOpen,
+      connectionStatus: runtime.readConnectionStatus(),
+    });
+  }
+
   function applyRenderMode(renderMode: RenderQualityMode): void {
     if (renderMode === renderQuality.mode) {
       return;
@@ -467,20 +482,26 @@ export function mountMinimalGame(
     lastPixelRatioAdjustAt = performance.now();
     renderer.setPixelRatio(activeRenderPixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight, false);
-    updateRenderModeControl(renderModeControl, renderQuality.mode);
     updateRenderModeQuery(renderQuality.mode);
     container.dataset.renderMode = renderQuality.mode;
+    publishOverlaySnapshot();
   }
 
   function openHotkeysDialog(): void {
     hotkeysDialogOpen = true;
-    hotkeysDialog.root.hidden = false;
-    hotkeysDialog.closeButton.focus();
+    publishOverlaySnapshot();
+    window.requestAnimationFrame(() => {
+      if (!hotkeysDialogOpen) {
+        return;
+      }
+
+      container.querySelector<HTMLButtonElement>(".hotkeys-dialog-close")?.focus();
+    });
   }
 
   function closeHotkeysDialog(): void {
     hotkeysDialogOpen = false;
-    hotkeysDialog.root.hidden = true;
+    publishOverlaySnapshot();
     renderer.domElement.focus();
   }
 
@@ -542,6 +563,7 @@ export function mountMinimalGame(
     if (key === "escape") {
       pendingCommand = null;
       hoveredPlanetKey = null;
+      publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -563,6 +585,7 @@ export function mountMinimalGame(
       );
       pendingCommand = null;
       hoveredPlanetKey = null;
+      publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -585,6 +608,7 @@ export function mountMinimalGame(
       );
       pendingCommand = null;
       hoveredPlanetKey = null;
+      publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -596,6 +620,7 @@ export function mountMinimalGame(
       commandMenuLeaderKey = null;
       pendingCommand = null;
       hoveredPlanetKey = null;
+      publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -617,10 +642,7 @@ export function mountMinimalGame(
 
     if (key === "t") {
       tacticalOverlayEnabled = !tacticalOverlayEnabled;
-      setTacticalOverlayEnabled(
-        tacticalOverlayControls,
-        tacticalOverlayEnabled
-      );
+      publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -688,10 +710,12 @@ export function mountMinimalGame(
 
     if (cameraControls.dragMode === "camera") {
       cameraZoomTween.active = false;
-      cameraControls.preset = null;
+      if (cameraControls.preset !== null) {
+        cameraControls.preset = null;
+        publishOverlaySnapshot();
+      }
       cameraControls.yaw -= dx * 0.006;
       cameraControls.pitch = clamp(cameraControls.pitch + dy * 0.004, 0.28, 1.38);
-      updateCameraPresetControls(cameraPresetControls, cameraControls.preset);
       return;
     }
 
@@ -707,6 +731,7 @@ export function mountMinimalGame(
           commandMenuLeaderKey = null;
           pendingCommand = null;
           hoveredPlanetKey = null;
+          publishOverlaySnapshot();
         }
       }
 
@@ -759,6 +784,7 @@ export function mountMinimalGame(
         );
         pendingCommand = null;
         hoveredPlanetKey = null;
+        publishOverlaySnapshot();
       }
 
       return;
@@ -787,6 +813,7 @@ export function mountMinimalGame(
         pendingCommand = null;
         hoveredPlanetKey = null;
       }
+      publishOverlaySnapshot();
       return;
     }
 
@@ -820,6 +847,7 @@ export function mountMinimalGame(
           hoveredPlanetKey = null;
         }
 
+        publishOverlaySnapshot();
         return;
       }
 
@@ -840,6 +868,7 @@ export function mountMinimalGame(
           selectedPlanet.key,
           "capturePlanet"
         );
+        publishOverlaySnapshot();
         return;
       }
 
@@ -1111,14 +1140,7 @@ export function mountMinimalGame(
       container.dataset.connectionState = runtime.readConnectionStatus().state;
       container.dataset.simHz = observedSimHz.toFixed(1);
       container.dataset.simInterpolationAlpha = interpolationAlpha.toFixed(3);
-      updateCameraPresetControls(cameraPresetControls, cameraControls.preset);
-      updateCommandMenu(
-        commandMenu,
-        units.filter((unit) => selectedUnitKeys.has(unit.key)),
-        commandMenuLeaderKey,
-        pendingCommand
-      );
-      updateMatchStatus(matchStatus, runtime);
+      publishOverlaySnapshot();
       lastHudUpdateAt = now;
     }
 
@@ -1143,18 +1165,7 @@ export function mountMinimalGame(
       container.dataset.renderPixelRatio = renderer.getPixelRatio().toFixed(2);
       container.dataset.drawCalls = renderer.info.render.calls.toString();
       container.dataset.triangles = renderer.info.render.triangles.toString();
-      updateStatsLayer(
-        statsLayer,
-        runtime,
-        estimatedFps,
-        observedSimHz,
-        estimatedRenderMs,
-        renderer.info.render.calls,
-        renderer.getPixelRatio(),
-        renderQuality.mode,
-        formatSelectedPlanetStatus(runtime, selectedPlanet),
-        selectedUnitKeys.size
-      );
+      publishOverlaySnapshot();
       lastPerfDatasetUpdateAt = now;
     }
   };
@@ -1227,6 +1238,7 @@ export function mountMinimalGame(
       renderer.domElement.removeEventListener("pointerleave", handlePointerLeave);
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       renderer.domElement.removeEventListener("wheel", handleWheel);
+      overlay.dispose();
       disposeUnitBatchRenderer(unitBatches);
       disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
@@ -1283,197 +1295,18 @@ function updateSelectedLeaderArrow(
   arrow.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
 }
 
-function createHotkeysDialog(
-  container: HTMLElement,
-  onClose: () => void
-): HotkeysDialogControls {
-  const root = document.createElement("div");
-  const panel = document.createElement("section");
-  const title = document.createElement("h2");
-  const list = document.createElement("dl");
-  const closeButton = document.createElement("button");
-  const shortcuts: readonly [string, string][] = [
-    ["Meta + Space", "Hotkeys"],
-    ["1", "All units"],
-    ["8", "Fighters"],
-    ["9", "Battleships"],
-    ["0", "Drop ships"],
-    ["Shift + select", "Add"],
-    ["Ctrl + select", "Subtract"],
-    ["T", "Tactical overlay"],
-    ["Tab", "Tactical / strategic"],
-    ["C / G", "Capture / guard"],
-  ];
+function navigateToRandomMatchSeed(): void {
+  const url = new URL(window.location.href);
+  const seed = Math.floor(Math.random() * 1_000_000_000);
+  const matchId = url.searchParams.get("match");
 
-  root.className = "hotkeys-dialog";
-  root.hidden = true;
-  panel.className = "hotkeys-dialog-panel";
-  title.className = "hotkeys-dialog-title";
-  title.textContent = "Hotkeys";
-  list.className = "hotkeys-dialog-list";
-  closeButton.type = "button";
-  closeButton.className = "hotkeys-dialog-close";
-  closeButton.textContent = "Close";
-  closeButton.addEventListener("pointerdown", (event) => {
-    event.stopPropagation();
-  });
-  closeButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onClose();
-  });
+  url.searchParams.set("seed", seed.toString());
 
-  for (const [key, action] of shortcuts) {
-    const term = document.createElement("dt");
-    const description = document.createElement("dd");
-
-    term.textContent = key;
-    description.textContent = action;
-    list.append(term, description);
+  if (matchId?.startsWith("seed-")) {
+    url.searchParams.set("match", `seed-${seed}`);
   }
 
-  panel.append(title, list, closeButton);
-  root.appendChild(panel);
-  container.appendChild(root);
-
-  return {
-    root,
-    panel,
-    closeButton,
-  };
-}
-
-function createMatchStatus(container: HTMLElement): MatchStatusControls {
-  const root = document.createElement("section");
-  const timer = document.createElement("div");
-  const playerOne = document.createElement("div");
-  const playerTwo = document.createElement("div");
-  const result = document.createElement("div");
-
-  root.className = "match-status";
-  timer.className = "match-status-timer";
-  playerOne.className = "match-status-player match-status-player-one";
-  playerTwo.className = "match-status-player match-status-player-two";
-  result.className = "match-status-result";
-  root.append(timer, playerOne, playerTwo, result);
-  container.appendChild(root);
-
-  return {
-    root,
-    timer,
-    playerOne,
-    playerTwo,
-    result,
-  };
-}
-
-function updateMatchStatus(
-  controls: MatchStatusControls,
-  runtime: LocalGameRuntime
-): void {
-  const rules = runtime.world.config.rules.matchEnd;
-  const remainingTicks = Math.max(
-    rules.durationTicks - runtime.world.tick,
-    0
-  );
-  const playerOne = runtime.world.config.players.find(
-    (player) => player.id === 1
-  );
-  const playerTwo = runtime.world.config.players.find(
-    (player) => player.id === 2
-  );
-
-  controls.timer.textContent = formatMatchTime(remainingTicks);
-  writePlayerMatchStatus(
-    controls.playerOne,
-    runtime,
-    1,
-    playerOne?.color ?? "#74d9ff"
-  );
-  writePlayerMatchStatus(
-    controls.playerTwo,
-    runtime,
-    2,
-    playerTwo?.color ?? "#ff4fd8"
-  );
-
-  if (!runtime.world.matchResult) {
-    controls.result.textContent = "";
-    controls.root.dataset.result = "pending";
-    return;
-  }
-
-  controls.root.dataset.result =
-    runtime.world.matchResult.winner === 0
-      ? "draw"
-      : runtime.world.matchResult.winner === runtime.playerId
-        ? "win"
-        : "lose";
-  controls.result.textContent = formatMatchResult(runtime);
-}
-
-function writePlayerMatchStatus(
-  target: HTMLElement,
-  runtime: LocalGameRuntime,
-  playerId: PlayerId,
-  color: string
-): void {
-  const planets = runtime
-    .readPlanets()
-    .filter(
-      (planet) =>
-        planet.control.capturable && planet.control.owner === playerId
-    )
-    .length;
-  const units = runtime
-    .readUnits()
-    .filter((unit) => unit.owner === playerId && unit.health.current > 0)
-    .length;
-
-  target.style.setProperty("--team-color", color);
-  target.textContent = `P${playerId} ${planets}P ${units}U`;
-}
-
-function formatMatchTime(remainingTicks: number): string {
-  const totalSeconds = Math.ceil(remainingTicks / PHASE_ONE_SIM_HZ);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
-function formatMatchResult(runtime: LocalGameRuntime): string {
-  const result = runtime.world.matchResult;
-
-  if (!result) {
-    return "";
-  }
-
-  const label =
-    result.winner === 0
-      ? "Draw"
-      : result.winner === runtime.playerId
-        ? "Win"
-        : "Lose";
-
-  return `${label} ${formatMatchResultReason(result.reason)}`;
-}
-
-function formatMatchResultReason(reason: string): string {
-  switch (reason) {
-    case "allPlanetsCaptured":
-      return "all planets";
-    case "dropShipsLost":
-      return "drop ship lost";
-    case "timerPlanets":
-      return "planet count";
-    case "timerUnits":
-      return "unit count";
-    case "timerTie":
-      return "timer tie";
-    default:
-      return reason;
-  }
+  window.location.assign(url.toString());
 }
 
 function updateRenderModeQuery(renderMode: RenderQualityMode): void {

@@ -2,6 +2,7 @@ export * from "./commandBuffer";
 export * from "./commandLogStore";
 export * from "./hashArbiter";
 export * from "./matchDO";
+export * from "./matchConfigStore";
 export * from "./matchEnd";
 export * from "./retention";
 export * from "./snapshotStore";

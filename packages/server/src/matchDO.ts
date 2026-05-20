@@ -9,6 +9,7 @@ import {
   type ConnectionStatusMessage,
   type DesyncMessage,
   type HashMessage,
+  type MatchConfig,
   type PlayerId,
   type ServerMessage,
   type SnapshotMessage,
@@ -24,6 +25,7 @@ import {
   type SnapshotStore,
   type StoredSnapshot,
 } from "./snapshotStore";
+import { readOrCreateStoredMatchConfig } from "./matchConfigStore";
 import { createTickLoop, type TickLoop } from "./tickLoop";
 
 const CURRENT_TICK_KEY = "match:currentTick";
@@ -112,7 +114,7 @@ export function createMatchCoordinator(
 export class MatchDurableObject {
   private coordinator: MatchCoordinator | null = null;
   private readonly sessions = new Map<string, MatchSession>();
-  private config: ReturnType<typeof createCaptureDemoConfig> | null = null;
+  private config: MatchConfig | null = null;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -157,11 +159,11 @@ export class MatchDurableObject {
     return this.coordinator;
   }
 
-  private connect(
+  private async connect(
     request: Request,
     url: URL,
     coordinator: MatchCoordinator
-  ): Response {
+  ): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
@@ -190,7 +192,7 @@ export class MatchDurableObject {
     this.nextSessionId += 1;
     server.accept();
     this.sessions.set(session.id, session);
-    const config = this.getMatchConfig(url);
+    const config = await this.getMatchConfig(url);
     this.send(session, {
       type: "matchStart",
       playerId,
@@ -216,16 +218,20 @@ export class MatchDurableObject {
     });
   }
 
-  private getMatchConfig(url: URL): ReturnType<typeof createCaptureDemoConfig> {
+  private async getMatchConfig(url: URL): Promise<MatchConfig> {
     if (this.config) {
       return this.config;
     }
 
     const matchId = parseMatchIdFromPath(url.pathname) ?? "demo";
-    this.config = createCaptureDemoConfig({
-      matchId,
-      seed: parseSeed(url.searchParams.get("seed")) ?? parseSeed(matchId),
-    });
+    this.config = await readOrCreateStoredMatchConfig(
+      this.state?.storage,
+      () =>
+        createCaptureDemoConfig({
+          matchId,
+          seed: parseSeed(url.searchParams.get("seed")) ?? parseSeed(matchId),
+        })
+    );
     return this.config;
   }
 

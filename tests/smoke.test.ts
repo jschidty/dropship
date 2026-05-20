@@ -23,6 +23,7 @@ import {
   SNAPSHOT_WARN_BYTES,
   createCommandLogStore,
   createMatchCoordinator,
+  readOrCreateStoredMatchConfig,
 } from "../packages/server/src/index";
 import {
   createWorld,
@@ -47,6 +48,7 @@ import { selectMoveOrderUnits } from "../packages/client/src/selection/commands"
 import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
+await testStoredMatchConfigPersistsResolvedConfig();
 testDeterministicMathReferenceValues();
 testSeededMatchGeneration();
 testPlanetaryOrbitMotion();
@@ -140,6 +142,26 @@ async function testCommandSchedulingAndCatchup(): Promise<void> {
   assert.equal(catchup.serverTick, 3);
   assert.equal(catchup.commands.length, 1);
   assert.equal(catchup.commands[0].tick, 2);
+}
+
+async function testStoredMatchConfigPersistsResolvedConfig(): Promise<void> {
+  const storage = createMemoryStorage();
+  const first = await readOrCreateStoredMatchConfig(storage, () =>
+    createCaptureDemoConfig({
+      matchId: "stored-config",
+      seed: 11,
+    })
+  );
+  const second = await readOrCreateStoredMatchConfig(storage, () =>
+    createCaptureDemoConfig({
+      matchId: "stored-config",
+      seed: 99,
+    })
+  );
+
+  assert.equal(first.matchId, "stored-config");
+  assert.equal(first.seed, 11);
+  assert.deepEqual(second, first);
 }
 
 function testDeterministicMathReferenceValues(): void {

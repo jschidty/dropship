@@ -291,6 +291,8 @@ const BATTLESHIP_TEMPLATE: ShipTemplateDefinition = {
   slots: [
     { id: "main-engine-1", type: "engine", size: "small" },
     { id: "main-engine-2", type: "engine", size: "small" },
+    { id: "main-engine-3", type: "engine", size: "small" },
+    { id: "main-engine-4", type: "engine", size: "small" },
     { id: "fuel-1", type: "fuelTank", size: "small" },
     { id: "weapon-1", type: "weapon", size: "small", arc: "turret" },
     { id: "weapon-2", type: "weapon", size: "small", arc: "turret" },
@@ -303,6 +305,8 @@ const BATTLESHIP_TEMPLATE: ShipTemplateDefinition = {
     componentsBySlot: {
       "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
       "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "main-engine-3": SHIP_COMPONENT_IDS.ionEngineSmall,
+      "main-engine-4": SHIP_COMPONENT_IDS.ionEngineSmall,
       "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
       "weapon-1": SHIP_COMPONENT_IDS.pulseLaserSmall,
       "weapon-2": SHIP_COMPONENT_IDS.pulseLaserSmall,

@@ -9,6 +9,7 @@
   "types": "./src/index.ts",
   "dependencies": {
     "@drop-ship/content": "workspace:*",
+    "@drop-ship/controllers": "workspace:*",
     "@drop-ship/protocol": "workspace:*",
     "@drop-ship/sim": "workspace:*",
     "preact": "^10.29.2",

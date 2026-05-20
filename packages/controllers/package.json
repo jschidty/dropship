@@ -1,16 +1,13 @@
 {
-  "name": "@drop-ship/tools",
+  "name": "@drop-ship/controllers",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./headless-match": "./src/headless-match/index.ts"
+    ".": "./src/index.ts"
   },
   "types": "./src/index.ts",
   "dependencies": {
-    "@drop-ship/content": "workspace:*",
-    "@drop-ship/controllers": "workspace:*",
     "@drop-ship/protocol": "workspace:*",
     "@drop-ship/sim": "workspace:*"
   }

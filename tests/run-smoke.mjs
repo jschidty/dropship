@@ -9,7 +9,16 @@ const outfile = join(
   tmpdir(),
   `drop-ship-smoke-${process.pid}-${Date.now()}.mjs`
 );
-const localEsbuild = join(
+const localEsbuildBinary = join(
+  process.cwd(),
+  "node_modules",
+  ".pnpm",
+  "node_modules",
+  "esbuild",
+  "bin",
+  "esbuild"
+);
+const localEsbuildShim = join(
   process.cwd(),
   "node_modules",
   ".pnpm",
@@ -17,7 +26,11 @@ const localEsbuild = join(
   ".bin",
   "esbuild"
 );
-const esbuild = existsSync(localEsbuild) ? localEsbuild : "esbuild";
+const esbuild = existsSync(localEsbuildBinary)
+  ? localEsbuildBinary
+  : existsSync(localEsbuildShim)
+    ? localEsbuildShim
+    : "esbuild";
 
 const build = spawnSync(
   esbuild,

@@ -11,6 +11,7 @@
     "paths": {
       "@drop-ship/client": ["packages/client/src/index.ts"],
       "@drop-ship/content": ["packages/content/src/index.ts"],
+      "@drop-ship/controllers": ["packages/controllers/src/index.ts"],
       "@drop-ship/protocol": ["packages/protocol/src/index.ts"],
       "@drop-ship/server": ["packages/server/src/index.ts"],
       "@drop-ship/sim": ["packages/sim/src/index.ts"],

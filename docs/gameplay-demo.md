@@ -61,6 +61,7 @@ type MatchRulesConfig = {
   npc: {
     thinkIntervalTicks: number;
     aggroRangeWorldUnits: number;
+    dropShipThreatRangeWorldUnits: number;
   };
 };
 ```
@@ -276,25 +277,24 @@ Recommended order:
 
 1. `PlanetMotionSystem`
 2. `CommandIntakeSystem`
-3. `NpcCommandSystem`
-4. `FleetCommandSystem`
-5. `ShipOrderSystem`
-6. `SteeringSystem`
-7. `PhysicsSystem`
-8. `CollisionSystem`
-9. `OrbitTrackingSystem`
-10. `CombatSystem`
-11. `CaptureSystem`
-12. `DropShipSpawnSystem`
-13. `MiningSystem`
-14. `ResourceSystem`
-15. `LifecycleSystem`
-16. `MatchEndSystem`
-17. `EventFlushSystem`
+3. `FleetCommandSystem`
+4. `ShipOrderSystem`
+5. `SteeringSystem`
+6. `PhysicsSystem`
+7. `CollisionSystem`
+8. `OrbitTrackingSystem`
+9. `CombatSystem`
+10. `CaptureSystem`
+11. `DropShipSpawnSystem`
+12. `MiningSystem`
+13. `ResourceSystem`
+14. `LifecycleSystem`
+15. `MatchEndSystem`
+16. `EventFlushSystem`
 
 Notes:
 
-- `NpcCommandSystem` must emit or apply the same order data as player commands. It may be compiled into local single-player only at first, but its outputs still have to be deterministic.
+- Scripted NPC behavior runs before `runTick` as a command-producing controller, so NPC outputs enter through the same `CommandBatch` and `CommandIntakeSystem` path as player commands.
 - `OrbitTrackingSystem` runs after collision so `CaptureSystem` consumes one stable orbit state.
 - `DropShipSpawnSystem` runs after combat so destroyed drop ships do not spawn fighters on the same tick.
 - `LifecycleSystem` removes destroyed units after capture and spawn systems have completed their deterministic mutations.
@@ -315,6 +315,7 @@ NPC behavior:
 
 - every `rules.npc.thinkIntervalTicks`, scan Player 2 ships in stable handle order
 - find the nearest enemy within `rules.npc.aggroRangeWorldUnits`
+- escorts may use `rules.npc.dropShipThreatRangeWorldUnits` to protect their drop ship without making all ships globally aggressive
 - if one exists, issue or maintain `AttackTarget`
 - otherwise fighters maintain `GuardPlanet` or `Escort`
 - battleships maintain `GuardPlanet`

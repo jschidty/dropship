@@ -122,6 +122,7 @@ export type MatchEndRulesConfig = Readonly<{
 export type NpcRulesConfig = Readonly<{
   thinkIntervalTicks: number;
   aggroRangeWorldUnits: number;
+  dropShipThreatRangeWorldUnits: number;
 }>;
 
 export type CaptureDemoRules = Readonly<{
@@ -134,6 +135,7 @@ export type CaptureDemoRules = Readonly<{
   fighterSpawnCapPerDropShip: number;
   npcThinkIntervalTicks: number;
   npcAggroRange: number;
+  npcDropShipThreatRange?: number;
 }>;
 
 export type MatchRulesConfig = Readonly<{
@@ -235,9 +237,9 @@ export type MatchContentOverrides = Readonly<{
 
 export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
   capture: {
-    planetCaptureSeconds: 25,
-    orbitMinRadiusMultiplier: 1.55,
-    orbitMaxRadiusMultiplier: 3.4,
+    planetCaptureSeconds: 15,
+    orbitMinRadiusMultiplier: 1.25,
+    orbitMaxRadiusMultiplier: 4.25,
     breakGraceTicks: 30,
   },
   spawning: {
@@ -248,8 +250,9 @@ export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
     durationTicks: 5 * 60 * PHASE_ONE_SIM_HZ,
   },
   npc: {
-    thinkIntervalTicks: 15,
+    thinkIntervalTicks: 30,
     aggroRangeWorldUnits: 130,
+    dropShipThreatRangeWorldUnits: 180,
   },
 };
 
@@ -267,6 +270,7 @@ export const DEFAULT_CAPTURE_DEMO_RULES: CaptureDemoRules = {
     DEFAULT_MATCH_RULES.spawning.fighterSpawnCapPerDropShip,
   npcThinkIntervalTicks: DEFAULT_MATCH_RULES.npc.thinkIntervalTicks,
   npcAggroRange: DEFAULT_MATCH_RULES.npc.aggroRangeWorldUnits,
+  npcDropShipThreatRange: DEFAULT_MATCH_RULES.npc.dropShipThreatRangeWorldUnits,
 };
 
 export const DEFAULT_SIM_TUNING: SimTuningConfig = {
@@ -303,7 +307,7 @@ export const DEFAULT_SIM_TUNING: SimTuningConfig = {
     catchUpMinSpeedRatio: 0.28,
   },
   orbit: {
-    captureRadiusMultiplier: 2.25,
+    captureRadiusMultiplier: 3,
     guardRadiusMultiplier: 3.05,
     activeOrbitBaseMultiplier: 2.62,
     activeOrbitJitterMultiplier: 0.32,
@@ -555,6 +559,8 @@ function captureDemoRulesToMatchRules(
     npc: {
       thinkIntervalTicks: rules.npcThinkIntervalTicks,
       aggroRangeWorldUnits: rules.npcAggroRange,
+      dropShipThreatRangeWorldUnits:
+        rules.npcDropShipThreatRange ?? rules.npcAggroRange,
     },
   };
 }

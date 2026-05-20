@@ -7,7 +7,6 @@ import { LifecycleSystem } from "./lifecycle";
 import { MatchEndSystem } from "./matchEnd";
 import { OrbitTrackingSystem } from "./orbitTracking";
 import { PhysicsSystem, SteeringSystem } from "./motion";
-import { NpcCommandSystem } from "./npcCommand";
 import { PlanetMotionSystem } from "./planetMotion";
 import {
   EventFlushSystem,
@@ -26,7 +25,6 @@ export * from "./dropShipSpawn";
 export * from "./lifecycle";
 export * from "./matchEnd";
 export * from "./motion";
-export * from "./npcCommand";
 export * from "./orbitTracking";
 export * from "./planetMotion";
 export * from "./placeholders";
@@ -35,7 +33,6 @@ export * from "./shipOrder";
 export const PHASE_ONE_SYSTEMS: readonly SimSystem[] = [
   PlanetMotionSystem,
   CommandIntakeSystem,
-  NpcCommandSystem,
   FleetCommandSystem,
   ShipOrderSystem,
   SteeringSystem,

@@ -32,6 +32,9 @@ importers:
       '@drop-ship/content':
         specifier: workspace:*
         version: link:../content
+      '@drop-ship/controllers':
+        specifier: workspace:*
+        version: link:../controllers
       '@drop-ship/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -54,6 +57,15 @@ importers:
       '@drop-ship/protocol':
         specifier: workspace:*
         version: link:../protocol
+
+  packages/controllers:
+    dependencies:
+      '@drop-ship/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@drop-ship/sim':
+        specifier: workspace:*
+        version: link:../sim
 
   packages/protocol: {}
 
@@ -81,6 +93,9 @@ importers:
       '@drop-ship/content':
         specifier: workspace:*
         version: link:../content
+      '@drop-ship/controllers':
+        specifier: workspace:*
+        version: link:../controllers
       '@drop-ship/protocol':
         specifier: workspace:*
         version: link:../protocol

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createScriptedNpcController } from "../packages/controllers/src/index";
 import {
   DEFAULT_CONTENT_REGISTRY,
   SHIP_COMPONENT_IDS,
@@ -60,6 +61,7 @@ testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
 testOrbitTrackingState();
 testDropShipCapturesPlanet();
+testDropShipCaptureContinuesNearInnerOrbit();
 testCapturedPlanetSpawnsDropShip();
 testDropShipSpawnsFighters();
 testSpawnedFightersEscortParentDropShip();
@@ -67,6 +69,7 @@ testDropShipEliminationEndsMatch();
 testTimerPlanetCountWinner();
 testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
+testLocalRuntimeUsesScriptedNpcController();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
 testNpcFightersHoldEscortWhenDropShipIsNotThreatened();
@@ -292,7 +295,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "f3cc4795");
+  assert.equal(first, "1623dbe4");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -306,11 +309,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "f3cc4795");
+  assert.equal(result.finalHash, "1623dbe4");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "f3cc4795",
+      hash: "1623dbe4",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -403,7 +406,8 @@ function testHeadlessRunnerRunsAllNpcMatch(): void {
   assert.equal(result.metrics.completed, true);
   assert.equal(result.metrics.ticksElapsed, 3);
   assert.equal(result.hashes.length, 3);
-  assert.equal(result.commandBatches.length, 0);
+  assert.ok(result.commandBatches.length > 0);
+  assert.ok(result.metrics.commandCount > 0);
   assert.ok(
     result.world.units.some((unit) => unit.moveOrder?.type === "attackTarget")
   );
@@ -707,6 +711,39 @@ function testDropShipCapturesPlanet(): void {
   assert.equal(planet.control.owner, 1);
 }
 
+function testDropShipCaptureContinuesNearInnerOrbit(): void {
+  const config = createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const world = createWorld({
+    config,
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const planet = world.planets.find((entry) => entry.control.capturable);
+  const dropShip = world.units.find(
+    (entry) => entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(planet);
+  assert.ok(dropShip);
+
+  placeDropShipInCaptureOrbit(dropShip, planet, 1.35);
+  planet.control.capturingPlayer = dropShip.owner;
+  planet.control.capturingDropShip = dropShip.handle;
+  planet.control.captureTicks = 12;
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.ok(dropShip.orbit.isOrbiting);
+  assert.equal(planet.control.breakTicks, 0);
+  assert.ok(planet.control.captureTicks > 12);
+}
+
 function testCapturedPlanetSpawnsDropShip(): void {
   const config = createCaptureDemoConfig({
     seed: 1337,
@@ -958,6 +995,30 @@ function testLocalRuntimeStopsAfterMatchEnd(): void {
   runtime.dispose();
 }
 
+function testLocalRuntimeUsesScriptedNpcController(): void {
+  const runtime = createMinimalLocalGame(1, { seed: 1337 });
+  const controller = createScriptedNpcController();
+  const expectedCommands = controller.commandsForTick(runtime.world);
+
+  assert.ok(expectedCommands.length > 0);
+  assert.ok(expectedCommands.every((scheduled) => scheduled.playerId === 2));
+
+  runtime.stepTick();
+
+  for (const scheduled of expectedCommands) {
+    assert.equal(scheduled.command.type, "issueUnitOrder");
+
+    const unit = runtime.world.units.find((entry) =>
+      sameHandle(entry.handle, scheduled.command.unitHandles[0])
+    );
+
+    assert.ok(unit);
+    assert.deepEqual(unit.moveOrder, scheduled.command.order);
+  }
+
+  runtime.dispose();
+}
+
 function testNpcDefenderIssuesAttackOrders(): void {
   const config = createCaptureDemoConfig({
     seed: 1337,
@@ -970,20 +1031,21 @@ function testNpcDefenderIssuesAttackOrders(): void {
       },
     },
   });
-  const world = createWorld({
+  const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    maxTicks: 2,
   });
+  const result = runner.run();
 
-  runBatches(world, [], 2);
-
-  const defender = world.units.find(
+  const defender = result.world.units.find(
     (unit) =>
       unit.owner === 2 &&
       unit.shipClassId !== SHIP_CLASS_IDS.dropShip &&
       unit.moveOrder?.type === "attackTarget"
   );
 
+  assert.ok(result.commandBatches.length > 0);
   assert.ok(defender);
 }
 
@@ -1038,15 +1100,17 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
       },
     },
   });
-  const world = createWorld({
+  const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
   });
-  const safePlanet = world.planets.find((planet) => planet.name === "Safe");
-  const contestedPlanet = world.planets.find(
+  const safePlanet = runner.world.planets.find(
+    (planet) => planet.name === "Safe"
+  );
+  const contestedPlanet = runner.world.planets.find(
     (planet) => planet.name === "Contested"
   );
-  const dropShip = world.units.find(
+  const dropShip = runner.world.units.find(
     (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
   );
 
@@ -1056,8 +1120,9 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
 
   contestedPlanet.control.contested = true;
 
-  runTick(world, createEmptyCommandBatch(world.tick));
+  const step = runner.step();
 
+  assert.ok(step.batch.commands.length > 0);
   assert.equal(dropShip.moveOrder?.type, "capturePlanet");
   assert.ok(
     dropShip.moveOrder?.type === "capturePlanet" &&
@@ -1110,22 +1175,23 @@ function testNpcFightersHoldEscortWhenDropShipIsNotThreatened(): void {
       },
     },
   });
-  const world = createWorld({
+  const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
   });
-  const dropShip = world.units.find(
+  const dropShip = runner.world.units.find(
     (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
   );
-  const fighter = world.units.find(
+  const fighter = runner.world.units.find(
     (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.fighter
   );
 
   assert.ok(dropShip);
   assert.ok(fighter);
 
-  runTick(world, createEmptyCommandBatch(world.tick));
+  const step = runner.step();
 
+  assert.ok(step.batch.commands.length > 0);
   assert.equal(fighter.moveOrder?.type, "escort");
   assert.ok(
     fighter.moveOrder?.type === "escort" &&
@@ -1149,20 +1215,21 @@ function testNpcControllersCanOwnEveryPlayer(): void {
       },
     },
   });
-  const world = createWorld({
+  const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    maxTicks: 2,
   });
+  const result = runner.run();
 
-  runBatches(world, [], 2);
-
+  assert.ok(result.commandBatches.length > 0);
   assert.ok(
-    world.units.some(
+    result.world.units.some(
       (unit) => unit.owner === 1 && unit.moveOrder?.type === "attackTarget"
     )
   );
   assert.ok(
-    world.units.some(
+    result.world.units.some(
       (unit) => unit.owner === 2 && unit.moveOrder?.type === "attackTarget"
     )
   );
@@ -1193,6 +1260,7 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
       ...DEFAULT_CAPTURE_DEMO_RULES,
       fighterSpawnIntervalTicks: config.rules.spawning.fighterSpawnIntervalTicks,
       npcAggroRange: config.rules.npc.aggroRangeWorldUnits,
+      npcDropShipThreatRange: config.rules.npc.dropShipThreatRangeWorldUnits,
     },
   };
   const hydrated = hydrateWorldFromSnapshot(
@@ -1206,8 +1274,17 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
     "npc"
   );
   assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 1_000);
+  assert.equal(hydrated.config.rules.npc.dropShipThreatRangeWorldUnits, 180);
 
-  runBatches(hydrated, [], 2);
+  const scriptedNpcController = createScriptedNpcController();
+  const commands = scriptedNpcController.commandsForTick(hydrated);
+
+  assert.ok(commands.length > 0);
+
+  runTick(hydrated, {
+    tick: hydrated.tick,
+    commands,
+  });
 
   assert.ok(
     hydrated.units.some(
@@ -1609,10 +1686,11 @@ function assertCaptureDemoFleet(
 
 function placeDropShipInCaptureOrbit(
   dropShip: ReturnType<typeof createWorld>["units"][number],
-  planet: ReturnType<typeof createWorld>["planets"][number]
+  planet: ReturnType<typeof createWorld>["planets"][number],
+  radiusMultiplier = 3
 ): void {
   dropShip.position = {
-    x: planet.position.x + planet.radius * 2.25,
+    x: planet.position.x + planet.radius * radiusMultiplier,
     y: planet.position.y,
     z: planet.position.z,
   };

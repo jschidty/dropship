@@ -31,6 +31,7 @@ drop-ship/
 |   |-- protocol/       shared command, message, handle, snapshot types
 |   |-- content/        content schemas, validation, generated numeric IDs
 |   |-- sim/            pure deterministic simulation; no DOM, no three.js
+|   |-- controllers/    command-producing scripted/tool/AI controllers
 |   |-- client/         renderer, input, UI, network client
 |   |-- server/         Cloudflare Worker + Durable Object coordinator
 |   `-- tools/          replay, hash diff, snapshot size, content lint
@@ -119,6 +120,18 @@ sim/src/
 
 Forbidden imports: `three`, `window`, `document`, `navigator`, `localStorage`, `react`, `server`, and `client`.
 
+### `packages/controllers`
+
+Command-producing controllers that read `SimWorld` and emit normal protocol commands. Controllers may inspect sim state, but they must not mutate sim state directly.
+
+```text
+controllers/src/
+|-- scriptedNpc.ts      deterministic scripted-v1 NPC command controller
+`-- index.ts
+```
+
+The client and headless tools can both use these controllers before `runTick`, then feed their commands through `CommandBatch` and `CommandIntakeSystem`.
+
 ### `packages/client`
 
 Browser-only code: three.js, Preact/React or DOM UI, input, audio, network client, and render-only prediction experiments.
@@ -138,7 +151,7 @@ client/src/
 `-- index.ts
 ```
 
-The client may import `sim`, `protocol`, and `content`. It must write to sim state only through command intake or explicit resync APIs.
+The client may import `sim`, `protocol`, `content`, and `controllers`. It must write to sim state only through command intake or explicit resync APIs.
 
 Renderer modules should stay split by responsibility. The mount loop may orchestrate scene setup, input wiring, and frame scheduling, while reusable render mechanisms such as unit instancing, projectile particles, shader materials, quality presets, and render math live in separate files under `client/src/render/`.
 
@@ -175,7 +188,7 @@ tools/src/
 `-- snapshot-inspect/   inspect compact snapshots
 ```
 
-Tools may import `sim`, `protocol`, and `content`. They are not deployed.
+Tools may import `sim`, `protocol`, `content`, and `controllers`. They are not deployed.
 
 ### `apps/web`
 
@@ -201,9 +214,10 @@ Prefer importing `client` only from the app entry. Let `client` own its internal
 | `protocol` | optional tiny validation helpers only |
 | `content` | `protocol`, validation library |
 | `sim` | `protocol`, `content`, bitECS, deterministic hash/PRNG libraries |
-| `client` | `sim`, `protocol`, `content`, three.js, UI libs |
+| `controllers` | `sim`, `protocol` |
+| `client` | `sim`, `protocol`, `content`, `controllers`, three.js, UI libs |
 | `server` | `protocol`, Cloudflare runtime APIs |
-| `tools` | `sim`, `protocol`, `content` |
+| `tools` | `sim`, `protocol`, `content`, `controllers` |
 | `apps/web` | `client` |
 
 Forbidden:

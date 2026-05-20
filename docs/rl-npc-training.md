@@ -55,7 +55,7 @@ Use a small MLP or recurrent MLP policy. A transformer, vision model, or continu
 
 Recommended decision cadence:
 
-- Decide every `rules.npc.thinkIntervalTicks`, usually 15-30 ticks.
+- Decide every `rules.npc.thinkIntervalTicks`, usually around 30 ticks for scripted baselines unless a policy needs faster reactions.
 - Hold orders between decisions.
 - Let `ShipOrderSystem`, `SteeringSystem`, `PhysicsSystem`, `CombatSystem`, and capture/spawn systems do the detailed execution.
 
@@ -116,7 +116,7 @@ For balance runs, also log these as metrics instead of only using them as reward
 
 ## Baselines
 
-Keep the existing scripted NPC as the first baseline. The current implementation is [`packages/sim/src/systems/npcCommand.ts`](../packages/sim/src/systems/npcCommand.ts): every NPC think interval, it scans units in stable order, attacks the nearest enemy in aggro range, otherwise guards a capturable planet.
+Keep the existing scripted NPC as the first baseline. The current implementation is [`packages/controllers/src/scriptedNpc.ts`](../packages/controllers/src/scriptedNpc.ts): every NPC think interval, it scans units in stable order and emits normal `issueUnitOrder` commands for capture, escort, attack, or guard behavior.
 
 Before PPO or self-play, build:
 
@@ -127,9 +127,9 @@ Before PPO or self-play, build:
 
 This keeps the first learned policy cheap and gives every training run a known regression target.
 
-## Important Refactor
+## Command-Producing Controllers
 
-The current `NpcCommandSystem` mutates `unit.moveOrder` directly inside the sim. That is acceptable for the simple baseline, but learned policies should run as controllers that produce normal `ScheduledCommand` entries.
+The scripted NPC now lives outside the sim layer as a command-producing controller. Learned policies should follow the same shape and produce normal `ScheduledCommand` entries.
 
 Preferred target:
 
@@ -145,6 +145,7 @@ controller profile
 Relevant code:
 
 - [`packages/protocol/src/matchConfig.ts`](../packages/protocol/src/matchConfig.ts) already has `PlayerControllerConfig` and controller types: `human`, `npc`, `tool`, and `script`.
+- [`packages/controllers/src/scriptedNpc.ts`](../packages/controllers/src/scriptedNpc.ts) contains the deterministic `scripted-v1` baseline.
 - [`packages/server/src/commandBuffer.ts`](../packages/server/src/commandBuffer.ts) shows the authoritative command sorting behavior.
 - [`packages/client/src/runtime/localGame.ts`](../packages/client/src/runtime/localGame.ts) already queues local commands and feeds them to `runTick`.
 - [`packages/sim/src/systems/commandIntake.ts`](../packages/sim/src/systems/commandIntake.ts) applies scheduled commands to sim orders.
@@ -160,6 +161,8 @@ Current modules:
 - `runner.ts`: wraps `createWorld`, `runTick`, reset, step, run, command collection, hash capture, and replay export.
 - `metrics.ts`: records match-level command counts, event counts, first capture tick, completion state, and final hash.
 - `replay.ts`: writes `ReplayFile` records using the protocol replay type.
+
+The scripted NPC controller dedupes unchanged orders before emitting commands so replay logs capture meaningful decisions instead of the same order repeated every think interval.
 
 Future RL-specific modules should stay separate until training work begins:
 
@@ -188,8 +191,8 @@ The runner should also support empty batches with `createEmptyCommandBatch(world
 ## Training Procedure
 
 1. Build the headless environment wrapper.
-2. Reimplement the current scripted NPC as an external command-producing `scripted-v1` policy.
-3. Validate `scripted-v1` against the current `NpcCommandSystem` on a fixed seed set.
+2. Extend the current `scripted-v1` command controller only when a stronger baseline is needed.
+3. Validate `scripted-v1` with fixed-seed replay hashes and command logs.
 4. Generate demonstration trajectories from `scripted-v1`.
 5. Behavior-clone a compact policy from demonstrations.
 6. Fine-tune with PPO or masked PPO against scripted opponents and prior frozen policies.

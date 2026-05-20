@@ -135,6 +135,7 @@ type MatchRulesConfig = {
   npc: {
     thinkIntervalTicks: number;
     aggroRangeWorldUnits: number;
+    dropShipThreatRangeWorldUnits: number;
   };
 };
 ```
@@ -206,7 +207,7 @@ The current code already has the right package boundaries, but several knobs are
 | Escort desired range and velocity/correction weights | `tuning.escort`. |
 | Orbit target radii, radial correction, vertical correction, pulse, and default orbit behavior | `tuning.orbit`. |
 | Planet and ship avoidance margins/weights | `tuning.avoidance`. |
-| NPC-controlled player IDs, think interval, aggro range, objective policy | `controllers` plus `rules.npc` or an NPC tuning profile. |
+| NPC-controlled player IDs, think interval, aggro ranges, objective policy | `controllers` plus `rules.npc` or an NPC tuning profile. |
 | Capture, drop-ship spawning, and match-end rules | `rules.capture`, `rules.spawning`, and `rules.matchEnd`. |
 
 ### Rules for adding a new knob

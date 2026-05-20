@@ -1,3 +1,4 @@
+import { createScriptedNpcController } from "@drop-ship/controllers";
 import { DEFAULT_CONTENT_REGISTRY } from "@drop-ship/content";
 import {
   createEmptyCommandBatch,
@@ -26,6 +27,7 @@ export function createMinimalLocalGame(
   });
   const pendingCommands: ScheduledCommand[] = [];
   const pendingEvents: typeof world.events = [];
+  const scriptedNpcController = createScriptedNpcController();
   const viewModelCache = createViewModelCache();
   const hashCache = createHashCache();
   let clientSeq = 0;
@@ -38,7 +40,10 @@ export function createMinimalLocalGame(
         return;
       }
 
-      const commands = pendingCommands.splice(0);
+      const commands = sortScheduledCommands([
+        ...pendingCommands.splice(0),
+        ...scriptedNpcController.commandsForTick(world),
+      ]);
       runTick(
         world,
         commands.length > 0
@@ -122,6 +127,19 @@ export function createMinimalLocalGame(
     dispose() {
       pendingCommands.splice(0);
       pendingEvents.splice(0);
+      scriptedNpcController.reset?.(world);
     },
   };
+}
+
+function sortScheduledCommands(
+  commands: readonly ScheduledCommand[]
+): readonly ScheduledCommand[] {
+  return commands
+    .slice()
+    .sort((a, b) =>
+      a.playerId === b.playerId
+        ? a.clientSeq - b.clientSeq
+        : a.playerId - b.playerId
+    );
 }

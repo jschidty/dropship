@@ -3,6 +3,10 @@ import {
   type ContentRegistry,
 } from "@drop-ship/content";
 import {
+  createScriptedNpcController,
+  type CommandController,
+} from "@drop-ship/controllers";
+import {
   createEmptyCommandBatch,
   type CommandBatch,
   type MatchConfig,
@@ -26,11 +30,7 @@ import {
 } from "./metrics";
 import { createHeadlessReplayFile } from "./replay";
 
-export type HeadlessMatchController = Readonly<{
-  id: string;
-  commandsForTick: (world: SimWorld) => readonly ScheduledCommand[];
-  reset?: (world: SimWorld) => void;
-}>;
+export type HeadlessMatchController = CommandController;
 
 export type HeadlessMatchRunnerOptions = Readonly<{
   config: MatchConfig;
@@ -92,7 +92,7 @@ export function createHeadlessMatchRunner(
   let metrics = createHeadlessMatchMetricsDraft(world);
   const commandBatches: CommandBatch[] = [];
   const hashes: ReplayHash[] = [];
-  const controllers = options.controllers ?? [];
+  const controllers = options.controllers ?? [createScriptedNpcController()];
   const hashIntervalTicks = options.hashIntervalTicks ?? 30;
   const recordEmptyBatches = options.recordEmptyBatches ?? false;
 

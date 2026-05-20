@@ -67,7 +67,7 @@ export function hydrateWorldFromSnapshot(
     controllers:
       snapshot.controllers ??
       createDefaultControllersForGame(snapshot.players, snapshot.gameMode),
-    rules: snapshot.rules ?? resolveMatchRules(undefined, snapshot.captureDemoRules),
+    rules: resolveMatchRules(snapshot.rules, snapshot.captureDemoRules),
     tuning: snapshot.tuning ?? resolveSimTuning(undefined),
     contentOverrides: snapshot.contentOverrides,
     players: snapshot.players,

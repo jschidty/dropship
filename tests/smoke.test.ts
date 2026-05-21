@@ -25,6 +25,7 @@ import {
   createCommandLogStore,
   createMatchCoordinator,
   createMatchEndStore,
+  createSnapshotStore,
   readOrCreateStoredMatchConfig,
 } from "../packages/server/src/index";
 import {
@@ -52,6 +53,7 @@ import type { UnitViewModel } from "../packages/client/src/index";
 await testCommandSchedulingAndCatchup();
 await testStoredMatchConfigPersistsResolvedConfig();
 await testMatchEndAgreementPersistsAndBroadcasts();
+await testSnapshotStoreDeletesPrunedRows();
 testDefaultContentRegistryLoadsRawTemplates();
 testDeterministicMathReferenceValues();
 testSeededMatchGeneration();
@@ -206,6 +208,43 @@ async function testMatchEndAgreementPersistsAndBroadcasts(): Promise<void> {
   assert.deepEqual(await reloadedStore.listReports(), [
     firstReport,
     secondReport,
+  ]);
+}
+
+async function testSnapshotStoreDeletesPrunedRows(): Promise<void> {
+  const storage = createMemoryStorage();
+  const store = createSnapshotStore({
+    maxSnapshots: 2,
+    storage,
+  });
+  const world = createWorld({
+    config: createMinimalSkirmishConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const baseSnapshot = serializeWorld(world);
+
+  await store.write(1, { ...baseSnapshot, tick: 1 });
+  await store.write(1, { ...baseSnapshot, tick: 2 });
+  await store.write(1, { ...baseSnapshot, tick: 3 });
+
+  assert.deepEqual(
+    (await store.list()).map((snapshot) => snapshot.tick),
+    [2, 3]
+  );
+
+  const reloadedStore = createSnapshotStore({
+    maxSnapshots: 2,
+    storage,
+  });
+  const storedRows = await storage.list({ prefix: "snapshot:" });
+
+  assert.deepEqual(
+    (await reloadedStore.list()).map((snapshot) => snapshot.tick),
+    [2, 3]
+  );
+  assert.deepEqual([...storedRows.keys()], [
+    "snapshot:0000000002",
+    "snapshot:0000000003",
   ]);
 }
 
@@ -2082,6 +2121,9 @@ function createMemoryStorage(): DurableObjectStorage {
     },
     async put<T = unknown>(key: string, value: T) {
       values.set(key, value);
+    },
+    async delete(key: string) {
+      return values.delete(key);
     },
     async list<T = unknown>(options?: DurableObjectStorageListOptions) {
       const entries = [...values.entries()].filter(([key]) =>

@@ -50,15 +50,35 @@ export function createSnapshotStore(
     });
 
     snapshots.push(...stored.values());
-    pruneSnapshots();
+    await deleteSnapshotsFromStorage(pruneSnapshots());
   }
 
-  function pruneSnapshots(): void {
+  function pruneSnapshots(): StoredSnapshot[] {
+    const pruned: StoredSnapshot[] = [];
+
     snapshots.sort((a, b) => a.tick - b.tick);
 
     while (snapshots.length > maxSnapshots) {
-      snapshots.shift();
+      const snapshot = snapshots.shift();
+
+      if (snapshot) {
+        pruned.push(snapshot);
+      }
     }
+
+    return pruned;
+  }
+
+  async function deleteSnapshotsFromStorage(
+    pruned: readonly StoredSnapshot[]
+  ): Promise<void> {
+    if (!storage || pruned.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      pruned.map((snapshot) => storage.delete(snapshotKey(snapshot.tick)))
+    );
   }
 
   return {
@@ -78,10 +98,18 @@ export function createSnapshotStore(
         byteLength,
       };
 
-      snapshots.push(stored);
-      pruneSnapshots();
+      const existingIndex = snapshots.findIndex(
+        (snapshot) => snapshot.tick === stored.tick
+      );
+
+      if (existingIndex === -1) {
+        snapshots.push(stored);
+      } else {
+        snapshots[existingIndex] = stored;
+      }
 
       await storage?.put(snapshotKey(stored.tick), stored);
+      await deleteSnapshotsFromStorage(pruneSnapshots());
 
       return stored;
     },

@@ -10,6 +10,7 @@ import {
   type DesyncMessage,
   type HashMessage,
   type MatchConfig,
+  type MatchEndMessage,
   type PlayerId,
   type ServerMessage,
   type SnapshotMessage,
@@ -26,6 +27,7 @@ import {
   type StoredSnapshot,
 } from "./snapshotStore";
 import { readOrCreateStoredMatchConfig } from "./matchConfigStore";
+import { createMatchEndStore, type MatchEndStore } from "./matchEnd";
 import { createTickLoop, type TickLoop } from "./tickLoop";
 
 const CURRENT_TICK_KEY = "match:currentTick";
@@ -40,12 +42,18 @@ export type MatchCoordinator = Readonly<{
   commandBuffer: CommandBuffer;
   commandLogStore: CommandLogStore;
   hashArbiter: HashArbiter;
+  matchEndStore: MatchEndStore;
   snapshotStore: SnapshotStore;
   tickLoop: TickLoop;
   receive: (
     message: ClientMessage
   ) => Promise<
-    CommandAckMessage | DesyncMessage | StoredSnapshot | CatchupMessage | null
+    | CommandAckMessage
+    | DesyncMessage
+    | StoredSnapshot
+    | CatchupMessage
+    | MatchEndMessage
+    | null
   >;
   nextTick: () => CommandBatch;
 }>;
@@ -54,6 +62,7 @@ export type MatchCoordinatorOptions = Readonly<{
   commandLeadTicks?: number;
   initialTick?: number;
   commandLogStore?: CommandLogStore;
+  matchEndStore?: MatchEndStore;
   snapshotStore?: SnapshotStore;
 }>;
 
@@ -69,6 +78,7 @@ export function createMatchCoordinator(
   const commandBuffer = createCommandBuffer();
   const commandLogStore = optionBag.commandLogStore ?? createCommandLogStore();
   const hashArbiter = createHashArbiter(PHASE_ONE_PLAYER_IDS);
+  const matchEndStore = optionBag.matchEndStore ?? createMatchEndStore();
   const snapshotStore = optionBag.snapshotStore ?? createSnapshotStore();
   const tickLoop = createTickLoop({
     initialTick: optionBag.initialTick,
@@ -79,6 +89,7 @@ export function createMatchCoordinator(
     commandBuffer,
     commandLogStore,
     hashArbiter,
+    matchEndStore,
     snapshotStore,
     tickLoop,
     async receive(message) {
@@ -103,6 +114,10 @@ export function createMatchCoordinator(
         );
       }
 
+      if (message.type === "matchEndReport") {
+        return matchEndStore.record(message);
+      }
+
       return null;
     },
     nextTick() {
@@ -115,6 +130,7 @@ export class MatchDurableObject {
   private coordinator: MatchCoordinator | null = null;
   private readonly sessions = new Map<string, MatchSession>();
   private config: MatchConfig | null = null;
+  private matchEnded = false;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -143,6 +159,7 @@ export class MatchDurableObject {
     this.coordinator = createMatchCoordinator({
       initialTick,
       commandLogStore: createCommandLogStore(storage),
+      matchEndStore: createMatchEndStore(storage),
       snapshotStore: createSnapshotStore({
         storage,
       }),
@@ -199,6 +216,7 @@ export class MatchDurableObject {
       serverTick: coordinator.tickLoop.currentTick(),
       config,
     });
+    await this.sendStoredMatchEndIfPresent(session, coordinator);
     this.broadcastConnectionStatus();
     this.updateTicking();
 
@@ -257,6 +275,7 @@ export class MatchDurableObject {
       | DesyncMessage
       | StoredSnapshot
       | CatchupMessage
+      | MatchEndMessage
       | null;
 
     try {
@@ -283,6 +302,13 @@ export class MatchDurableObject {
       return;
     }
 
+    if (result.type === "matchEnd") {
+      this.matchEnded = true;
+      this.broadcast(result);
+      this.updateTicking();
+      return;
+    }
+
     if (result.type === "commandAck") {
       this.send(session, result);
       return;
@@ -303,9 +329,9 @@ export class MatchDurableObject {
   }
 
   private updateTicking(): void {
-    const shouldRun = PHASE_ONE_PLAYER_IDS.every((playerId) =>
-      this.hasConnectedPlayer(playerId)
-    );
+    const shouldRun =
+      !this.matchEnded &&
+      PHASE_ONE_PLAYER_IDS.every((playerId) => this.hasConnectedPlayer(playerId));
 
     if (shouldRun && this.timerId === null) {
       this.timerId = setInterval(() => {
@@ -323,7 +349,7 @@ export class MatchDurableObject {
   }
 
   private async broadcastNextTick(): Promise<void> {
-    if (this.broadcastingTick) {
+    if (this.broadcastingTick || this.matchEnded) {
       return;
     }
 
@@ -390,6 +416,21 @@ export class MatchDurableObject {
     } catch {
       this.disconnect(session.id);
     }
+  }
+
+  private async sendStoredMatchEndIfPresent(
+    session: MatchSession,
+    coordinator: MatchCoordinator
+  ): Promise<void> {
+    const agreement = await coordinator.matchEndStore.readAgreement();
+
+    if (!agreement) {
+      return;
+    }
+
+    this.matchEnded = true;
+    this.send(session, agreement);
+    this.updateTicking();
   }
 
   private sendError(session: MatchSession, code: string): void {
@@ -482,7 +523,8 @@ function parseClientMessage(data: string): ClientMessage | null {
       parsed.type === "command" ||
       parsed.type === "hash" ||
       parsed.type === "snapshot" ||
-      parsed.type === "reconnect"
+      parsed.type === "reconnect" ||
+      parsed.type === "matchEndReport"
     ) {
       return parsed as ClientMessage;
     }

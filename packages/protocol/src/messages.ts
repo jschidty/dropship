@@ -36,12 +36,21 @@ export type ReconnectMessage = Readonly<{
   lastTick: number;
 }>;
 
+export type MatchEndReportMessage = Readonly<{
+  type: "matchEndReport";
+  playerId: PlayerId;
+  tick: number;
+  winner: PlayerId | 0;
+  finalHash: string;
+}>;
+
 export type ClientMessage =
   | ReadyMessage
   | CommandMessage
   | HashMessage
   | SnapshotMessage
-  | ReconnectMessage;
+  | ReconnectMessage
+  | MatchEndReportMessage;
 
 export type MatchStartMessage = Readonly<{
   type: "matchStart";
@@ -92,6 +101,13 @@ export type ConnectionStatusMessage = Readonly<{
   }>[];
 }>;
 
+export type MatchEndMessage = Readonly<{
+  type: "matchEnd";
+  tick: number;
+  winner: PlayerId | 0;
+  finalHash: string;
+}>;
+
 export type ServerMessage =
   | MatchStartMessage
   | TickCommandsMessage
@@ -99,4 +115,5 @@ export type ServerMessage =
   | DesyncMessage
   | ResyncHardMessage
   | CatchupMessage
-  | ConnectionStatusMessage;
+  | ConnectionStatusMessage
+  | MatchEndMessage;

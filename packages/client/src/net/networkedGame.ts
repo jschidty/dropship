@@ -61,6 +61,7 @@ export function createNetworkedGame(options: {
     options.playerId
   );
   let loggedMatchResultTick: number | null = null;
+  let reportedMatchEndTick: number | null = null;
   let lastConnectionStatusLogKey = "";
 
   debugLog("connection:init", {
@@ -311,6 +312,7 @@ export function createNetworkedGame(options: {
       });
       queuedBatches.clear();
       loggedMatchResultTick = null;
+      reportedMatchEndTick = null;
       status = {
         ...status,
         playerId: message.playerId,
@@ -387,6 +389,21 @@ export function createNetworkedGame(options: {
       world = hydrateWorldFromSnapshot(message.snapshot, DEFAULT_CONTENT_REGISTRY);
       queuedBatches.clear();
       logMatchResult();
+      return;
+    }
+
+    if (message.type === "matchEnd") {
+      debugLog("match:end", {
+        tick: message.tick,
+        winner: message.winner,
+        finalHash: message.finalHash,
+      });
+      queuedBatches.clear();
+      status = {
+        ...status,
+        running: false,
+        serverTick: message.tick,
+      };
     }
   }
 
@@ -503,6 +520,16 @@ export function createNetworkedGame(options: {
         tick: message.tick,
         snapshot: summarizeSnapshot(message.snapshot),
       });
+      return;
+    }
+
+    if (message.type === "matchEndReport") {
+      debugLog("match:end-report", {
+        isOpen,
+        tick: message.tick,
+        winner: message.winner,
+        finalHash: message.finalHash,
+      });
     }
   }
 
@@ -514,9 +541,25 @@ export function createNetworkedGame(options: {
     }
 
     loggedMatchResultTick = result.completedTick;
+    reportMatchEnd(result);
     debugLog("match:result", {
       result,
       ...summarizeWorld(world),
+    });
+  }
+
+  function reportMatchEnd(result: NonNullable<typeof world.matchResult>): void {
+    if (reportedMatchEndTick === result.completedTick) {
+      return;
+    }
+
+    reportedMatchEndTick = result.completedTick;
+    sendClientMessage({
+      type: "matchEndReport",
+      playerId: options.playerId,
+      tick: result.completedTick,
+      winner: result.winner,
+      finalHash: readCachedHash(world, hashCache),
     });
   }
 }

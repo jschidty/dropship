@@ -23,6 +23,7 @@ import {
   SNAPSHOT_WARN_BYTES,
   createCommandLogStore,
   createMatchCoordinator,
+  createMatchEndStore,
   readOrCreateStoredMatchConfig,
 } from "../packages/server/src/index";
 import {
@@ -49,6 +50,7 @@ import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
 await testStoredMatchConfigPersistsResolvedConfig();
+await testMatchEndAgreementPersistsAndBroadcasts();
 testDeterministicMathReferenceValues();
 testSeededMatchGeneration();
 testPlanetaryOrbitMotion();
@@ -162,6 +164,46 @@ async function testStoredMatchConfigPersistsResolvedConfig(): Promise<void> {
   assert.equal(first.matchId, "stored-config");
   assert.equal(first.seed, 11);
   assert.deepEqual(second, first);
+}
+
+async function testMatchEndAgreementPersistsAndBroadcasts(): Promise<void> {
+  const storage = createMemoryStorage();
+  const matchEndStore = createMatchEndStore(storage);
+  const coordinator = createMatchCoordinator({
+    matchEndStore,
+  });
+  const firstReport = {
+    type: "matchEndReport" as const,
+    playerId: 1 as const,
+    tick: 42,
+    winner: 1 as const,
+    finalHash: "abcd1234",
+  };
+  const secondReport = {
+    ...firstReport,
+    playerId: 2 as const,
+  };
+
+  assert.equal(await coordinator.receive(firstReport), null);
+  assert.deepEqual(await coordinator.receive(secondReport), {
+    type: "matchEnd",
+    tick: 42,
+    winner: 1,
+    finalHash: "abcd1234",
+  });
+
+  const reloadedStore = createMatchEndStore(storage);
+
+  assert.deepEqual(await reloadedStore.readAgreement(), {
+    type: "matchEnd",
+    tick: 42,
+    winner: 1,
+    finalHash: "abcd1234",
+  });
+  assert.deepEqual(await reloadedStore.listReports(), [
+    firstReport,
+    secondReport,
+  ]);
 }
 
 function testDeterministicMathReferenceValues(): void {

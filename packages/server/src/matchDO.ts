@@ -1,3 +1,4 @@
+import { DEFAULT_CONTENT_HASH } from "@drop-ship/content";
 import {
   DEFAULT_COMMAND_LEAD_TICKS,
   PHASE_ONE_PLAYER_IDS,
@@ -31,6 +32,7 @@ import { createMatchEndStore, type MatchEndStore } from "./matchEnd";
 import { createTickLoop, type TickLoop } from "./tickLoop";
 
 const CURRENT_TICK_KEY = "match:currentTick";
+const INTERNAL_PLAYER_ID_HEADER = "x-drop-ship-player-id";
 
 type MatchSession = {
   id: string;
@@ -131,6 +133,7 @@ export class MatchDurableObject {
   private readonly sessions = new Map<string, MatchSession>();
   private config: MatchConfig | null = null;
   private matchEnded = false;
+  private matchStarted = false;
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -155,6 +158,7 @@ export class MatchDurableObject {
 
     const storage = this.state?.storage;
     const initialTick = (await storage?.get<number>(CURRENT_TICK_KEY)) ?? 0;
+    this.matchStarted ||= initialTick > 0;
 
     this.coordinator = createMatchCoordinator({
       initialTick,
@@ -185,7 +189,7 @@ export class MatchDurableObject {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
 
-    const playerId = parsePlayerId(url.searchParams.get("player"));
+    const playerId = resolveConnectionPlayerId(request, url);
 
     if (!playerId) {
       return Response.json(
@@ -248,6 +252,7 @@ export class MatchDurableObject {
         createCaptureDemoConfig({
           matchId,
           seed: parseSeed(url.searchParams.get("seed")) ?? parseSeed(matchId),
+          contentHash: DEFAULT_CONTENT_HASH,
         })
     );
     return this.config;
@@ -280,10 +285,15 @@ export class MatchDurableObject {
 
     try {
       const coordinator = await this.getCoordinator();
-      result = await coordinator.receive({
+      const sessionMessage = {
         ...message,
         playerId: session.playerId,
-      });
+      };
+      result =
+        sessionMessage.type === "matchEndReport" &&
+        this.shouldTrustSingleMatchEndReport()
+          ? await coordinator.matchEndStore.recordTrusted(sessionMessage)
+          : await coordinator.receive(sessionMessage);
     } catch {
       this.sendError(session, "server-error");
       return;
@@ -303,9 +313,7 @@ export class MatchDurableObject {
     }
 
     if (result.type === "matchEnd") {
-      this.matchEnded = true;
-      this.broadcast(result);
-      this.updateTicking();
+      this.finalizeMatchEnd(result);
       return;
     }
 
@@ -326,12 +334,16 @@ export class MatchDurableObject {
 
     this.broadcastConnectionStatus();
     this.updateTicking();
+    void this.finalizeTrustedReportFromConnectedPlayer();
   }
 
   private updateTicking(): void {
+    if (!this.matchStarted && this.allPlayersConnected()) {
+      this.matchStarted = true;
+    }
+
     const shouldRun =
-      !this.matchEnded &&
-      PHASE_ONE_PLAYER_IDS.every((playerId) => this.hasConnectedPlayer(playerId));
+      !this.matchEnded && this.matchStarted && this.hasConnectedPlayer();
 
     if (shouldRun && this.timerId === null) {
       this.timerId = setInterval(() => {
@@ -394,7 +406,13 @@ export class MatchDurableObject {
     };
   }
 
-  private hasConnectedPlayer(playerId: PlayerId): boolean {
+  private hasConnectedPlayer(): boolean;
+  private hasConnectedPlayer(playerId: PlayerId): boolean;
+  private hasConnectedPlayer(playerId?: PlayerId): boolean {
+    if (playerId === undefined) {
+      return this.sessions.size > 0;
+    }
+
     for (const session of this.sessions.values()) {
       if (session.playerId === playerId) {
         return true;
@@ -402,6 +420,16 @@ export class MatchDurableObject {
     }
 
     return false;
+  }
+
+  private allPlayersConnected(): boolean {
+    return PHASE_ONE_PLAYER_IDS.every((playerId) =>
+      this.hasConnectedPlayer(playerId)
+    );
+  }
+
+  private shouldTrustSingleMatchEndReport(): boolean {
+    return this.matchStarted && !this.allPlayersConnected();
   }
 
   private broadcast(message: ServerMessage): void {
@@ -422,15 +450,52 @@ export class MatchDurableObject {
     session: MatchSession,
     coordinator: MatchCoordinator
   ): Promise<void> {
-    const agreement = await coordinator.matchEndStore.readAgreement();
+    const final = await coordinator.matchEndStore.readFinal();
 
-    if (!agreement) {
+    if (!final) {
       return;
     }
 
     this.matchEnded = true;
-    this.send(session, agreement);
+    this.send(session, final);
     this.updateTicking();
+  }
+
+  private finalizeMatchEnd(message: MatchEndMessage): void {
+    if (this.matchEnded) {
+      return;
+    }
+
+    this.matchEnded = true;
+    this.broadcast(message);
+    this.updateTicking();
+  }
+
+  private async finalizeTrustedReportFromConnectedPlayer(): Promise<void> {
+    if (
+      this.matchEnded ||
+      !this.matchStarted ||
+      this.allPlayersConnected() ||
+      !this.hasConnectedPlayer()
+    ) {
+      return;
+    }
+
+    const coordinator = await this.getCoordinator();
+    const connectedPlayerIds = new Set(
+      [...this.sessions.values()].map((session) => session.playerId)
+    );
+    const trustedReport = (await coordinator.matchEndStore.listReports()).find(
+      (report) => connectedPlayerIds.has(report.playerId)
+    );
+
+    if (!trustedReport) {
+      return;
+    }
+
+    this.finalizeMatchEnd(
+      await coordinator.matchEndStore.recordTrusted(trustedReport)
+    );
   }
 
   private sendError(session: MatchSession, code: string): void {
@@ -497,6 +562,34 @@ function parsePlayerId(value: string | null): PlayerId | null {
   const parsed = Number(value);
 
   return parsed === 1 || parsed === 2 ? parsed : null;
+}
+
+function resolveConnectionPlayerId(
+  request: Request,
+  url: URL
+): PlayerId | null {
+  const internalPlayerId = parsePlayerId(
+    request.headers.get(INTERNAL_PLAYER_ID_HEADER)
+  );
+
+  if (internalPlayerId) {
+    return internalPlayerId;
+  }
+
+  if (!allowsDebugSeat(url)) {
+    return null;
+  }
+
+  return parsePlayerId(url.searchParams.get("player"));
+}
+
+function allowsDebugSeat(url: URL): boolean {
+  return (
+    url.searchParams.get("debugSeat") === "1" ||
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "::1"
+  );
 }
 
 function parseSeed(value: string | null): number | undefined {

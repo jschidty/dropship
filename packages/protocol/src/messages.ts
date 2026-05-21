@@ -1,6 +1,6 @@
 import type { CommandBatch, CommandIntent } from "./commands";
 import type { PlayerId } from "./handles";
-import type { MatchConfig } from "./matchConfig";
+import type { MatchConfig, MatchEndReason } from "./matchConfig";
 import type { CompactSimSnapshot } from "./snapshot";
 
 export type ReadyMessage = Readonly<{
@@ -41,6 +41,7 @@ export type MatchEndReportMessage = Readonly<{
   playerId: PlayerId;
   tick: number;
   winner: PlayerId | 0;
+  reason: MatchEndReason;
   finalHash: string;
 }>;
 
@@ -101,11 +102,31 @@ export type ConnectionStatusMessage = Readonly<{
   }>[];
 }>;
 
+export type MatchEndSource = "agreed" | "trusted" | "conflict";
+
+export type MatchEndReportSummary = Readonly<{
+  playerId: PlayerId;
+  tick: number;
+  winner: PlayerId | 0;
+  reason: MatchEndReason;
+  finalHash: string;
+}>;
+
+export type MatchRatingDelta = Readonly<{
+  playerId: PlayerId;
+  ratingBefore: number;
+  ratingAfter: number;
+}>;
+
 export type MatchEndMessage = Readonly<{
   type: "matchEnd";
   tick: number;
   winner: PlayerId | 0;
-  finalHash: string;
+  reason: MatchEndReason;
+  finalHash: string | null;
+  source: MatchEndSource;
+  reports?: readonly MatchEndReportSummary[];
+  ratingDeltas?: readonly MatchRatingDelta[];
 }>;
 
 export type ServerMessage =

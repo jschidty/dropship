@@ -337,7 +337,9 @@ export type MatchEndReason =
   | "dropShipsLost"
   | "timerPlanets"
   | "timerUnits"
-  | "timerTie";
+  | "timerTie"
+  | "disconnect"
+  | "desync";
 
 export type MatchConfig = Readonly<{
   matchId: string;

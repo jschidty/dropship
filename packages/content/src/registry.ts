@@ -1,6 +1,8 @@
 import {
-  createCaptureDemoConfig,
-  createMinimalSkirmishConfig,
+  createCaptureDemoConfig as createProtocolCaptureDemoConfig,
+  createMinimalSkirmishConfig as createProtocolMinimalSkirmishConfig,
+  type CreateCaptureDemoConfigOptions,
+  type CreateMinimalSkirmishConfigOptions,
   type ShipClassId,
   type Vec3Data,
 } from "@drop-ship/protocol";
@@ -135,6 +137,7 @@ export type PlanetTemplate = Readonly<{
 
 export type ContentRegistry = Readonly<{
   version: number;
+  contentHash: string;
   shipComponents: readonly ShipComponentTemplate[];
   unitTemplates: readonly UnitTemplate[];
   planetTemplates: readonly PlanetTemplate[];
@@ -145,6 +148,16 @@ export type ContentRegistry = Readonly<{
 
 const SHIP_SPEED_MASS_FACTOR = 1.8;
 const SHIP_CRUISE_SPEED_RATIO = 22 / 30;
+
+export const DEFAULT_CONTENT_HASH = createContentHash({
+  shipComponents: shipComponentsData,
+  unitTemplates: [
+    scoutShipTemplateData,
+    dropShipTemplateData,
+    battleshipTemplateData,
+  ],
+  planetTemplates: [billboardPlanetTemplateData],
+});
 
 export const DEFAULT_CONTENT_REGISTRY: ContentRegistry = createContentRegistry({
   shipComponents: shipComponentsData as readonly ShipComponentTemplate[],
@@ -177,6 +190,7 @@ export function createContentRegistry(options: {
 
   return {
     version: CONTENT_VERSION,
+    contentHash: createContentHash(options),
     shipComponents,
     unitTemplates,
     planetTemplates,
@@ -323,4 +337,49 @@ function quantizeStat(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export { createCaptureDemoConfig, createMinimalSkirmishConfig };
+export function createMinimalSkirmishConfig(
+  options: CreateMinimalSkirmishConfigOptions = {}
+) {
+  return createProtocolMinimalSkirmishConfig({
+    ...options,
+    contentHash: options.contentHash ?? DEFAULT_CONTENT_HASH,
+  });
+}
+
+export function createCaptureDemoConfig(
+  options: CreateCaptureDemoConfigOptions = {}
+) {
+  return createProtocolCaptureDemoConfig({
+    ...options,
+    contentHash: options.contentHash ?? DEFAULT_CONTENT_HASH,
+  });
+}
+
+export function createContentHash(value: unknown): string {
+  const stable = stableStringify(value);
+  let hash = 2166136261;
+
+  for (let index = 0; index < stable.length; index += 1) {
+    hash ^= stable.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(object[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}

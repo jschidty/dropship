@@ -28,11 +28,13 @@ import {
 
 export function createNetworkedGame(options: {
   matchId: string;
-  playerId: PlayerId;
+  playerId?: PlayerId;
   serverUrl?: string;
   seed?: number;
+  debugMatchParams?: boolean;
   debugLogs?: boolean;
 }): LocalGameRuntime {
+  let assignedPlayerId = options.playerId ?? 1;
   let world = createWorld({
     config: createCaptureDemoConfig({
       matchId: options.matchId,
@@ -49,7 +51,7 @@ export function createNetworkedGame(options: {
   let status: RuntimeConnectionStatus = {
     mode: "network",
     state: "connecting",
-    playerId: options.playerId,
+    playerId: assignedPlayerId,
     matchId: options.matchId,
     running: false,
   };
@@ -58,7 +60,7 @@ export function createNetworkedGame(options: {
   const debugLog = createNetworkDebugLogger(
     options.debugLogs,
     options.matchId,
-    options.playerId
+    () => assignedPlayerId
   );
   let loggedMatchResultTick: number | null = null;
   let reportedMatchEndTick: number | null = null;
@@ -71,7 +73,9 @@ export function createNetworkedGame(options: {
   });
 
   const runtime: LocalGameRuntime = {
-    playerId: options.playerId,
+    get playerId() {
+      return assignedPlayerId;
+    },
     get world() {
       return world;
     },
@@ -99,20 +103,20 @@ export function createNetworkedGame(options: {
         if (world.tick % 30 === 0) {
           sendClientMessage({
             type: "hash",
-            playerId: options.playerId,
+            playerId: assignedPlayerId,
             tick: world.tick,
             hash: readCachedHash(world, hashCache),
           });
         }
 
-        if (options.playerId === 1 && world.tick % 600 === 0) {
+        if (assignedPlayerId === 1 && world.tick % 600 === 0) {
           debugLog("snapshot:send", {
             tick: world.tick,
             ...summarizeWorld(world),
           });
           sendClientMessage({
             type: "snapshot",
-            playerId: options.playerId,
+            playerId: assignedPlayerId,
             tick: world.tick,
             snapshot: serializeWorld(world),
           });
@@ -131,7 +135,7 @@ export function createNetworkedGame(options: {
       clientSeq += 1;
       sendClientMessage({
         type: "command",
-        playerId: options.playerId,
+        playerId: assignedPlayerId,
         clientSeq,
         localTick: world.tick,
         command: {
@@ -147,7 +151,7 @@ export function createNetworkedGame(options: {
       clientSeq += 1;
       sendClientMessage({
         type: "command",
-        playerId: options.playerId,
+        playerId: assignedPlayerId,
         clientSeq,
         localTick: world.tick,
         command: {
@@ -165,7 +169,7 @@ export function createNetworkedGame(options: {
       clientSeq += 1;
       sendClientMessage({
         type: "command",
-        playerId: options.playerId,
+        playerId: assignedPlayerId,
         clientSeq,
         localTick: world.tick,
         command: {
@@ -218,7 +222,8 @@ export function createNetworkedGame(options: {
       options.matchId,
       options.playerId,
       options.serverUrl,
-      options.seed
+      options.seed,
+      options.debugMatchParams
     );
     debugLog("connection:connecting", {
       url,
@@ -242,7 +247,7 @@ export function createNetworkedGame(options: {
       });
       sendClientMessage({
         type: "ready",
-        playerId: options.playerId,
+        playerId: assignedPlayerId,
       });
       flushOutbox();
     });
@@ -298,6 +303,7 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "matchStart") {
+      assignedPlayerId = message.playerId;
       debugLog("match:start", {
         serverTick: message.serverTick,
         configMatchId: message.config.matchId,
@@ -326,7 +332,7 @@ export function createNetworkedGame(options: {
         });
         sendClientMessage({
           type: "reconnect",
-          playerId: options.playerId,
+          playerId: assignedPlayerId,
           lastTick: world.tick,
         });
       }
@@ -396,9 +402,16 @@ export function createNetworkedGame(options: {
       debugLog("match:end", {
         tick: message.tick,
         winner: message.winner,
+        reason: message.reason,
+        source: message.source,
         finalHash: message.finalHash,
       });
       queuedBatches.clear();
+      world.matchResult = {
+        winner: message.winner,
+        completedTick: message.tick,
+        reason: message.reason,
+      };
       status = {
         ...status,
         running: false,
@@ -556,9 +569,10 @@ export function createNetworkedGame(options: {
     reportedMatchEndTick = result.completedTick;
     sendClientMessage({
       type: "matchEndReport",
-      playerId: options.playerId,
+      playerId: assignedPlayerId,
       tick: result.completedTick,
       winner: result.winner,
+      reason: result.reason,
       finalHash: readCachedHash(world, hashCache),
     });
   }
@@ -566,9 +580,10 @@ export function createNetworkedGame(options: {
 
 function createMatchWebSocketUrl(
   matchId: string,
-  playerId: PlayerId,
+  playerId: PlayerId | undefined,
   serverUrl?: string,
-  seed?: number
+  seed?: number,
+  debugMatchParams = false
 ): string {
   const base =
     serverUrl ??
@@ -577,9 +592,13 @@ function createMatchWebSocketUrl(
     }`;
   const url = new URL(`/api/matches/${encodeURIComponent(matchId)}/ws`, base);
   url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
-  url.searchParams.set("player", playerId.toString());
 
-  if (seed !== undefined) {
+  if (debugMatchParams && playerId !== undefined) {
+    url.searchParams.set("debugSeat", "1");
+    url.searchParams.set("player", playerId.toString());
+  }
+
+  if (debugMatchParams && seed !== undefined) {
     url.searchParams.set("seed", seed.toString());
   }
 
@@ -594,7 +613,7 @@ type NetworkDebugLogger = (
 function createNetworkDebugLogger(
   enabled: boolean | undefined,
   matchId: string,
-  playerId: PlayerId
+  readPlayerId: () => PlayerId
 ): NetworkDebugLogger {
   if (!enabled) {
     return () => {};
@@ -603,7 +622,7 @@ function createNetworkDebugLogger(
   return (event, payload = {}) => {
     console.info("[drop-ship:net]", event, {
       matchId,
-      playerId,
+      playerId: readPlayerId(),
       ...payload,
     });
   };

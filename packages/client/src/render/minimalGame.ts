@@ -277,6 +277,7 @@ export function mountMinimalGame(
           playerId,
           serverUrl: options.serverUrl,
           seed: options.seed,
+          debugMatchParams: options.debugMatchParams,
           debugLogs: options.debugNetworkLogs,
         })
       : createMinimalLocalGame(playerId, {

@@ -71,6 +71,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@drop-ship/content':
+        specifier: workspace:*
+        version: link:../content
       '@drop-ship/protocol':
         specifier: workspace:*
         version: link:../protocol

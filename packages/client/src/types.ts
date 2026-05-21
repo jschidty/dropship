@@ -107,5 +107,6 @@ export type MountMinimalGameOptions = Readonly<{
   seed?: number;
   stressUnits?: number;
   renderMode?: RenderQualityMode;
+  debugMatchParams?: boolean;
   debugNetworkLogs?: boolean;
 }>;

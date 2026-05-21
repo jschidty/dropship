@@ -13,6 +13,11 @@ const serverUrl = params.get("server") ?? undefined;
 const playerId = parsePlayerId(params.get("player") ?? params.get("p"));
 const seed = parseInteger(params.get("seed"));
 const wantsNetwork = params.get("network") === "1";
+const allowsDebugMatchParams =
+  import.meta.env.DEV ||
+  isLocalHostname(window.location.hostname) ||
+  params.get("debugMatch") === "1" ||
+  params.get("debugSeat") === "1";
 const matchId =
   params.get("match") ?? (wantsNetwork && seed !== undefined ? `seed-${seed}` : undefined);
 const stressUnits = parsePositiveInteger(
@@ -33,6 +38,7 @@ mountMinimalGame(app, {
   seed,
   stressUnits,
   renderMode,
+  debugMatchParams: allowsDebugMatchParams,
   debugNetworkLogs,
 });
 

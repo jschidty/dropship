@@ -1,6 +1,7 @@
 import type {
   MatchEndMessage,
   MatchEndReportMessage,
+  MatchEndReportSummary,
   PlayerId,
 } from "@drop-ship/protocol";
 
@@ -13,18 +14,21 @@ export type MatchEndAgreement = MatchEndMessage &
 
 export type MatchEndStore = {
   record: (report: MatchEndReportMessage) => Promise<MatchEndMessage | null>;
+  recordTrusted: (report: MatchEndReportMessage) => Promise<MatchEndMessage>;
+  readFinal: () => Promise<MatchEndMessage | null>;
   readAgreement: () => Promise<MatchEndMessage | null>;
   listReports: () => Promise<readonly MatchEndReport[]>;
 };
 
-const MATCH_END_AGREEMENT_KEY = "matchEnd:agreement";
+const MATCH_END_FINAL_KEY = "matchEnd:final";
+const LEGACY_MATCH_END_AGREEMENT_KEY = "matchEnd:agreement";
 const MATCH_END_REPORT_PREFIX = "matchEndReport:";
 
 export function createMatchEndStore(
   storage?: DurableObjectStorage
 ): MatchEndStore {
   const reportsByPlayer = new Map<PlayerId, MatchEndReport>();
-  let agreement: MatchEndMessage | null = null;
+  let final: MatchEndMessage | null = null;
   let loaded = false;
 
   async function load(): Promise<void> {
@@ -33,8 +37,10 @@ export function createMatchEndStore(
     }
 
     loaded = true;
-    agreement =
-      (await storage?.get<MatchEndMessage>(MATCH_END_AGREEMENT_KEY)) ?? null;
+    final =
+      (await storage?.get<MatchEndMessage>(MATCH_END_FINAL_KEY)) ??
+      (await storage?.get<MatchEndMessage>(LEGACY_MATCH_END_AGREEMENT_KEY)) ??
+      null;
 
     const stored = await storage?.list<MatchEndReport>({
       prefix: MATCH_END_REPORT_PREFIX,
@@ -49,31 +55,44 @@ export function createMatchEndStore(
     async record(report) {
       await load();
 
-      if (agreement) {
-        return agreement;
+      if (final) {
+        return final;
       }
 
       reportsByPlayer.set(report.playerId, report);
       await storage?.put(matchEndReportKey(report.playerId), report);
 
-      const resolved = resolveMatchEndAgreement([...reportsByPlayer.values()]);
+      const resolved = resolveMatchEndFinal([...reportsByPlayer.values()]);
 
       if (!resolved) {
         return null;
       }
 
-      agreement = {
-        type: "matchEnd",
-        tick: resolved.tick,
-        winner: resolved.winner,
-        finalHash: resolved.finalHash,
-      };
-      await storage?.put(MATCH_END_AGREEMENT_KEY, agreement);
-      return agreement;
+      final = resolved;
+      await storage?.put(MATCH_END_FINAL_KEY, final);
+      return final;
+    },
+    async recordTrusted(report) {
+      await load();
+
+      if (final) {
+        return final;
+      }
+
+      reportsByPlayer.set(report.playerId, report);
+      await storage?.put(matchEndReportKey(report.playerId), report);
+
+      final = createMatchEndMessage("trusted", [report]);
+      await storage?.put(MATCH_END_FINAL_KEY, final);
+      return final;
+    },
+    async readFinal() {
+      await load();
+      return final;
     },
     async readAgreement() {
       await load();
-      return agreement;
+      return final?.source === "agreed" ? final : null;
     },
     async listReports() {
       await load();
@@ -94,6 +113,7 @@ export function createMatchEndReport(
     tick: number;
     winner: PlayerId | 0;
     finalHash: string;
+    reason: MatchEndReport["reason"];
   }>
 ): MatchEndReport {
   return {
@@ -101,13 +121,14 @@ export function createMatchEndReport(
     playerId: options.playerId,
     tick: options.tick,
     winner: options.winner,
+    reason: options.reason,
     finalHash: options.finalHash,
   };
 }
 
-export function resolveMatchEndAgreement(
+export function resolveMatchEndFinal(
   reports: readonly MatchEndReport[]
-): MatchEndAgreement | null {
+): MatchEndMessage | null {
   const uniquePlayers = new Set(reports.map((report) => report.playerId));
 
   if (uniquePlayers.size < 2) {
@@ -120,18 +141,77 @@ export function resolveMatchEndAgreement(
     (report) =>
       report.tick === first.tick &&
       report.winner === first.winner &&
+      report.reason === first.reason &&
       report.finalHash === first.finalHash
   );
 
-  if (!agreed) {
+  return createMatchEndMessage(agreed ? "agreed" : "conflict", orderedReports);
+}
+
+export function resolveMatchEndAgreement(
+  reports: readonly MatchEndReport[]
+): MatchEndAgreement | null {
+  const final = resolveMatchEndFinal(reports);
+
+  if (!final || final.source !== "agreed" || !final.reports) {
     return null;
+  }
+
+  return {
+    ...final,
+    reports: final.reports.map(reportSummaryToReport),
+  };
+}
+
+function createMatchEndMessage(
+  source: MatchEndMessage["source"],
+  reports: readonly MatchEndReport[]
+): MatchEndMessage {
+  const orderedReports = reports.slice().sort((a, b) => a.playerId - b.playerId);
+  const [first] = orderedReports;
+
+  if (!first) {
+    throw new Error("Cannot create match end without reports");
+  }
+
+  const summary = orderedReports.map(reportToSummary);
+
+  if (source === "conflict") {
+    return {
+      type: "matchEnd",
+      tick: Math.max(...orderedReports.map((report) => report.tick)),
+      winner: 0,
+      reason: "desync",
+      finalHash: null,
+      source,
+      reports: summary,
+    };
   }
 
   return {
     type: "matchEnd",
     tick: first.tick,
     winner: first.winner,
+    reason: first.reason,
     finalHash: first.finalHash,
-    reports: orderedReports,
+    source,
+    reports: summary,
+  };
+}
+
+function reportToSummary(report: MatchEndReport): MatchEndReportSummary {
+  return {
+    playerId: report.playerId,
+    tick: report.tick,
+    winner: report.winner,
+    reason: report.reason,
+    finalHash: report.finalHash,
+  };
+}
+
+function reportSummaryToReport(summary: MatchEndReportSummary): MatchEndReport {
+  return {
+    type: "matchEndReport",
+    ...summary,
   };
 }

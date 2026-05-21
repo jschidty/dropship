@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createScriptedNpcController } from "../packages/controllers/src/index";
 import {
+  DEFAULT_CONTENT_HASH,
   DEFAULT_CONTENT_REGISTRY,
   SHIP_COMPONENT_IDS,
   TEMPLATE_IDS,
@@ -53,6 +54,7 @@ import type { UnitViewModel } from "../packages/client/src/index";
 await testCommandSchedulingAndCatchup();
 await testStoredMatchConfigPersistsResolvedConfig();
 await testMatchEndAgreementPersistsAndBroadcasts();
+await testMatchEndConflictAndTrustedFinalization();
 await testSnapshotStoreDeletesPrunedRows();
 testDefaultContentRegistryLoadsRawTemplates();
 testDeterministicMathReferenceValues();
@@ -182,6 +184,7 @@ async function testMatchEndAgreementPersistsAndBroadcasts(): Promise<void> {
     playerId: 1 as const,
     tick: 42,
     winner: 1 as const,
+    reason: "timerUnits" as const,
     finalHash: "abcd1234",
   };
   const secondReport = {
@@ -194,21 +197,122 @@ async function testMatchEndAgreementPersistsAndBroadcasts(): Promise<void> {
     type: "matchEnd",
     tick: 42,
     winner: 1,
+    reason: "timerUnits",
     finalHash: "abcd1234",
+    source: "agreed",
+    reports: [
+      {
+        playerId: 1,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+      {
+        playerId: 2,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+    ],
   });
 
   const reloadedStore = createMatchEndStore(storage);
 
-  assert.deepEqual(await reloadedStore.readAgreement(), {
+  assert.deepEqual(await reloadedStore.readFinal(), {
     type: "matchEnd",
     tick: 42,
     winner: 1,
+    reason: "timerUnits",
     finalHash: "abcd1234",
+    source: "agreed",
+    reports: [
+      {
+        playerId: 1,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+      {
+        playerId: 2,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+    ],
   });
   assert.deepEqual(await reloadedStore.listReports(), [
     firstReport,
     secondReport,
   ]);
+}
+
+async function testMatchEndConflictAndTrustedFinalization(): Promise<void> {
+  const conflictStore = createMatchEndStore(createMemoryStorage());
+  const firstReport = {
+    type: "matchEndReport" as const,
+    playerId: 1 as const,
+    tick: 42,
+    winner: 1 as const,
+    reason: "timerUnits" as const,
+    finalHash: "abcd1234",
+  };
+  const conflictingReport = {
+    ...firstReport,
+    playerId: 2 as const,
+    winner: 2 as const,
+    reason: "timerPlanets" as const,
+    finalHash: "ffff0000",
+  };
+
+  assert.equal(await conflictStore.record(firstReport), null);
+  assert.deepEqual(await conflictStore.record(conflictingReport), {
+    type: "matchEnd",
+    tick: 42,
+    winner: 0,
+    reason: "desync",
+    finalHash: null,
+    source: "conflict",
+    reports: [
+      {
+        playerId: 1,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+      {
+        playerId: 2,
+        tick: 42,
+        winner: 2,
+        reason: "timerPlanets",
+        finalHash: "ffff0000",
+      },
+    ],
+  });
+
+  const trustedStore = createMatchEndStore(createMemoryStorage());
+
+  assert.deepEqual(await trustedStore.recordTrusted(firstReport), {
+    type: "matchEnd",
+    tick: 42,
+    winner: 1,
+    reason: "timerUnits",
+    finalHash: "abcd1234",
+    source: "trusted",
+    reports: [
+      {
+        playerId: 1,
+        tick: 42,
+        winner: 1,
+        reason: "timerUnits",
+        finalHash: "abcd1234",
+      },
+    ],
+  });
 }
 
 async function testSnapshotStoreDeletesPrunedRows(): Promise<void> {
@@ -258,6 +362,7 @@ function testDefaultContentRegistryLoadsRawTemplates(): void {
   );
 
   assert.equal(validation.ok, true, validation.errors.join("\n"));
+  assert.equal(DEFAULT_CONTENT_REGISTRY.contentHash, DEFAULT_CONTENT_HASH);
   assert.equal(fighter.slug, "scout-ship");
   assert.equal(dropShip.slug, "drop-ship");
   assert.equal(battleship.slug, "battleship");

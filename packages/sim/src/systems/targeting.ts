@@ -1,7 +1,6 @@
 import type { UnitWeaponProfile } from "../shipStats";
 import {
   findUnitByHandle,
-  getUnitsInStableOrder,
   type SimUnit,
   type SimWorld,
 } from "../world";
@@ -9,7 +8,7 @@ import { distanceSquared } from "../movement";
 import { sameHandle } from "@drop-ship/protocol";
 
 export function findNearestEnemy(
-  world: SimWorld,
+  units: readonly SimUnit[],
   unit: SimUnit,
   maxRange: number
 ): SimUnit | null {
@@ -17,7 +16,7 @@ export function findNearestEnemy(
   let best: SimUnit | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
 
-  for (const candidate of getUnitsInStableOrder(world)) {
+  for (const candidate of units) {
     if (
       candidate.owner === unit.owner ||
       candidate.health.current <= 0 ||
@@ -41,6 +40,7 @@ export function findNearestEnemy(
 
 export function findWeaponTarget(
   world: SimWorld,
+  units: readonly SimUnit[],
   unit: SimUnit,
   weapon: UnitWeaponProfile
 ): SimUnit | null {
@@ -56,7 +56,7 @@ export function findWeaponTarget(
     return orderedTarget;
   }
 
-  return findNearestEnemy(world, unit, weapon.range);
+  return findNearestEnemy(units, unit, weapon.range);
 }
 
 function readOrderedAttackTarget(world: SimWorld, unit: SimUnit): SimUnit | null {

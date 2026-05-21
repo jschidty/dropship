@@ -9,14 +9,15 @@ export const CombatSystem: SimSystem = {
   name: "CombatSystem",
   run(world, tick) {
     const weaponProfiles = new Map<number | string, UnitWeaponProfile>();
+    const units = getUnitsInStableOrder(world);
 
-    for (const unit of getUnitsInStableOrder(world)) {
+    for (const unit of units) {
       if (unit.weaponCooldownTicks > 0) {
         unit.weaponCooldownTicks -= 1;
       }
     }
 
-    for (const unit of getUnitsInStableOrder(world)) {
+    for (const unit of units) {
       if (unit.health.current <= 0 || unit.weaponCooldownTicks > 0) {
         continue;
       }
@@ -27,7 +28,7 @@ export const CombatSystem: SimSystem = {
         continue;
       }
 
-      const target = findWeaponTarget(world, unit, weapon);
+      const target = findWeaponTarget(world, units, unit, weapon);
 
       if (!target) {
         continue;

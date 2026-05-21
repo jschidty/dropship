@@ -12,6 +12,7 @@ import {
   type HashMessage,
   type MatchConfig,
   type MatchEndMessage,
+  type MatchSessionRole,
   type PlayerId,
   type ServerMessage,
   type SnapshotMessage,
@@ -32,13 +33,25 @@ import { createMatchEndStore, type MatchEndStore } from "./matchEnd";
 import { createTickLoop, type TickLoop } from "./tickLoop";
 
 const CURRENT_TICK_KEY = "match:currentTick";
+const CREATOR_TOKEN_KEY = "match:creatorToken";
 const INTERNAL_PLAYER_ID_HEADER = "x-drop-ship-player-id";
+const INTERNAL_CREATOR_TOKEN_HEADER = "x-drop-ship-creator-token";
 
 type MatchSession = {
   id: string;
+  seat: PlayerId | null;
   playerId: PlayerId;
+  role: MatchSessionRole;
+  canControl: boolean;
   socket: WebSocket;
 };
+
+type MatchSessionAssignment = Readonly<{
+  seat: PlayerId | null;
+  playerId: PlayerId;
+  role: MatchSessionRole;
+  canControl: boolean;
+}>;
 
 export type MatchCoordinator = Readonly<{
   commandBuffer: CommandBuffer;
@@ -148,6 +161,10 @@ export class MatchDurableObject {
       return this.connect(request, url, coordinator);
     }
 
+    if (request.method === "POST") {
+      return this.initializeMatch(request, coordinator);
+    }
+
     return Response.json(this.readStatus(coordinator));
   }
 
@@ -189,24 +206,14 @@ export class MatchDurableObject {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
 
-    const playerId = resolveConnectionPlayerId(request, url);
-
-    if (!playerId) {
-      return Response.json(
-        {
-          error: "invalid-player",
-          expected: PHASE_ONE_PLAYER_IDS,
-        },
-        { status: 400 }
-      );
-    }
+    const assignment = await this.assignSession(request, url);
 
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     const session: MatchSession = {
       id: `${Date.now().toString(36)}-${this.nextSessionId}`,
-      playerId,
+      ...assignment,
       socket: server,
     };
 
@@ -216,7 +223,9 @@ export class MatchDurableObject {
     const config = await this.getMatchConfig(url);
     this.send(session, {
       type: "matchStart",
-      playerId,
+      playerId: assignment.playerId,
+      role: assignment.role,
+      canControl: assignment.canControl,
       serverTick: coordinator.tickLoop.currentTick(),
       config,
     });
@@ -285,9 +294,13 @@ export class MatchDurableObject {
 
     try {
       const coordinator = await this.getCoordinator();
+      if (!canSessionSendMessage(session, message)) {
+        return;
+      }
+
       const sessionMessage = {
         ...message,
-        playerId: session.playerId,
+        playerId: session.seat ?? session.playerId,
       };
       result =
         sessionMessage.type === "matchEndReport" &&
@@ -403,6 +416,7 @@ export class MatchDurableObject {
         playerId,
         connected: this.hasConnectedPlayer(playerId),
       })),
+      spectatorCount: this.countSpectators(),
     };
   }
 
@@ -410,11 +424,17 @@ export class MatchDurableObject {
   private hasConnectedPlayer(playerId: PlayerId): boolean;
   private hasConnectedPlayer(playerId?: PlayerId): boolean {
     if (playerId === undefined) {
-      return this.sessions.size > 0;
+      for (const session of this.sessions.values()) {
+        if (session.seat !== null) {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     for (const session of this.sessions.values()) {
-      if (session.playerId === playerId) {
+      if (session.seat === playerId) {
         return true;
       }
     }
@@ -426,6 +446,29 @@ export class MatchDurableObject {
     return PHASE_ONE_PLAYER_IDS.every((playerId) =>
       this.hasConnectedPlayer(playerId)
     );
+  }
+
+  private async assignSession(
+    request: Request,
+    url: URL
+  ): Promise<MatchSessionAssignment> {
+    return assignMatchSession({
+      requestedPlayerId: resolveConnectionPlayerId(request, url),
+      creatorToken: url.searchParams.get("creatorToken"),
+      storedCreatorToken: await this.readCreatorToken(),
+      connectedPlayerIds: this.connectedPlayerIds(),
+    });
+  }
+
+  private connectedPlayerIds(): readonly PlayerId[] {
+    return [...this.sessions.values()]
+      .map((session) => session.seat)
+      .filter((seat): seat is PlayerId => seat !== null);
+  }
+
+  private countSpectators(): number {
+    return [...this.sessions.values()].filter((session) => !session.canControl)
+      .length;
   }
 
   private shouldTrustSingleMatchEndReport(): boolean {
@@ -483,7 +526,9 @@ export class MatchDurableObject {
 
     const coordinator = await this.getCoordinator();
     const connectedPlayerIds = new Set(
-      [...this.sessions.values()].map((session) => session.playerId)
+      [...this.sessions.values()]
+        .filter((session) => session.seat !== null)
+        .map((session) => session.seat as PlayerId)
     );
     const trustedReport = (await coordinator.matchEndStore.listReports()).find(
       (report) => connectedPlayerIds.has(report.playerId)
@@ -515,14 +560,40 @@ export class MatchDurableObject {
       sessions: [...this.sessions.values()]
         .map((session) => ({
           id: session.id,
-          playerId: session.playerId,
+          playerId: session.seat,
+          role: session.role,
+          canControl: session.canControl,
         }))
         .sort((a, b) =>
-          a.playerId === b.playerId
+          (a.playerId ?? 99) === (b.playerId ?? 99)
             ? a.id.localeCompare(b.id)
-            : a.playerId - b.playerId
+            : (a.playerId ?? 99) - (b.playerId ?? 99)
         ),
     };
+  }
+
+  private async initializeMatch(
+    request: Request,
+    coordinator: MatchCoordinator
+  ): Promise<Response> {
+    const creatorToken = request.headers.get(INTERNAL_CREATOR_TOKEN_HEADER);
+
+    if (creatorToken) {
+      await this.state?.storage.put(CREATOR_TOKEN_KEY, creatorToken);
+    }
+
+    const config = await this.getMatchConfig(new URL(request.url));
+
+    return Response.json({
+      status: "match-do",
+      matchId: config.matchId,
+      tick: coordinator.tickLoop.currentTick(),
+      initialized: true,
+    });
+  }
+
+  private async readCreatorToken(): Promise<string | null> {
+    return (await this.state?.storage.get<string>(CREATOR_TOKEN_KEY)) ?? null;
   }
 }
 
@@ -558,6 +629,74 @@ async function createCatchupMessage(
   };
 }
 
+function createPlayerAssignment(playerId: PlayerId): MatchSessionAssignment {
+  return {
+    seat: playerId,
+    playerId,
+    role: playerId === 2 ? "player2" : "player1",
+    canControl: true,
+  };
+}
+
+export function assignMatchSession(options: {
+  requestedPlayerId?: PlayerId | null;
+  creatorToken?: string | null;
+  storedCreatorToken?: string | null;
+  connectedPlayerIds?: readonly PlayerId[];
+}): MatchSessionAssignment {
+  const connectedPlayerIds = options.connectedPlayerIds ?? [];
+
+  if (options.requestedPlayerId) {
+    return !connectedPlayerIds.includes(options.requestedPlayerId)
+      ? createPlayerAssignment(options.requestedPlayerId)
+      : createSpectatorAssignment();
+  }
+
+  const storedCreatorToken = options.storedCreatorToken;
+  const isCreator =
+    Boolean(options.creatorToken) && options.creatorToken === storedCreatorToken;
+
+  if (isCreator) {
+    return !connectedPlayerIds.includes(1)
+      ? createPlayerAssignment(1)
+      : createSpectatorAssignment();
+  }
+
+  if (storedCreatorToken) {
+    return !connectedPlayerIds.includes(2)
+      ? createPlayerAssignment(2)
+      : createSpectatorAssignment();
+  }
+
+  const availableSeat = PHASE_ONE_PLAYER_IDS.find(
+    (playerId) => !connectedPlayerIds.includes(playerId)
+  );
+
+  return availableSeat
+    ? createPlayerAssignment(availableSeat)
+    : createSpectatorAssignment();
+}
+
+function createSpectatorAssignment(): MatchSessionAssignment {
+  return {
+    seat: null,
+    playerId: 1,
+    role: "spectator",
+    canControl: false,
+  };
+}
+
+function canSessionSendMessage(
+  session: MatchSession,
+  message: ClientMessage
+): boolean {
+  if (message.type === "ready" || message.type === "reconnect") {
+    return true;
+  }
+
+  return session.canControl && session.seat !== null;
+}
+
 function parsePlayerId(value: string | null): PlayerId | null {
   const parsed = Number(value);
 
@@ -584,12 +723,7 @@ function resolveConnectionPlayerId(
 }
 
 function allowsDebugSeat(url: URL): boolean {
-  return (
-    url.searchParams.get("debugSeat") === "1" ||
-    url.hostname === "localhost" ||
-    url.hostname === "127.0.0.1" ||
-    url.hostname === "::1"
-  );
+  return url.searchParams.get("debugSeat") === "1";
 }
 
 function parseSeed(value: string | null): number | undefined {

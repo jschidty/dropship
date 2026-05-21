@@ -122,6 +122,8 @@ export function createMinimalLocalGame(
         mode: "local",
         state: "local",
         playerId,
+        role: playerId === 2 ? "player2" : "player1",
+        canControl: true,
       };
     },
     dispose() {

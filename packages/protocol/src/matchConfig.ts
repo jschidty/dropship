@@ -292,8 +292,8 @@ export const DEFAULT_SIM_TUNING: SimTuningConfig = {
   boids: {
     neighborRadiusWorldUnits: 34,
     separationRadiusWorldUnits: 8,
-    alignmentWeight: 0.34,
-    cohesionWeight: 0.22,
+    alignmentWeight: 0.17,
+    cohesionWeight: 0.11,
     separationWeight: 0.9,
   },
   escort: {

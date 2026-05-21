@@ -8,6 +8,7 @@ import {
   type CommandBatch,
   type CompactSimSnapshot,
   type MatchConfig,
+  type MatchSessionRole,
   type PlayerId,
   type ServerMessage,
 } from "@drop-ship/protocol";
@@ -33,8 +34,13 @@ export function createNetworkedGame(options: {
   seed?: number;
   debugMatchParams?: boolean;
   debugLogs?: boolean;
+  creatorToken?: string;
 }): LocalGameRuntime {
   let assignedPlayerId = options.playerId ?? 1;
+  let assignedRole: MatchSessionRole = options.creatorToken
+    ? "player1"
+    : "spectator";
+  let canControl = false;
   let world = createWorld({
     config: createCaptureDemoConfig({
       matchId: options.matchId,
@@ -52,6 +58,8 @@ export function createNetworkedGame(options: {
     mode: "network",
     state: "connecting",
     playerId: assignedPlayerId,
+    role: assignedRole,
+    canControl,
     matchId: options.matchId,
     running: false,
   };
@@ -100,7 +108,7 @@ export function createNetworkedGame(options: {
         processed += 1;
         logMatchResult();
 
-        if (world.tick % 30 === 0) {
+        if (canControl && world.tick % 30 === 0) {
           sendClientMessage({
             type: "hash",
             playerId: assignedPlayerId,
@@ -109,7 +117,7 @@ export function createNetworkedGame(options: {
           });
         }
 
-        if (assignedPlayerId === 1 && world.tick % 600 === 0) {
+        if (canControl && assignedPlayerId === 1 && world.tick % 600 === 0) {
           debugLog("snapshot:send", {
             tick: world.tick,
             ...summarizeWorld(world),
@@ -128,7 +136,7 @@ export function createNetworkedGame(options: {
       }
     },
     enqueueRandomTurn() {
-      if (world.matchResult) {
+      if (world.matchResult || !canControl) {
         return;
       }
 
@@ -144,7 +152,7 @@ export function createNetworkedGame(options: {
       });
     },
     enqueueMoveUnits(unitHandles, target) {
-      if (world.matchResult || unitHandles.length === 0) {
+      if (world.matchResult || !canControl || unitHandles.length === 0) {
         return;
       }
 
@@ -162,7 +170,7 @@ export function createNetworkedGame(options: {
       });
     },
     enqueueUnitOrder(unitHandles, order) {
-      if (world.matchResult || unitHandles.length === 0) {
+      if (world.matchResult || !canControl || unitHandles.length === 0) {
         return;
       }
 
@@ -220,10 +228,10 @@ export function createNetworkedGame(options: {
   function connect(): void {
     const url = createMatchWebSocketUrl(
       options.matchId,
-      options.playerId,
       options.serverUrl,
       options.seed,
-      options.debugMatchParams
+      options.debugMatchParams,
+      options.creatorToken
     );
     debugLog("connection:connecting", {
       url,
@@ -304,8 +312,12 @@ export function createNetworkedGame(options: {
 
     if (message.type === "matchStart") {
       assignedPlayerId = message.playerId;
+      assignedRole = message.role ?? readRoleForPlayerId(message.playerId);
+      canControl = message.canControl ?? assignedRole !== "spectator";
       debugLog("match:start", {
         serverTick: message.serverTick,
+        role: assignedRole,
+        canControl,
         configMatchId: message.config.matchId,
         gameMode: message.config.gameMode ?? null,
         initialUnits: message.config.initialUnits.length,
@@ -322,6 +334,8 @@ export function createNetworkedGame(options: {
       status = {
         ...status,
         playerId: message.playerId,
+        role: assignedRole,
+        canControl,
         serverTick: message.serverTick,
       };
 
@@ -369,6 +383,7 @@ export function createNetworkedGame(options: {
         serverTick: message.serverTick,
         running: message.running,
         players: message.players,
+        spectatorCount: message.spectatorCount,
       };
       return;
     }
@@ -562,6 +577,10 @@ export function createNetworkedGame(options: {
   }
 
   function reportMatchEnd(result: NonNullable<typeof world.matchResult>): void {
+    if (!canControl) {
+      return;
+    }
+
     if (reportedMatchEndTick === result.completedTick) {
       return;
     }
@@ -580,10 +599,10 @@ export function createNetworkedGame(options: {
 
 function createMatchWebSocketUrl(
   matchId: string,
-  playerId: PlayerId | undefined,
   serverUrl?: string,
   seed?: number,
-  debugMatchParams = false
+  debugMatchParams = false,
+  creatorToken?: string
 ): string {
   const base =
     serverUrl ??
@@ -593,13 +612,12 @@ function createMatchWebSocketUrl(
   const url = new URL(`/api/matches/${encodeURIComponent(matchId)}/ws`, base);
   url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
 
-  if (debugMatchParams && playerId !== undefined) {
-    url.searchParams.set("debugSeat", "1");
-    url.searchParams.set("player", playerId.toString());
-  }
-
   if (debugMatchParams && seed !== undefined) {
     url.searchParams.set("seed", seed.toString());
+  }
+
+  if (creatorToken) {
+    url.searchParams.set("creatorToken", creatorToken);
   }
 
   return url.toString();
@@ -661,8 +679,13 @@ function createConnectionStatusLogKey(
 ): string {
   return [
     message.running ? "running" : "paused",
+    `spectators:${message.spectatorCount ?? 0}`,
     ...message.players.map(
       (player) => `${player.playerId}:${player.connected ? "1" : "0"}`
     ),
   ].join("|");
+}
+
+function readRoleForPlayerId(playerId: PlayerId): MatchSessionRole {
+  return playerId === 2 ? "player2" : "player1";
 }

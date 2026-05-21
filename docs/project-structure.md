@@ -47,6 +47,7 @@ drop-ship/
 |   |-- snapshots/
 |   `-- e2e/
 `-- docs/
+    |-- accounts-lobby-matchmaking.md
     |-- art-direction.md
     |-- cloudflare-architecture.md
     |-- command-hierarchy.md

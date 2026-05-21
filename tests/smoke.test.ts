@@ -23,10 +23,12 @@ import {
 } from "../packages/protocol/src/index";
 import {
   SNAPSHOT_WARN_BYTES,
+  assignMatchSession,
   createCommandLogStore,
   createMatchCoordinator,
   createMatchEndStore,
   createSnapshotStore,
+  handleRequest,
   readOrCreateStoredMatchConfig,
 } from "../packages/server/src/index";
 import {
@@ -52,6 +54,9 @@ import { selectMoveOrderUnits } from "../packages/client/src/selection/commands"
 import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
+await testWorkerCreatesGameId();
+await testWorkerFallsBackToAppShellForPlayRoutes();
+testMatchSessionRoleAssignment();
 await testStoredMatchConfigPersistsResolvedConfig();
 await testMatchEndAgreementPersistsAndBroadcasts();
 await testMatchEndConflictAndTrustedFinalization();
@@ -80,6 +85,7 @@ testDropShipEliminationEndsMatch();
 testTimerPlanetCountWinner();
 testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
+testLocalRuntimeKeepsFiniteViewModels();
 testLocalRuntimeUsesScriptedNpcController();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
@@ -151,6 +157,183 @@ async function testCommandSchedulingAndCatchup(): Promise<void> {
   assert.equal(catchup.serverTick, 3);
   assert.equal(catchup.commands.length, 1);
   assert.equal(catchup.commands[0].tick, 2);
+}
+
+async function testWorkerCreatesGameId(): Promise<void> {
+  const routedGameIds: string[] = [];
+  const fetchedPaths: string[] = [];
+  const creatorTokens: string[] = [];
+  const env = {
+    MATCHES: {
+      idFromName(gameId: string) {
+        routedGameIds.push(gameId);
+        return gameId;
+      },
+      get(id: DurableObjectId) {
+        return {
+          async fetch(request: Request) {
+            fetchedPaths.push(new URL(request.url).pathname);
+            creatorTokens.push(
+              request.headers.get("x-drop-ship-creator-token") ?? ""
+            );
+            return Response.json({
+              id,
+            });
+          },
+        };
+      },
+    },
+  };
+
+  const response = await handleRequest(
+    new Request("https://drop.test/api/matches", {
+      method: "POST",
+    }),
+    env
+  );
+  const payload = (await response.json()) as {
+    gameId: string;
+    matchId: string;
+    creatorToken: string;
+  };
+
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  assert.match(payload.gameId, /^game-/);
+  assert.match(payload.creatorToken, /^game-/);
+  assert.equal(payload.matchId, payload.gameId);
+  assert.notEqual(payload.creatorToken, payload.gameId);
+  assert.deepEqual(routedGameIds, [payload.gameId]);
+  assert.deepEqual(fetchedPaths, [`/api/matches/${payload.gameId}`]);
+  assert.deepEqual(creatorTokens, [payload.creatorToken]);
+
+  const optionsResponse = await handleRequest(
+    new Request("https://drop.test/api/matches", {
+      method: "OPTIONS",
+    }),
+    env
+  );
+
+  assert.equal(optionsResponse.status, 204);
+}
+
+async function testWorkerFallsBackToAppShellForPlayRoutes(): Promise<void> {
+  const fetchedPaths: string[] = [];
+  const env = {
+    MATCHES: {
+      idFromName(gameId: string) {
+        return gameId;
+      },
+      get(id: DurableObjectId) {
+        return {
+          async fetch() {
+            return Response.json({ id });
+          },
+        };
+      },
+    },
+    ASSETS: {
+      async fetch(request: Request) {
+        const pathname = new URL(request.url).pathname;
+        fetchedPaths.push(pathname);
+
+        return pathname === "/"
+          ? new Response("<!doctype html>", {
+              status: 200,
+              headers: {
+                "content-type": "text/html",
+              },
+            })
+          : new Response("not found", { status: 404 });
+      },
+    },
+  };
+
+  const response = await handleRequest(
+    new Request("https://drop.test/play/game-abc"),
+    env
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "text/html");
+  assert.deepEqual(fetchedPaths, ["/play/game-abc", "/"]);
+}
+
+function testMatchSessionRoleAssignment(): void {
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      creatorToken: "creator",
+      connectedPlayerIds: [],
+    }),
+    {
+      seat: 1,
+      playerId: 1,
+      role: "player1",
+      canControl: true,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      connectedPlayerIds: [],
+    }),
+    {
+      seat: 2,
+      playerId: 2,
+      role: "player2",
+      canControl: true,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: 2,
+      playerId: 2,
+      role: "player2",
+      canControl: true,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      connectedPlayerIds: [1, 2],
+    }),
+    {
+      seat: null,
+      playerId: 1,
+      role: "spectator",
+      canControl: false,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      creatorToken: "creator",
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: null,
+      playerId: 1,
+      role: "spectator",
+      canControl: false,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      requestedPlayerId: 1,
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: null,
+      playerId: 1,
+      role: "spectator",
+      canControl: false,
+    }
+  );
 }
 
 async function testStoredMatchConfigPersistsResolvedConfig(): Promise<void> {
@@ -374,6 +557,7 @@ function testDefaultContentRegistryLoadsRawTemplates(): void {
 function testDeterministicMathReferenceValues(): void {
   assert.equal(deterministicSin(0), 0);
   assert.equal(deterministicSin(Math.PI / 2), 1);
+  assert.equal(deterministicSin(-2.7755575615628914e-17), 0);
   assert.equal(deterministicCos(0), 1);
   assert.equal(deterministicAtan2(1, 0), Math.PI / 2);
   assert.equal(deterministicSqrt(9), 3);
@@ -527,7 +711,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "00e7d513");
+  assert.equal(first, "154e0260");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -541,11 +725,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "00e7d513");
+  assert.equal(result.finalHash, "154e0260");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "00e7d513",
+      hash: "154e0260",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -1384,6 +1568,36 @@ function testLocalRuntimeStopsAfterMatchEnd(): void {
 
   assert.equal(runtime.world.tick, completedTick);
   runtime.dispose();
+}
+
+function testLocalRuntimeKeepsFiniteViewModels(): void {
+  const runtime = createMinimalLocalGame(1, { seed: 1337 });
+
+  try {
+    for (let step = 0; step < PHASE_ONE_SIM_HZ * 40; step += 1) {
+      runtime.stepTick();
+
+      for (const unit of runtime.readUnits()) {
+        assertFiniteVec3(
+          unit.position,
+          `tick ${runtime.world.tick} unit ${unit.key} position`
+        );
+        assertFiniteVec3(
+          unit.prevPosition,
+          `tick ${runtime.world.tick} unit ${unit.key} previous position`
+        );
+      }
+
+      for (const planet of runtime.readPlanets()) {
+        assertFiniteVec3(
+          planet.position,
+          `tick ${runtime.world.tick} planet ${planet.key} position`
+        );
+      }
+    }
+  } finally {
+    runtime.dispose();
+  }
 }
 
 function testLocalRuntimeUsesScriptedNpcController(): void {
@@ -2238,6 +2452,15 @@ function createMemoryStorage(): DurableObjectStorage {
       return new Map(entries) as Map<string, T>;
     },
   };
+}
+
+function assertFiniteVec3(
+  value: Readonly<{ x: number; y: number; z: number }>,
+  label: string
+): void {
+  assert.ok(Number.isFinite(value.x), `${label}.x must be finite`);
+  assert.ok(Number.isFinite(value.y), `${label}.y must be finite`);
+  assert.ok(Number.isFinite(value.z), `${label}.z must be finite`);
 }
 
 function distance(

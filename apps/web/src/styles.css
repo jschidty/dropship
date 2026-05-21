@@ -25,41 +25,61 @@ canvas {
 
 #app {
   position: relative;
+  overflow: hidden;
+  contain: strict;
+  isolation: isolate;
+}
+
+.game-route {
+  position: absolute;
+  inset: 0;
 }
 
 .game-ui-root {
   position: absolute;
   inset: 0;
+  contain: layout paint style;
   pointer-events: none;
 }
 
 .game-canvas {
   position: absolute;
   inset: 0;
+  contain: strict;
   touch-action: none;
 }
 
-.game-stats {
+.player-role-badge {
   position: absolute;
-  right: 14px;
   bottom: 10px;
   left: 14px;
-  z-index: 3;
+  z-index: 4;
+  min-width: 72px;
   border: 1px solid rgb(252 61 33 / 72%);
-  border-radius: 0;
-  background: rgb(5 8 18 / 58%);
-  color: rgb(252 61 33 / 86%);
+  background: rgb(5 8 18 / 68%);
+  color: rgb(252 61 33 / 92%);
   font-family: monospace;
-  font-size: 11px;
-  line-height: 1.2;
-  letter-spacing: 0;
-  pointer-events: none;
+  font-size: 12px;
+  line-height: 1;
   padding: 7px 9px;
+  pointer-events: none;
   text-align: center;
+  text-transform: uppercase;
 }
 
-.game-stats[hidden] {
-  display: none;
+.player-role-badge[data-role="player1"] {
+  border-color: rgb(116 217 255 / 72%);
+  color: rgb(116 217 255 / 96%);
+}
+
+.player-role-badge[data-role="player2"] {
+  border-color: rgb(255 79 216 / 72%);
+  color: rgb(255 79 216 / 96%);
+}
+
+.player-role-badge[data-role="spectator"] {
+  border-color: rgb(214 218 232 / 58%);
+  color: rgb(214 218 232 / 88%);
 }
 
 .camera-presets {
@@ -75,8 +95,6 @@ canvas {
 
 .camera-preset-button,
 .tactical-toggle,
-.debug-toggle-button,
-.random-seed-button,
 .render-mode-button {
   display: inline-flex;
   align-items: center;
@@ -98,9 +116,6 @@ canvas {
 .camera-preset-button.is-active,
 .tactical-toggle:hover,
 .tactical-toggle:has(input:checked),
-.debug-toggle-button:hover,
-.debug-toggle-button[aria-pressed="true"],
-.random-seed-button:hover,
 .render-mode-button:hover,
 .render-mode-button[aria-pressed="true"] {
   border-color: rgb(252 61 33 / 100%);
@@ -110,14 +125,13 @@ canvas {
 
 .camera-preset-button:focus-visible,
 .tactical-toggle:focus-within,
-.debug-toggle-button:focus-visible,
-.random-seed-button:focus-visible,
 .render-mode-button:focus-visible,
 .command-menu-unit-select:focus-visible,
 .command-menu-unit-remove:focus-visible,
 .command-menu-history-entry:focus-visible,
 .command-menu-command:focus-visible,
-.command-menu-panel-summary:focus-visible {
+.command-menu-panel-summary:focus-visible,
+.hotkeys-dialog-two-player:focus-visible {
   outline: 1px solid rgb(252 61 33 / 100%);
   outline-offset: 2px;
 }
@@ -209,11 +223,6 @@ canvas {
 .tactical-toggle {
   gap: 7px;
   padding: 0 10px 0 8px;
-}
-
-.random-seed-button {
-  min-width: 92px;
-  padding: 0 10px;
 }
 
 .render-mode-button {
@@ -655,6 +664,17 @@ canvas {
   margin: 0;
 }
 
+.hotkeys-dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.hotkeys-dialog-actions[data-has-two-player="false"] {
+  grid-template-columns: 1fr;
+}
+
+.hotkeys-dialog-two-player,
 .hotkeys-dialog-close {
   width: 100%;
   min-height: 28px;
@@ -666,11 +686,33 @@ canvas {
   cursor: pointer;
 }
 
+.hotkeys-dialog-two-player:hover:not(:disabled),
+.hotkeys-dialog-two-player:focus-visible,
 .hotkeys-dialog-close:hover,
 .hotkeys-dialog-close:focus-visible {
   border-color: rgb(252 61 33 / 100%);
   background: rgb(252 61 33 / 20%);
   outline: 0;
+}
+
+.hotkeys-dialog-two-player:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.hotkeys-dialog-message {
+  margin-top: 9px;
+  color: rgb(239 248 255 / 78%);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.hotkeys-dialog-message[data-state="error"] {
+  color: rgb(255 106 72 / 92%);
+}
+
+.hotkeys-dialog-message[hidden] {
+  display: none;
 }
 
 @media (max-width: 720px) {

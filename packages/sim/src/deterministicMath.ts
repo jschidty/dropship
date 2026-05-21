@@ -14,8 +14,11 @@ const SIN_TABLE = decodeSineTable(SIN_TABLE_BASE64);
 
 export function deterministicSin(angleRadians: number): number {
   const tablePosition = normalizeRadians(angleRadians) * (SIN_TABLE_SIZE / SIM_TAU);
-  const lowerIndex = deterministicFloor(tablePosition);
-  const fraction = tablePosition - lowerIndex;
+  const lowerIndex = Math.min(
+    deterministicFloor(tablePosition),
+    SIN_TABLE_SIZE - 1
+  );
+  const fraction = clampUnit(tablePosition - lowerIndex);
   const lower = SIN_TABLE[lowerIndex];
   const upper = SIN_TABLE[lowerIndex + 1];
 
@@ -79,6 +82,10 @@ export function quantizeSimFloat(value: number): number {
 function normalizeRadians(angleRadians: number): number {
   const wrapped = angleRadians % SIM_TAU;
   return wrapped < 0 ? wrapped + SIM_TAU : wrapped;
+}
+
+function clampUnit(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
 }
 
 function decodeSineTable(base64: string): readonly number[] {

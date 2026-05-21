@@ -33,31 +33,31 @@ export type MatchStatusSnapshot = Readonly<{
   resultKind: "pending" | "win" | "lose" | "draw";
 }>;
 
-export type GameStatsSnapshot = Readonly<{
-  text: string;
+export type TwoPlayerShareSnapshot = Readonly<{
+  canCreate: boolean;
+  state: "idle" | "creating" | "error";
+  message: string;
 }>;
 
 export type GameOverlaySnapshot = Readonly<{
   activeCameraPreset: CameraPreset | null;
   tacticalOverlayEnabled: boolean;
-  debugInfoEnabled: boolean;
   renderMode: RenderQualityMode;
   selectedUnits: readonly UnitViewModel[];
   commandMenuLeaderKey: string | null;
   pendingCommand: PendingCommandMenuCommand;
   commandHistory: readonly CommandHistoryEntry[];
   matchStatus: MatchStatusSnapshot;
-  stats: GameStatsSnapshot;
   hotkeysOpen: boolean;
   connectionStatus: RuntimeConnectionStatus;
+  pauseMenuMessage: string;
+  twoPlayerShare: TwoPlayerShareSnapshot;
 }>;
 
 export type GameOverlayActions = Readonly<{
   selectCameraPreset: (preset: CameraPreset) => void;
   zoomToFit: () => void;
-  setDebugInfoEnabled: (enabled: boolean) => void;
   setTacticalOverlayEnabled: (enabled: boolean) => void;
-  navigateToRandomSeed: () => void;
   toggleRenderMode: () => void;
   selectCommandLeader: (unitKey: string) => void;
   deselectUnit: (unitKey: string) => void;
@@ -65,6 +65,7 @@ export type GameOverlayActions = Readonly<{
   toggleOrbitPlanetCommand: () => void;
   selectCommandHistoryEntry: (entryId: number) => void;
   closeHotkeysDialog: () => void;
+  createTwoPlayerGame: () => void;
 }>;
 
 export function createInitialOverlaySnapshot(
@@ -74,7 +75,6 @@ export function createInitialOverlaySnapshot(
   return {
     activeCameraPreset: "top",
     tacticalOverlayEnabled: true,
-    debugInfoEnabled: false,
     renderMode,
     selectedUnits: [],
     commandMenuLeaderKey: null,
@@ -89,11 +89,14 @@ export function createInitialOverlaySnapshot(
       resultText: "",
       resultKind: "pending",
     },
-    stats: {
-      text: "",
-    },
     hotkeysOpen: false,
     connectionStatus,
+    pauseMenuMessage: "",
+    twoPlayerShare: {
+      canCreate: false,
+      state: "idle",
+      message: "",
+    },
   };
 }
 
@@ -131,7 +134,7 @@ function GameOverlay({
       <MatchStatus snapshot={snapshot.matchStatus} />
       <CommandHistoryMenu snapshot={snapshot} actions={actions} />
       <CommandMenu snapshot={snapshot} actions={actions} />
-      <StatsLayer snapshot={snapshot} />
+      <RoleBadge snapshot={snapshot} />
       <HotkeysDialog snapshot={snapshot} actions={actions} />
     </>
   );
@@ -206,20 +209,6 @@ function TopLeftControls({
 }) {
   return (
     <div className="top-left-controls">
-      <button
-        type="button"
-        className="debug-toggle-button"
-        aria-pressed={snapshot.debugInfoEnabled}
-        onPointerDown={stopOverlayPointer}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          actions.setDebugInfoEnabled(!snapshot.debugInfoEnabled);
-          event.currentTarget.blur();
-        }}
-      >
-        Debug
-      </button>
       <label className="tactical-toggle" onPointerDown={stopOverlayPointer}>
         <input
           type="checkbox"
@@ -231,19 +220,6 @@ function TopLeftControls({
         />
         <span>Tactical</span>
       </label>
-      <button
-        type="button"
-        className="random-seed-button"
-        onPointerDown={stopOverlayPointer}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          actions.navigateToRandomSeed();
-          event.currentTarget.blur();
-        }}
-      >
-        Random seed
-      </button>
       <button
         type="button"
         className="render-mode-button"
@@ -479,10 +455,10 @@ function CommandUnitGroup({
   );
 }
 
-function StatsLayer({ snapshot }: { snapshot: GameOverlaySnapshot }) {
+function RoleBadge({ snapshot }: { snapshot: GameOverlaySnapshot }) {
   return (
-    <div className="game-stats" hidden={!snapshot.debugInfoEnabled}>
-      {snapshot.stats.text}
+    <div className="player-role-badge" data-role={snapshot.connectionStatus.role}>
+      {formatRoleLabel(snapshot.connectionStatus)}
     </div>
   );
 }
@@ -494,6 +470,12 @@ function HotkeysDialog({
   snapshot: GameOverlaySnapshot;
   actions: GameOverlayActions;
 }) {
+  const statusMessage =
+    snapshot.twoPlayerShare.message || snapshot.pauseMenuMessage;
+  const statusState = snapshot.twoPlayerShare.message
+    ? snapshot.twoPlayerShare.state
+    : "idle";
+
   return (
     <div className="hotkeys-dialog" hidden={!snapshot.hotkeysOpen}>
       <section className="hotkeys-dialog-panel" aria-label="Hotkeys">
@@ -506,19 +488,49 @@ function HotkeysDialog({
             </Fragment>
           ))}
         </dl>
-        <button
-          type="button"
-          className="hotkeys-dialog-close"
-          onPointerDown={stopOverlayPointer}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            actions.closeHotkeysDialog();
-            event.currentTarget.blur();
-          }}
+        <div
+          className="hotkeys-dialog-actions"
+          data-has-two-player={snapshot.twoPlayerShare.canCreate}
         >
-          Close
-        </button>
+          {snapshot.twoPlayerShare.canCreate ? (
+            <button
+              type="button"
+              className="hotkeys-dialog-two-player"
+              disabled={snapshot.twoPlayerShare.state === "creating"}
+              onPointerDown={stopOverlayPointer}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                actions.createTwoPlayerGame();
+                event.currentTarget.blur();
+              }}
+            >
+              {snapshot.twoPlayerShare.state === "creating"
+                ? "Creating..."
+                : "Two player"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="hotkeys-dialog-close"
+            onPointerDown={stopOverlayPointer}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              actions.closeHotkeysDialog();
+              event.currentTarget.blur();
+            }}
+          >
+            Resume
+          </button>
+        </div>
+        <div
+          className="hotkeys-dialog-message"
+          data-state={statusState}
+          hidden={statusMessage.length === 0}
+        >
+          {statusMessage}
+        </div>
       </section>
     </div>
   );
@@ -595,4 +607,16 @@ function formatMatchTime(ticks: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function formatRoleLabel(status: RuntimeConnectionStatus): string {
+  switch (status.role) {
+    case "player2":
+      return "P2";
+    case "spectator":
+      return "Spectator";
+    case "player1":
+    default:
+      return "P1";
+  }
 }

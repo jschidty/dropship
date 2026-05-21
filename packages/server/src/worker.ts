@@ -18,6 +18,10 @@ export async function handleRequest(
     });
   }
 
+  if (url.pathname === "/api/matches") {
+    return handleCreateMatchRequest(request, env, url);
+  }
+
   const matchRoute = parseMatchRoute(url.pathname);
 
   if (matchRoute) {
@@ -27,14 +31,35 @@ export async function handleRequest(
   }
 
   if (env.ASSETS) {
-    return env.ASSETS.fetch(request);
+    const assetResponse = await env.ASSETS.fetch(request);
+
+    if (
+      assetResponse.status !== 404 ||
+      request.method !== "GET" ||
+      !isAppRoute(url.pathname)
+    ) {
+      return assetResponse;
+    }
+
+    return env.ASSETS.fetch(
+      new Request(new URL("/", url), {
+        method: "GET",
+        headers: request.headers,
+      })
+    );
   }
 
   return Response.json(
     {
       service: "drop-ship-server",
       status: "missing-assets-binding",
-      routes: ["/api/health", "/api/matches/:matchId/ws"],
+      routes: [
+        "/",
+        "/play/:gameId",
+        "/api/health",
+        "POST /api/matches",
+        "/api/matches/:matchId/ws",
+      ],
     },
     { status: 200 }
   );
@@ -59,3 +84,78 @@ function parseMatchRoute(pathname: string): { matchId: string } | null {
     matchId: decodeURIComponent(match[1]),
   };
 }
+
+function isAppRoute(pathname: string): boolean {
+  return pathname === "/" || pathname.startsWith("/play/");
+}
+
+async function handleCreateMatchRequest(
+  request: Request,
+  env: WorkerEnv,
+  url: URL
+): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: CREATE_MATCH_CORS_HEADERS,
+    });
+  }
+
+  if (request.method !== "POST") {
+    return Response.json(
+      {
+        error: "method-not-allowed",
+      },
+      {
+        status: 405,
+        headers: {
+          ...CREATE_MATCH_CORS_HEADERS,
+          Allow: "POST, OPTIONS",
+        },
+      }
+    );
+  }
+
+  const gameId = createGameId();
+  const creatorToken = createGameId();
+  const id = env.MATCHES.idFromName(gameId);
+  const stub = env.MATCHES.get(id);
+  const statusUrl = new URL(`/api/matches/${encodeURIComponent(gameId)}`, url);
+
+  await stub.fetch(
+    new Request(statusUrl, {
+      method: "POST",
+      headers: {
+        "x-drop-ship-creator-token": creatorToken,
+      },
+    })
+  );
+
+  return Response.json(
+    {
+      gameId,
+      matchId: gameId,
+      creatorToken,
+    },
+    {
+      status: 201,
+      headers: CREATE_MATCH_CORS_HEADERS,
+    }
+  );
+}
+
+export function createGameId(): string {
+  const randomId =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2)}-${Math.random().toString(36).slice(2)}`;
+
+  return `game-${randomId}`;
+}
+
+const CREATE_MATCH_CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};

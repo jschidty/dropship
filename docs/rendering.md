@@ -101,6 +101,21 @@ const renderer = new THREE.WebGLRenderer({
 
 `logarithmicDepthBuffer` helps when ships, stations, and planetary objects share one scene. Still keep Phase 1 scale bands restrained; not every object needs to be visible at every zoom.
 
+## Canvas resize safety
+
+Treat WebGL canvas resizing as a GPU resource operation, not as a cheap DOM update. Writing `canvas.width` or `canvas.height` makes the browser reallocate the drawing buffer and can invalidate WebGL pipeline state. In Chrome traces this shows up as layout or `ResizeObserver` work followed by `WebGLRenderer.setSize`, shader/program parameter generation, and long main-thread stalls.
+
+The canvas resize path must follow these rules:
+
+- Isolate the app and canvas with CSS containment so HUD or router layout changes do not propagate unnecessary layout work into the canvas host.
+- Observe the canvas host with `ResizeObserver`, but use the observer entry's `borderBoxSize`, `contentBoxSize`, or `contentRect` values. Do not read `clientWidth`, `clientHeight`, `offset*`, or `getBoundingClientRect()` from the observer callback; those reads can force synchronous layout while style is already invalidated.
+- Coalesce resize requests with `requestAnimationFrame`, and throttle repeated drawing-buffer writes during continuous resize or pixel-ratio adjustment. The renderer may visually lag by a frame or two; that is much cheaper than reallocating the backing buffer many times in one interaction.
+- Track the last applied logical width, height, and pixel ratio. If they are unchanged, do not call any renderer resize method.
+- Prefer `renderer.setDrawingBufferSize(width, height, pixelRatio)` when logical size and pixel ratio are known together. Avoid calling `setPixelRatio()` and then `setSize()` in sequence, because `setPixelRatio()` already triggers a resize internally.
+- Never resize the renderer from the normal animation frame just because a frame is rendering. The render loop may consume the current drawing-buffer size, but resize writes belong to the coalesced resize path.
+
+Fallback reads from the host element are acceptable on initial mount or from a plain `window.resize` event when no `ResizeObserverEntry` size is available. Keep those reads outside the observer callback and guard the backing-buffer write afterward.
+
 ## LOD by scale tier
 
 `ScaleTier` is numeric sim/render metadata that picks a render strategy.

@@ -4,7 +4,8 @@ This is the current deployable multiplayer slice. It is intentionally small:
 
 - one Worker serves the built web app as static assets
 - one `MatchDurableObject` coordinates a match over WebSockets
-- two browser seats join with URL params
+- the app opens in paused local single-player by default
+- the pause menu can create a two-player `gameId` link backed by a `MatchDurableObject`
 - both browsers run the deterministic sim locally from ordered tick batches
 
 ## Local Worker Smoke Test
@@ -15,14 +16,17 @@ pnpm build
 pnpm dev:server
 ```
 
-Open two browser windows:
+Open the app:
 
 ```text
-http://127.0.0.1:8787/?match=demo&player=1
-http://127.0.0.1:8787/?match=demo&player=2
+http://127.0.0.1:8787/
 ```
 
-The match starts ticking once both seats are connected.
+The game starts paused. Use the pause menu's **Two player** button to create a
+unique `/play/:gameId` share link. The link uses `gameId`, not `player`; the
+creator keeps a local creator claim and takes P1, the first guest takes P2, and
+later opens of the same link join as spectators. The match starts ticking once
+P1 and P2 are connected.
 
 ## Deploy
 
@@ -32,11 +36,11 @@ Set a Cloudflare API token with permission to deploy Workers and Durable Objects
 CLOUDFLARE_API_TOKEN=... pnpm deploy
 ```
 
-After deploy, use the deployed Worker URL with the same match/player params:
+After deploy, open the deployed Worker URL and create the share link from the
+pause menu:
 
 ```text
-https://<worker-host>/?match=demo&player=1
-https://<worker-host>/?match=demo&player=2
+https://<worker-host>/
 ```
 
 ## Current Limits
@@ -44,5 +48,6 @@ https://<worker-host>/?match=demo&player=2
 - no lobby UI yet
 - no reconnect/catch-up command log yet
 - no Durable Object SQLite persistence yet
-- no auth or seat locking beyond the URL param
+- no auth, accounts, matchmaking, or durable seat identity yet
+- spectators can watch from the share link but cannot control units
 - the DO pauses ticking until both player seats are connected

@@ -191,12 +191,22 @@ Use integer timestamps initially. D1 stores SQLite values, so keep schemas stric
 
 ## Seat And URL Hardening
 
-Current demo URLs encode both match and seat:
+Current v1 public two-player URLs encode only the game in the path:
 
 ```text
-/?match=demo&player=1
-/?match=demo&player=2
+/play/game-...
 ```
+
+The pause menu creates the `gameId` through `POST /api/matches`, routes to
+`/play/:gameId`, and copies that share link. The browser still accepts
+`?gameId=...` for compatibility, but generated links use the route param. It
+ignores `player`, `p`, `player1`, and `player2` query params in normal app
+startup; without a route/query game id it assumes local single-player.
+
+For this v1 pre-lobby flow, the create response also returns a creator token
+stored only in the creator's browser. The copied share link does not include that
+token. The creator claims P1, the first non-creator connection claims P2, and
+later connections become spectators by default.
 
 Target public URLs:
 
@@ -210,6 +220,8 @@ Rules:
 
 - The browser never decides `PlayerId` for multiplayer.
 - The WebSocket URL is `/api/matches/:matchId/ws`, with no `player` query param.
+- Until accounts/lobbies exist, the match DO assigns seats from the creator token
+  and active connections, then assigns spectators after P1/P2 are occupied.
 - The Worker authenticates the request, strips any client-supplied internal identity headers, resolves the user session, and forwards a server-authored identity context to the DO with `x-drop-ship-player-id`.
 - The DO maps `user_id` to `player_id` from `match_participants`.
 - `matchStart` remains the moment where the server tells the client its `playerId`.

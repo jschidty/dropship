@@ -3,6 +3,8 @@ import type { PlayerId } from "./handles";
 import type { MatchConfig, MatchEndReason } from "./matchConfig";
 import type { CompactSimSnapshot } from "./snapshot";
 
+export type MatchSessionRole = "player1" | "player2" | "spectator";
+
 export type ReadyMessage = Readonly<{
   type: "ready";
   playerId: PlayerId;
@@ -56,6 +58,8 @@ export type ClientMessage =
 export type MatchStartMessage = Readonly<{
   type: "matchStart";
   playerId: PlayerId;
+  role: MatchSessionRole;
+  canControl: boolean;
   serverTick: number;
   config: MatchConfig;
   initialState?: CompactSimSnapshot;
@@ -96,6 +100,7 @@ export type ConnectionStatusMessage = Readonly<{
   type: "connectionStatus";
   serverTick: number;
   running: boolean;
+  spectatorCount?: number;
   players: readonly Readonly<{
     playerId: PlayerId;
     connected: boolean;

@@ -2,7 +2,6 @@ import type { PlayerId } from "@drop-ship/protocol";
 import type {
   LocalGameRuntime,
   PlanetViewModel,
-  RenderQualityMode,
   UnitViewModel,
 } from "../types";
 import type { MatchStatusSnapshot } from "./GameOverlay";
@@ -11,7 +10,7 @@ export function createMatchStatusSnapshot(
   runtime: LocalGameRuntime,
   units: readonly UnitViewModel[],
   planets: readonly PlanetViewModel[],
-  isPaused = false
+  pendingStatusText = ""
 ): MatchStatusSnapshot {
   const rules = runtime.world.config.rules.matchEnd;
   const remainingTicks = Math.max(rules.durationTicks - runtime.world.tick, 0);
@@ -28,25 +27,9 @@ export function createMatchStatusSnapshot(
     playerTwoText: createPlayerMatchStatusText(units, planets, 2),
     playerOneColor: playerOne?.color ?? "#74d9ff",
     playerTwoColor: playerTwo?.color ?? "#ff4fd8",
-    resultText: formatMatchResult(runtime, isPaused),
+    resultText: formatMatchResult(runtime, pendingStatusText),
     resultKind: readMatchResultKind(runtime),
   };
-}
-
-export function createStatsText(
-  runtime: LocalGameRuntime,
-  estimatedFps: number,
-  observedSimHz: number,
-  estimatedRenderMs: number,
-  drawCalls: number,
-  pixelRatio: number,
-  renderMode: RenderQualityMode,
-  selectedPlanetLabel: string,
-  selectedUnitCount: number
-): string {
-  return `Planet ${selectedPlanetLabel} / Units ${runtime.world.units.length} / Selected ${selectedUnitCount} / Tick ${runtime.world.tick
-    .toString()
-    .padStart(5, "0")} / ${renderMode} / ${estimatedFps.toFixed(0)} fps / ${observedSimHz.toFixed(1)} sim / ${drawCalls} calls / ${estimatedRenderMs.toFixed(2)} ms / ${pixelRatio.toFixed(2)}x / Hash ${runtime.readHash()}`;
 }
 
 function createPlayerMatchStatusText(
@@ -80,22 +63,28 @@ function readMatchResultKind(
     return "draw";
   }
 
+  if (runtime.readConnectionStatus().role === "spectator") {
+    return "pending";
+  }
+
   return result.winner === runtime.playerId ? "win" : "lose";
 }
 
 function formatMatchResult(
   runtime: LocalGameRuntime,
-  isPaused: boolean
+  pendingStatusText: string
 ): string {
   const result = runtime.world.matchResult;
 
   if (!result) {
-    return isPaused ? "Paused" : "";
+    return pendingStatusText;
   }
 
   const label =
     result.winner === 0
       ? "Draw"
+      : runtime.readConnectionStatus().role === "spectator"
+        ? `P${result.winner} win`
       : result.winner === runtime.playerId
         ? "Win"
         : "Lose";

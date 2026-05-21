@@ -80,10 +80,7 @@ import {
   type CommandHistoryEntry,
   type PendingCommandMenuCommand,
 } from "../ui/GameOverlay";
-import {
-  createMatchStatusSnapshot,
-  createStatsText,
-} from "../ui/overlaySelectors";
+import { createMatchStatusSnapshot } from "../ui/overlaySelectors";
 import { createUiStore } from "../ui/store";
 import { createMinimalLocalGame } from "../runtime/localGame";
 import { DEFAULT_LOCAL_PLAYER_ID } from "../runtime/matchConfig";
@@ -94,6 +91,7 @@ import type {
   MountMinimalGameOptions,
   PlanetViewModel,
   RenderQualityMode,
+  RuntimeConnectionStatus,
   UnitViewModel,
 } from "../types";
 
@@ -154,6 +152,17 @@ type ViewportMetrics = {
   width: number;
   height: number;
   aspect: number;
+};
+
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
+type RendererBackBufferMetrics = {
+  width: number;
+  height: number;
+  pixelRatio: number;
 };
 
 type SelectedLeaderArrow = {
@@ -225,6 +234,7 @@ type GravityOverlay = {
 const HUD_UPDATE_INTERVAL_MS = 500;
 const PERF_DATASET_INTERVAL_MS = 500;
 const PIXEL_RATIO_ADJUST_INTERVAL_MS = 1500;
+const RENDERER_RESIZE_MIN_INTERVAL_MS = 100;
 const MAX_SIM_STEPS_PER_FRAME = 5;
 const MAX_SIM_FRAME_DELTA_MS = 250;
 const COMMAND_HISTORY_LIMIT = 10;
@@ -279,6 +289,7 @@ export function mountMinimalGame(
           seed: options.seed,
           debugMatchParams: options.debugMatchParams,
           debugLogs: options.debugNetworkLogs,
+          creatorToken: options.creatorToken,
         })
       : createMinimalLocalGame(playerId, {
           seed: options.seed,
@@ -314,7 +325,6 @@ export function mountMinimalGame(
     logarithmicDepthBuffer: true,
     powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(activeRenderPixelRatio);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.autoClear = false;
   renderer.info.autoReset = false;
@@ -356,7 +366,12 @@ export function mountMinimalGame(
   let hoveredPlanetKey: string | null = null;
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = true;
-  let debugInfoEnabled = false;
+  let singlePlayerPaused =
+    runtime.readConnectionStatus().mode === "local" &&
+    (options.initialPaused ?? false);
+  let hotkeysDialogOpen = options.initialPaused ?? false;
+  let twoPlayerShareState: "idle" | "creating" | "error" = "idle";
+  let twoPlayerShareMessage = "";
   let nextCommandHistoryId = 1;
   const commandHistory: CommandHistoryRecord[] = [];
   const selectionBox = createSelectionBox(container);
@@ -376,16 +391,9 @@ export function mountMinimalGame(
     zoomToFit() {
       startZoomToFit(performance.now());
     },
-    setDebugInfoEnabled(enabled) {
-      debugInfoEnabled = enabled;
-      publishOverlaySnapshot();
-    },
     setTacticalOverlayEnabled(enabled) {
       tacticalOverlayEnabled = enabled;
       publishOverlaySnapshot();
-    },
-    navigateToRandomSeed() {
-      navigateToRandomMatchSeed();
     },
     toggleRenderMode() {
       applyRenderMode(
@@ -434,9 +442,13 @@ export function mountMinimalGame(
     closeHotkeysDialog() {
       closeHotkeysDialog();
     },
+    createTwoPlayerGame() {
+      void createTwoPlayerGameFromPauseMenu();
+    },
   });
   const renderResolution = new THREE.Vector2();
   const viewport = createViewportMetrics(container);
+  const rendererBackBuffer = createRendererBackBufferMetrics();
   const scratch = createRenderScratch();
   const cameraFocusTween = createCameraFocusTween();
   const zoomToFitFocus = new THREE.Vector3();
@@ -464,11 +476,13 @@ export function mountMinimalGame(
   let lastHudUpdateAt = -HUD_UPDATE_INTERVAL_MS;
   let lastPerfDatasetUpdateAt = -PERF_DATASET_INTERVAL_MS;
   let lastPixelRatioAdjustAt = startedAt;
+  let resizeFrameId: number | null = null;
+  let resizeThrottleTimeoutId: number | null = null;
+  let lastRendererResizeAt = -RENDERER_RESIZE_MIN_INTERVAL_MS;
+  let pendingViewportSize: ViewportSize | null = null;
   let renderFrameIndex = 0;
   let activeSelectionMode: SelectionMode = "replace";
   let selectionDragStarted = false;
-  let singlePlayerPaused = false;
-  let hotkeysDialogOpen = false;
   const cameraZoomTween: CameraZoomTween = {
     active: false,
     mode: cameraControls.mode,
@@ -480,26 +494,12 @@ export function mountMinimalGame(
   function publishOverlaySnapshot(): void {
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
-    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
+    const connectionStatus = runtime.readConnectionStatus();
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
-    const statsText = debugInfoEnabled
-      ? createStatsText(
-          runtime,
-          estimatedFps,
-          observedSimHz,
-          estimatedRenderMs,
-          renderer.info.render.calls,
-          renderer.getPixelRatio(),
-          renderQuality.mode,
-          formatSelectedPlanetStatus(runtime, selectedPlanet),
-          selectedUnitKeys.size
-        )
-      : "";
 
     overlayStore.setSnapshot({
       activeCameraPreset: cameraControls.preset,
       tacticalOverlayEnabled,
-      debugInfoEnabled,
       renderMode: renderQuality.mode,
       selectedUnits,
       commandMenuLeaderKey,
@@ -516,13 +516,18 @@ export function mountMinimalGame(
         runtime,
         units,
         planets,
-        isSinglePlayerPaused()
+        readPendingStatusText(connectionStatus, isSinglePlayerPaused())
       ),
-      stats: {
-        text: statsText,
-      },
       hotkeysOpen: hotkeysDialogOpen,
-      connectionStatus: runtime.readConnectionStatus(),
+      connectionStatus,
+      pauseMenuMessage: readPauseMenuMessage(connectionStatus),
+      twoPlayerShare: {
+        canCreate:
+          connectionStatus.mode === "local" &&
+          options.createTwoPlayerGame !== undefined,
+        state: twoPlayerShareState,
+        message: twoPlayerShareMessage,
+      },
     });
   }
 
@@ -544,15 +549,17 @@ export function mountMinimalGame(
     updateProjectileParticleRenderQuality(projectileParticles, renderQuality);
     activeRenderPixelRatio = getPreferredRenderPixelRatio(renderQuality);
     lastPixelRatioAdjustAt = performance.now();
-    renderer.setPixelRatio(activeRenderPixelRatio);
-    refreshViewportMetrics(viewport, container);
-    renderer.setSize(viewport.width, viewport.height, false);
+    applyViewportResize();
     updateRenderModeQuery(renderQuality.mode);
     container.dataset.renderMode = renderQuality.mode;
     publishOverlaySnapshot();
   }
 
   function openHotkeysDialog(): void {
+    if (runtime.readConnectionStatus().mode === "local") {
+      singlePlayerPaused = true;
+    }
+
     hotkeysDialogOpen = true;
     publishOverlaySnapshot();
     window.requestAnimationFrame(() => {
@@ -567,8 +574,34 @@ export function mountMinimalGame(
   function closeHotkeysDialog(): void {
     singlePlayerPaused = false;
     hotkeysDialogOpen = false;
+    twoPlayerShareState = "idle";
+    twoPlayerShareMessage = "";
     publishOverlaySnapshot();
     renderer.domElement.focus();
+  }
+
+  async function createTwoPlayerGameFromPauseMenu(): Promise<void> {
+    if (!options.createTwoPlayerGame || twoPlayerShareState === "creating") {
+      return;
+    }
+
+    twoPlayerShareState = "creating";
+    twoPlayerShareMessage = "Creating share link...";
+    publishOverlaySnapshot();
+
+    try {
+      await options.createTwoPlayerGame();
+      twoPlayerShareState = "idle";
+      twoPlayerShareMessage = "";
+      publishOverlaySnapshot();
+    } catch (error) {
+      twoPlayerShareState = "error";
+      twoPlayerShareMessage =
+        error instanceof Error
+          ? error.message
+          : "Could not create a two player game.";
+      publishOverlaySnapshot();
+    }
   }
 
   function recordCommandHistory(command: IssuedUnitCommand): void {
@@ -667,6 +700,10 @@ export function mountMinimalGame(
     );
   }
 
+  function canControlUnits(): boolean {
+    return runtime.readConnectionStatus().canControl;
+  }
+
   function cancelCameraZoomTween(): void {
     cameraZoomTween.active = false;
   }
@@ -710,7 +747,7 @@ export function mountMinimalGame(
         return;
       }
 
-      if (key === "p" && runtime.readConnectionStatus().mode === "local") {
+      if (key === "p") {
         closeHotkeysDialog();
         event.preventDefault();
         event.stopPropagation();
@@ -728,6 +765,7 @@ export function mountMinimalGame(
     }
 
     if (
+      canControlUnits() &&
       event.code === "Space" &&
       !event.metaKey &&
       !event.ctrlKey &&
@@ -739,15 +777,14 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "p" && runtime.readConnectionStatus().mode === "local") {
-      singlePlayerPaused = true;
+    if (key === "p") {
       openHotkeysDialog();
       event.preventDefault();
       event.stopPropagation();
       return;
     }
 
-    if (key === "1") {
+    if (canControlUnits() && key === "1") {
       clearZoomToFitFocus();
       replaceSelectionWithOwnedUnits(selectedUnitKeys, runtime);
       selectedPlanetKey = null;
@@ -763,7 +800,7 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "8" || key === "9" || key === "0") {
+    if (canControlUnits() && (key === "8" || key === "9" || key === "0")) {
       clearZoomToFitFocus();
       replaceSelectionWithOwnedUnits(
         selectedUnitKeys,
@@ -787,7 +824,7 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "d") {
+    if (canControlUnits() && key === "d") {
       clearZoomToFitFocus();
       selectedUnitKeys.clear();
       selectedPlanetKey = null;
@@ -800,7 +837,7 @@ export function mountMinimalGame(
       return;
     }
 
-    if (key === "c" || key === "g") {
+    if (canControlUnits() && (key === "c" || key === "g")) {
       const issuedCommand = issuePlanetOrderFromSelection(
         runtime,
         selectedUnitKeys,
@@ -842,7 +879,9 @@ export function mountMinimalGame(
     event.preventDefault();
     cameraControls.isDragging = true;
     cameraControls.dragMode =
-      event.button !== 0 || event.altKey ? "camera" : "select";
+      !canControlUnits() || event.button !== 0 || event.altKey
+        ? "camera"
+        : "select";
     cameraControls.pointerId = event.pointerId;
     cameraControls.startPointerX = event.clientX;
     cameraControls.startPointerY = event.clientY;
@@ -1070,8 +1109,24 @@ export function mountMinimalGame(
     cameraControls.viewHeights[cameraControls.mode] = nextHeight;
   };
 
-  const resize = () => {
-    refreshViewportMetrics(viewport, container);
+  const applyViewportResize = (size?: ViewportSize): boolean => {
+    const viewportChanged =
+      size === undefined
+        ? refreshViewportMetrics(viewport, container)
+        : writeViewportMetrics(viewport, size);
+
+    if (
+      !viewportChanged &&
+      isRendererBackBufferCurrent(
+        renderer,
+        rendererBackBuffer,
+        viewport,
+        activeRenderPixelRatio
+      )
+    ) {
+      return false;
+    }
+
     applyCameraControls(
       camera,
       cameraControls,
@@ -1086,7 +1141,67 @@ export function mountMinimalGame(
       ),
       scratch
     );
-    renderer.setSize(viewport.width, viewport.height, false);
+    return applyRendererBackBufferSize(
+      renderer,
+      rendererBackBuffer,
+      viewport,
+      activeRenderPixelRatio
+    );
+  };
+
+  const applyScheduledViewportResize = () => {
+    resizeFrameId = null;
+    const size = pendingViewportSize ?? undefined;
+    pendingViewportSize = null;
+    const now = performance.now();
+    const elapsed = now - lastRendererResizeAt;
+
+    if (elapsed < RENDERER_RESIZE_MIN_INTERVAL_MS) {
+      if (size) {
+        pendingViewportSize = size;
+      }
+
+      if (resizeThrottleTimeoutId === null) {
+        resizeThrottleTimeoutId = window.setTimeout(() => {
+          resizeThrottleTimeoutId = null;
+          requestViewportResize();
+        }, RENDERER_RESIZE_MIN_INTERVAL_MS - elapsed);
+      }
+      return;
+    }
+
+    if (applyViewportResize(size)) {
+      lastRendererResizeAt = now;
+    }
+  };
+
+  const requestViewportResize = (size?: ViewportSize) => {
+    if (disposed) {
+      return;
+    }
+
+    if (size) {
+      pendingViewportSize = size;
+    }
+
+    if (resizeThrottleTimeoutId !== null) {
+      return;
+    }
+
+    if (resizeFrameId === null) {
+      resizeFrameId = window.requestAnimationFrame(applyScheduledViewportResize);
+    }
+  };
+
+  const handleObservedResize = (entries: ResizeObserverEntry[]) => {
+    const entry = entries.find(({ target }) => target === container);
+    const size = entry ? readResizeObserverEntrySize(entry) : undefined;
+
+    requestViewportResize(size);
+  };
+
+  const handleWindowResize = () => {
+    requestViewportResize();
   };
 
   const adjustRenderPixelRatio = (now: number) => {
@@ -1107,8 +1222,7 @@ export function mountMinimalGame(
       renderQuality.minRenderPixelRatio,
       Number((activeRenderPixelRatio - renderQuality.pixelRatioStep).toFixed(2))
     );
-    renderer.setPixelRatio(activeRenderPixelRatio);
-    renderer.setSize(viewport.width, viewport.height, false);
+    requestViewportResize();
   };
 
   const advanceSimulation = (now: number, frameDeltaMs: number): number => {
@@ -1311,7 +1425,6 @@ export function mountMinimalGame(
         : "off";
       container.dataset.pendingCommand = pendingCommand ?? "none";
       container.dataset.renderMode = renderQuality.mode;
-      container.dataset.debugInfo = debugInfoEnabled ? "on" : "off";
       container.dataset.simPaused = isSinglePlayerPaused() ? "on" : "off";
       container.dataset.playerId = runtime.playerId.toString();
       container.dataset.connectionState = runtime.readConnectionStatus().state;
@@ -1362,9 +1475,11 @@ export function mountMinimalGame(
   };
 
   const resizeObserver =
-    typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(handleObservedResize);
 
-  window.addEventListener("resize", resize);
+  window.addEventListener("resize", handleWindowResize);
   resizeObserver?.observe(container);
   window.addEventListener("keydown", handleKeyDown, { capture: true });
   renderer.domElement.addEventListener("pointerdown", handlePointerDown);
@@ -1399,7 +1514,8 @@ export function mountMinimalGame(
     viewport,
     cameraControls.mode
   );
-  resize();
+  applyViewportResize();
+  publishOverlaySnapshot();
   renderCurrentFrame(startedAt, 1);
   frameId = requestAnimationFrame(frame);
 
@@ -1408,8 +1524,14 @@ export function mountMinimalGame(
     dispose() {
       disposed = true;
       cancelAnimationFrame(frameId);
+      if (resizeFrameId !== null) {
+        window.cancelAnimationFrame(resizeFrameId);
+      }
+      if (resizeThrottleTimeoutId !== null) {
+        window.clearTimeout(resizeThrottleTimeoutId);
+      }
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", handleWindowResize);
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
@@ -1452,13 +1574,123 @@ function createViewportMetrics(container: HTMLElement): ViewportMetrics {
   return viewport;
 }
 
+function createRendererBackBufferMetrics(): RendererBackBufferMetrics {
+  return {
+    width: 0,
+    height: 0,
+    pixelRatio: 0,
+  };
+}
+
 function refreshViewportMetrics(
   viewport: ViewportMetrics,
   container: HTMLElement
-): void {
-  viewport.width = container.clientWidth;
-  viewport.height = container.clientHeight;
+): boolean {
+  return writeViewportMetrics(viewport, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+  });
+}
+
+function writeViewportMetrics(
+  viewport: ViewportMetrics,
+  size: ViewportSize
+): boolean {
+  const width = Math.max(1, Math.round(size.width));
+  const height = Math.max(1, Math.round(size.height));
+  const changed = viewport.width !== width || viewport.height !== height;
+
+  viewport.width = width;
+  viewport.height = height;
   viewport.aspect = viewport.width / Math.max(viewport.height, 1);
+
+  return changed;
+}
+
+function readResizeObserverEntrySize(entry: ResizeObserverEntry): ViewportSize {
+  const borderSize = readResizeObserverBoxSize(entry.borderBoxSize);
+
+  if (borderSize) {
+    return borderSize;
+  }
+
+  const contentSize = readResizeObserverBoxSize(entry.contentBoxSize);
+
+  if (contentSize) {
+    return contentSize;
+  }
+
+  return {
+    width: entry.contentRect.width,
+    height: entry.contentRect.height,
+  };
+}
+
+function readResizeObserverBoxSize(
+  boxSize: ReadonlyArray<ResizeObserverSize> | ResizeObserverSize | undefined
+): ViewportSize | null {
+  if (!boxSize) {
+    return null;
+  }
+
+  const size = Array.isArray(boxSize) ? boxSize[0] : boxSize;
+
+  if (!size) {
+    return null;
+  }
+
+  return {
+    width: size.inlineSize,
+    height: size.blockSize,
+  };
+}
+
+function isRendererBackBufferCurrent(
+  renderer: THREE.WebGLRenderer,
+  metrics: RendererBackBufferMetrics,
+  viewport: ViewportMetrics,
+  pixelRatio: number
+): boolean {
+  const width = Math.max(1, Math.floor(viewport.width));
+  const height = Math.max(1, Math.floor(viewport.height));
+  const normalizedPixelRatio = Math.max(0.1, pixelRatio);
+
+  return (
+    metrics.width === width &&
+    metrics.height === height &&
+    metrics.pixelRatio === normalizedPixelRatio &&
+    renderer.domElement.width === Math.floor(width * normalizedPixelRatio) &&
+    renderer.domElement.height === Math.floor(height * normalizedPixelRatio)
+  );
+}
+
+function applyRendererBackBufferSize(
+  renderer: THREE.WebGLRenderer,
+  metrics: RendererBackBufferMetrics,
+  viewport: ViewportMetrics,
+  pixelRatio: number
+): boolean {
+  const width = Math.max(1, Math.floor(viewport.width));
+  const height = Math.max(1, Math.floor(viewport.height));
+  const normalizedPixelRatio = Math.max(0.1, pixelRatio);
+
+  if (
+    isRendererBackBufferCurrent(
+      renderer,
+      metrics,
+      viewport,
+      normalizedPixelRatio
+    )
+  ) {
+    return false;
+  }
+
+  renderer.setDrawingBufferSize(width, height, normalizedPixelRatio);
+  metrics.width = width;
+  metrics.height = height;
+  metrics.pixelRatio = normalizedPixelRatio;
+
+  return true;
 }
 
 function createSelectedLeaderArrow(container: HTMLElement): SelectedLeaderArrow {
@@ -1517,26 +1749,62 @@ function updateSelectedLeaderArrow(
   }
 }
 
-function navigateToRandomMatchSeed(): void {
-  const url = new URL(window.location.href);
-  const seed = Math.floor(Math.random() * 1_000_000_000);
-  const matchId = url.searchParams.get("match");
-
-  url.searchParams.set("seed", seed.toString());
-
-  if (matchId?.startsWith("seed-")) {
-    url.searchParams.set("match", `seed-${seed}`);
-  }
-
-  window.location.assign(url.toString());
-}
-
 function updateRenderModeQuery(renderMode: RenderQualityMode): void {
   const url = new URL(window.location.href);
   url.searchParams.set("render", renderMode);
   url.searchParams.delete("renderMode");
   url.searchParams.delete("quality");
   window.history.replaceState(window.history.state, "", url);
+}
+
+function readPendingStatusText(
+  status: RuntimeConnectionStatus,
+  isLocalPaused: boolean
+): string {
+  if (status.mode === "local") {
+    return isLocalPaused ? "Paused" : "";
+  }
+
+  if (status.running) {
+    return "";
+  }
+
+  return readWaitingForPlayerText(status);
+}
+
+function readPauseMenuMessage(status: RuntimeConnectionStatus): string {
+  if (status.mode === "local") {
+    return "";
+  }
+
+  if (status.running) {
+    return "";
+  }
+
+  return readWaitingForPlayerText(status);
+}
+
+function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
+  const missingPlayers =
+    status.players?.filter((player) => !player.connected) ?? [];
+
+  if (missingPlayers.length === 0) {
+    if (status.role === "player1") {
+      return "Waiting for player 2...";
+    }
+
+    if (status.role === "player2") {
+      return "Waiting for player 1...";
+    }
+
+    return status.state === "connecting" ? "Connecting..." : "Waiting...";
+  }
+
+  if (missingPlayers.length === 1) {
+    return `Waiting for player ${missingPlayers[0].playerId}...`;
+  }
+
+  return "Waiting for players...";
 }
 
 function createRenderScratch(): RenderScratch {
@@ -1981,43 +2249,6 @@ function formatCommandHistoryUnits(units: readonly UnitViewModel[]): string {
     .filter((part): part is string => part !== null);
 
   return parts.length > 0 ? parts.join(", ") : `${units.length} units`;
-}
-
-function formatSelectedPlanetStatus(
-  runtime: LocalGameRuntime,
-  planet: PlanetViewModel | null
-): string {
-  if (!planet) {
-    return "none";
-  }
-
-  if (!planet.control.capturable) {
-    return `${planet.label} neutral`;
-  }
-
-  const owner =
-    planet.control.owner === 0
-      ? "Neutral"
-      : runtime.world.config.players.find(
-          (player) => player.id === planet.control.owner
-        )?.name ?? `Player ${planet.control.owner}`;
-
-  if (planet.control.contested) {
-    return `${planet.label} ${owner} contested`;
-  }
-
-  if (planet.control.capturingPlayer !== 0) {
-    const rules = readCaptureRules(runtime.world);
-    const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
-    const progress = Math.min(
-      100,
-      (planet.control.captureTicks / Math.max(requiredTicks, 1)) * 100
-    );
-
-    return `${planet.label} ${owner} capture ${progress.toFixed(0)}%`;
-  }
-
-  return `${planet.label} ${owner}`;
 }
 
 function getPointerMoveTarget(

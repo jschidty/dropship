@@ -5,6 +5,7 @@ import type {
   EntityHandle,
   PlanetAppearanceConfig,
   PlayerId,
+  type MatchSessionRole,
   Vec3Data,
 } from "@drop-ship/protocol";
 import type { SimWorld } from "@drop-ship/sim";
@@ -88,11 +89,14 @@ export type RuntimeConnectionStatus = Readonly<{
   mode: "local" | "network";
   state: "local" | "connecting" | "open" | "closed" | "error";
   playerId: PlayerId;
+  role: MatchSessionRole;
+  canControl: boolean;
   matchId?: string;
   serverTick?: number;
   running?: boolean;
   lastAckTick?: number;
   lastError?: string;
+  spectatorCount?: number;
   players?: readonly Readonly<{
     playerId: PlayerId;
     connected: boolean;
@@ -109,4 +113,7 @@ export type MountMinimalGameOptions = Readonly<{
   renderMode?: RenderQualityMode;
   debugMatchParams?: boolean;
   debugNetworkLogs?: boolean;
+  initialPaused?: boolean;
+  creatorToken?: string;
+  createTwoPlayerGame?: () => Promise<void>;
 }>;

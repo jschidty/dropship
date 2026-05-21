@@ -60,6 +60,7 @@ export type MatchStartMessage = Readonly<{
   playerId: PlayerId;
   role: MatchSessionRole;
   canControl: boolean;
+  seatToken?: string;
   serverTick: number;
   config: MatchConfig;
   initialState?: CompactSimSnapshot;

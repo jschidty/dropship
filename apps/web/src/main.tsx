@@ -63,6 +63,7 @@ function GameRoute({ gameId: routeGameId }: PlayRouteProps) {
     const seed =
       seedParam ?? (matchId === undefined ? defaultLocalSeed : undefined);
     const creatorToken = gameId ? readCreatorToken(gameId) : undefined;
+    const playerToken = gameId ? readPlayerToken(gameId) : undefined;
     const stressUnits = parsePositiveInteger(
       query.stressUnits ?? query.units ?? null
     );
@@ -89,6 +90,7 @@ function GameRoute({ gameId: routeGameId }: PlayRouteProps) {
         debugMatchParams ? "debug-match" : "release-match",
         debugNetworkLogs ? "net-logs" : "net-quiet",
         creatorToken ? "creator" : "public",
+        playerToken ? "player-token" : "no-player-token",
       ].join("|"),
       matchId,
       serverUrl,
@@ -100,6 +102,7 @@ function GameRoute({ gameId: routeGameId }: PlayRouteProps) {
       debugNetworkLogs,
       initialPaused: true,
       creatorToken,
+      playerToken,
     };
   }, [defaultLocalSeed, location.path, location.query, routeGameId]);
 
@@ -119,6 +122,8 @@ function GameRoute({ gameId: routeGameId }: PlayRouteProps) {
       debugNetworkLogs: mountOptions.debugNetworkLogs,
       initialPaused: mountOptions.initialPaused,
       creatorToken: mountOptions.creatorToken,
+      playerToken: mountOptions.playerToken,
+      rememberPlayerToken,
       createTwoPlayerGame: () =>
         createTwoPlayerGame({
           route: location.route,
@@ -339,4 +344,38 @@ function readCreatorToken(gameId: string): string | undefined {
 
 function creatorTokenStorageKey(gameId: string): string {
   return `drop-ship:creator-token:${gameId}`;
+}
+
+function rememberPlayerToken(gameId: string, playerToken: string): void {
+  try {
+    window.localStorage.setItem(playerTokenStorageKey(gameId), playerToken);
+  } catch {
+    try {
+      window.sessionStorage.setItem(playerTokenStorageKey(gameId), playerToken);
+    } catch {
+      // Without storage, player 2 can still play until the current socket drops.
+    }
+  }
+}
+
+function readPlayerToken(gameId: string): string | undefined {
+  try {
+    const token = window.localStorage.getItem(playerTokenStorageKey(gameId));
+
+    if (token) {
+      return token;
+    }
+  } catch {
+    // Fall back to session storage below.
+  }
+
+  try {
+    return window.sessionStorage.getItem(playerTokenStorageKey(gameId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function playerTokenStorageKey(gameId: string): string {
+  return `drop-ship:player-token:${gameId}`;
 }

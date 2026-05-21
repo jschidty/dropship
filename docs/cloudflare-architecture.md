@@ -246,7 +246,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 
 | Message | Purpose |
 |---|---|
-| `{ type: "matchStart", playerId, serverTick, config, initialState }` | Begin from the resolved match config |
+| `{ type: "matchStart", playerId, role, canControl, seatToken, serverTick, config, initialState }` | Begin from the resolved match config; clients persist `seatToken` for reconnect when supplied |
 | `{ type: "tickCommands", tick, commands }` | The complete command batch for tick N |
 | `{ type: "commandAck", clientSeq, executeTick }` | Optional UI/debug acknowledgement |
 | `{ type: "desync", tick, hashes }` | Hash mismatch detected |
@@ -355,10 +355,11 @@ After match end and retention, archive the command log plus final snapshot to R2
 
 ## Reconnect
 
-1. Client sends `{ type: "reconnect", lastTick }`; during migration it may include `playerId`, but the DO ignores it.
-2. DO finds the latest snapshot at or before current tick.
-3. DO sends that snapshot plus all non-empty command batches after it.
-4. Client loads the snapshot, fast-simulates to the latest tick batch it has, and resumes.
+1. Client reconnects the WebSocket with its server-issued seat token, when it has one.
+2. Client sends `{ type: "reconnect", lastTick }`; during migration it may include `playerId`, but the DO ignores it.
+3. DO finds the latest snapshot at or before current tick.
+4. DO sends that snapshot plus all non-empty command batches after it.
+5. Client loads the snapshot, fast-simulates to the latest tick batch it has, and resumes.
 
 If no snapshot exists yet, reconnect starts from `matchStart` plus command batches from tick 0.
 

@@ -115,5 +115,7 @@ export type MountMinimalGameOptions = Readonly<{
   debugNetworkLogs?: boolean;
   initialPaused?: boolean;
   creatorToken?: string;
+  playerToken?: string;
+  rememberPlayerToken?: (matchId: string, playerToken: string) => void;
   createTwoPlayerGame?: () => Promise<void>;
 }>;

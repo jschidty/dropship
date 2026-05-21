@@ -290,6 +290,8 @@ export function mountMinimalGame(
           debugMatchParams: options.debugMatchParams,
           debugLogs: options.debugNetworkLogs,
           creatorToken: options.creatorToken,
+          playerToken: options.playerToken,
+          rememberPlayerToken: options.rememberPlayerToken,
         })
       : createMinimalLocalGame(playerId, {
           seed: options.seed,
@@ -370,6 +372,9 @@ export function mountMinimalGame(
     runtime.readConnectionStatus().mode === "local" &&
     (options.initialPaused ?? false);
   let hotkeysDialogOpen = options.initialPaused ?? false;
+  let networkStartMenuOpen =
+    runtime.readConnectionStatus().mode === "network" &&
+    (options.initialPaused ?? false);
   let twoPlayerShareState: "idle" | "creating" | "error" = "idle";
   let twoPlayerShareMessage = "";
   let nextCommandHistoryId = 1;
@@ -495,6 +500,7 @@ export function mountMinimalGame(
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
     const connectionStatus = runtime.readConnectionStatus();
+    syncNetworkStartMenu(connectionStatus);
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
 
     overlayStore.setSnapshot({
@@ -556,8 +562,12 @@ export function mountMinimalGame(
   }
 
   function openHotkeysDialog(): void {
-    if (runtime.readConnectionStatus().mode === "local") {
+    const connectionStatus = runtime.readConnectionStatus();
+
+    if (connectionStatus.mode === "local") {
       singlePlayerPaused = true;
+    } else if (!connectionStatus.running) {
+      networkStartMenuOpen = true;
     }
 
     hotkeysDialogOpen = true;
@@ -574,10 +584,40 @@ export function mountMinimalGame(
   function closeHotkeysDialog(): void {
     singlePlayerPaused = false;
     hotkeysDialogOpen = false;
+    networkStartMenuOpen = false;
     twoPlayerShareState = "idle";
     twoPlayerShareMessage = "";
     publishOverlaySnapshot();
     renderer.domElement.focus();
+  }
+
+  function syncNetworkStartMenu(
+    connectionStatus = runtime.readConnectionStatus()
+  ): boolean {
+    if (connectionStatus.mode !== "network") {
+      networkStartMenuOpen = false;
+      return false;
+    }
+
+    if (!connectionStatus.running) {
+      return false;
+    }
+
+    if (!networkStartMenuOpen) {
+      return false;
+    }
+
+    networkStartMenuOpen = false;
+
+    if (!hotkeysDialogOpen) {
+      return false;
+    }
+
+    hotkeysDialogOpen = false;
+    twoPlayerShareState = "idle";
+    twoPlayerShareMessage = "";
+    renderer.domElement.focus();
+    return true;
   }
 
   async function createTwoPlayerGameFromPauseMenu(): Promise<void> {
@@ -1471,6 +1511,9 @@ export function mountMinimalGame(
     estimatedFps = estimatedFps * 0.92 + instantaneousFps * 0.08;
     lastFrameAt = now;
     const interpolationAlpha = advanceSimulation(now, frameDelta);
+    if (syncNetworkStartMenu()) {
+      publishOverlaySnapshot();
+    }
     renderCurrentFrame(now, interpolationAlpha);
   };
 
@@ -1785,10 +1828,22 @@ function readPauseMenuMessage(status: RuntimeConnectionStatus): string {
 }
 
 function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
+  if (status.state === "connecting") {
+    return status.serverTick === undefined ? "Connecting..." : "Reconnecting...";
+  }
+
+  if (status.state === "closed" || status.state === "error") {
+    return "Reconnecting...";
+  }
+
   const missingPlayers =
     status.players?.filter((player) => !player.connected) ?? [];
 
   if (missingPlayers.length === 0) {
+    if (status.players && status.players.length > 0) {
+      return "Starting...";
+    }
+
     if (status.role === "player1") {
       return "Waiting for player 2...";
     }

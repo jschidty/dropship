@@ -35,6 +35,8 @@ export function createNetworkedGame(options: {
   debugMatchParams?: boolean;
   debugLogs?: boolean;
   creatorToken?: string;
+  playerToken?: string;
+  rememberPlayerToken?: (matchId: string, playerToken: string) => void;
 }): LocalGameRuntime {
   let assignedPlayerId = options.playerId ?? 1;
   let assignedRole: MatchSessionRole = options.creatorToken
@@ -52,6 +54,9 @@ export function createNetworkedGame(options: {
   const pendingEvents: typeof world.events = [];
   const outbox: string[] = [];
   let socket: WebSocket | null = null;
+  let reconnectTimerId: number | null = null;
+  let reconnectAttempt = 0;
+  let activePlayerToken = options.playerToken;
   let clientSeq = 0;
   let disposed = false;
   let status: RuntimeConnectionStatus = {
@@ -217,6 +222,10 @@ export function createNetworkedGame(options: {
       queuedBatches.clear();
       pendingEvents.splice(0);
       outbox.splice(0);
+      if (reconnectTimerId !== null) {
+        window.clearTimeout(reconnectTimerId);
+        reconnectTimerId = null;
+      }
       socket?.close();
       socket = null;
     },
@@ -231,19 +240,26 @@ export function createNetworkedGame(options: {
       options.serverUrl,
       options.seed,
       options.debugMatchParams,
-      options.creatorToken
+      options.creatorToken,
+      activePlayerToken
     );
     debugLog("connection:connecting", {
       url,
       ...summarizeWorld(world),
     });
-    socket = new WebSocket(url);
+    const nextSocket = new WebSocket(url);
+    socket = nextSocket;
     status = {
       ...status,
       state: "connecting",
     };
 
-    socket.addEventListener("open", () => {
+    nextSocket.addEventListener("open", () => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
+      reconnectAttempt = 0;
       status = {
         ...status,
         state: "open",
@@ -259,12 +275,20 @@ export function createNetworkedGame(options: {
       });
       flushOutbox();
     });
-    socket.addEventListener("message", (event: MessageEvent) => {
+    nextSocket.addEventListener("message", (event: MessageEvent) => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       if (typeof event.data === "string") {
         receiveServerMessage(event.data);
       }
     });
-    socket.addEventListener("close", () => {
+    nextSocket.addEventListener("close", (event: CloseEvent) => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       debugLog("connection:closed", {
         disposed,
         serverTick: status.serverTick ?? null,
@@ -272,15 +296,33 @@ export function createNetworkedGame(options: {
         outboxMessages: outbox.length,
         ...summarizeWorld(world),
       });
+      socket = null;
       if (!disposed) {
+        if (event.reason === "seat-replaced") {
+          status = {
+            ...status,
+            state: "closed",
+            running: false,
+            players: undefined,
+            lastError: "Seat opened in another tab",
+          };
+          return;
+        }
+
         status = {
           ...status,
-          state: "closed",
+          state: "connecting",
           running: false,
+          players: undefined,
         };
+        scheduleReconnect();
       }
     });
-    socket.addEventListener("error", () => {
+    nextSocket.addEventListener("error", () => {
+      if (socket !== nextSocket) {
+        return;
+      }
+
       debugLog("connection:error", {
         serverTick: status.serverTick ?? null,
         ...summarizeWorld(world),
@@ -289,9 +331,45 @@ export function createNetworkedGame(options: {
         ...status,
         state: "error",
         running: false,
+        players: undefined,
         lastError: "WebSocket error",
       };
+      scheduleReconnect();
+      try {
+        nextSocket.close();
+      } catch {
+        // Reconnect is already scheduled.
+      }
     });
+  }
+
+  function scheduleReconnect(): void {
+    if (disposed || reconnectTimerId !== null) {
+      return;
+    }
+
+    const delayMs = Math.min(5000, 250 * 2 ** reconnectAttempt);
+    reconnectAttempt += 1;
+
+    debugLog("connection:reconnect-scheduled", {
+      delayMs,
+      attempt: reconnectAttempt,
+      serverTick: status.serverTick ?? null,
+      ...summarizeWorld(world),
+    });
+    status = {
+      ...status,
+      state: "connecting",
+      running: false,
+      players: undefined,
+    };
+    reconnectTimerId = window.setTimeout(() => {
+      reconnectTimerId = null;
+
+      if (!disposed) {
+        connect();
+      }
+    }, delayMs);
   }
 
   function receiveServerMessage(data: string): void {
@@ -314,6 +392,10 @@ export function createNetworkedGame(options: {
       assignedPlayerId = message.playerId;
       assignedRole = message.role ?? readRoleForPlayerId(message.playerId);
       canControl = message.canControl ?? assignedRole !== "spectator";
+      if (message.seatToken) {
+        activePlayerToken = message.seatToken;
+        options.rememberPlayerToken?.(options.matchId, message.seatToken);
+      }
       debugLog("match:start", {
         serverTick: message.serverTick,
         role: assignedRole,
@@ -337,6 +419,7 @@ export function createNetworkedGame(options: {
         role: assignedRole,
         canControl,
         serverTick: message.serverTick,
+        players: undefined,
       };
 
       if (message.serverTick > world.tick) {
@@ -602,7 +685,8 @@ function createMatchWebSocketUrl(
   serverUrl?: string,
   seed?: number,
   debugMatchParams = false,
-  creatorToken?: string
+  creatorToken?: string,
+  playerToken?: string
 ): string {
   const base =
     serverUrl ??
@@ -618,6 +702,10 @@ function createMatchWebSocketUrl(
 
   if (creatorToken) {
     url.searchParams.set("creatorToken", creatorToken);
+  }
+
+  if (playerToken) {
+    url.searchParams.set("playerToken", playerToken);
   }
 
   return url.toString();

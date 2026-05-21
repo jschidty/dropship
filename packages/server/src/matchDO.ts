@@ -34,6 +34,7 @@ import { createTickLoop, type TickLoop } from "./tickLoop";
 
 const CURRENT_TICK_KEY = "match:currentTick";
 const CREATOR_TOKEN_KEY = "match:creatorToken";
+const PLAYER_TWO_TOKEN_KEY = "match:playerTwoToken";
 const INTERNAL_PLAYER_ID_HEADER = "x-drop-ship-player-id";
 const INTERNAL_CREATOR_TOKEN_HEADER = "x-drop-ship-creator-token";
 
@@ -43,6 +44,7 @@ type MatchSession = {
   playerId: PlayerId;
   role: MatchSessionRole;
   canControl: boolean;
+  seatToken?: string;
   socket: WebSocket;
 };
 
@@ -51,6 +53,7 @@ type MatchSessionAssignment = Readonly<{
   playerId: PlayerId;
   role: MatchSessionRole;
   canControl: boolean;
+  seatToken?: string;
 }>;
 
 export type MatchCoordinator = Readonly<{
@@ -226,12 +229,13 @@ export class MatchDurableObject {
       playerId: assignment.playerId,
       role: assignment.role,
       canControl: assignment.canControl,
+      seatToken: assignment.seatToken,
       serverTick: coordinator.tickLoop.currentTick(),
       config,
     });
     await this.sendStoredMatchEndIfPresent(session, coordinator);
-    this.broadcastConnectionStatus();
     this.updateTicking();
+    this.broadcastConnectionStatus();
 
     server.addEventListener("message", (event: MessageEvent) => {
       void this.receiveSocketMessage(session.id, event.data);
@@ -452,12 +456,58 @@ export class MatchDurableObject {
     request: Request,
     url: URL
   ): Promise<MatchSessionAssignment> {
-    return assignMatchSession({
+    const storedCreatorToken = await this.readCreatorToken();
+    const storedPlayerTwoToken = await this.readPlayerTwoToken();
+    const creatorToken = url.searchParams.get("creatorToken");
+    const playerToken = url.searchParams.get("playerToken");
+    const reconnectSeat = resolveAuthenticatedSeat({
+      creatorToken,
+      storedCreatorToken,
+      playerToken,
+      storedPlayerTwoToken,
+    });
+
+    if (reconnectSeat !== null) {
+      this.disconnectSeat(reconnectSeat);
+    }
+
+    const newPlayerTwoToken =
+      storedCreatorToken && !storedPlayerTwoToken ? createSeatToken() : null;
+    const assignment = assignMatchSession({
       requestedPlayerId: resolveConnectionPlayerId(request, url),
-      creatorToken: url.searchParams.get("creatorToken"),
-      storedCreatorToken: await this.readCreatorToken(),
+      creatorToken,
+      storedCreatorToken,
+      playerToken,
+      storedPlayerTwoToken,
+      newPlayerTwoToken,
       connectedPlayerIds: this.connectedPlayerIds(),
     });
+
+    if (
+      assignment.seat === 2 &&
+      assignment.seatToken &&
+      assignment.seatToken !== storedPlayerTwoToken
+    ) {
+      await this.state?.storage.put(PLAYER_TWO_TOKEN_KEY, assignment.seatToken);
+    }
+
+    return assignment;
+  }
+
+  private disconnectSeat(seat: PlayerId): void {
+    for (const session of this.sessions.values()) {
+      if (session.seat !== seat) {
+        continue;
+      }
+
+      this.sessions.delete(session.id);
+
+      try {
+        session.socket.close(1000, "seat-replaced");
+      } catch {
+        // The stale session has already been removed.
+      }
+    }
   }
 
   private connectedPlayerIds(): readonly PlayerId[] {
@@ -595,6 +645,10 @@ export class MatchDurableObject {
   private async readCreatorToken(): Promise<string | null> {
     return (await this.state?.storage.get<string>(CREATOR_TOKEN_KEY)) ?? null;
   }
+
+  private async readPlayerTwoToken(): Promise<string | null> {
+    return (await this.state?.storage.get<string>(PLAYER_TWO_TOKEN_KEY)) ?? null;
+  }
 }
 
 function recordHash(
@@ -629,19 +683,34 @@ async function createCatchupMessage(
   };
 }
 
-function createPlayerAssignment(playerId: PlayerId): MatchSessionAssignment {
-  return {
+function createPlayerAssignment(
+  playerId: PlayerId,
+  seatToken?: string | null
+): MatchSessionAssignment {
+  const assignment: MatchSessionAssignment = {
     seat: playerId,
     playerId,
     role: playerId === 2 ? "player2" : "player1",
     canControl: true,
   };
+
+  if (seatToken) {
+    return {
+      ...assignment,
+      seatToken,
+    };
+  }
+
+  return assignment;
 }
 
 export function assignMatchSession(options: {
   requestedPlayerId?: PlayerId | null;
   creatorToken?: string | null;
   storedCreatorToken?: string | null;
+  playerToken?: string | null;
+  storedPlayerTwoToken?: string | null;
+  newPlayerTwoToken?: string | null;
   connectedPlayerIds?: readonly PlayerId[];
 }): MatchSessionAssignment {
   const connectedPlayerIds = options.connectedPlayerIds ?? [];
@@ -655,6 +724,9 @@ export function assignMatchSession(options: {
   const storedCreatorToken = options.storedCreatorToken;
   const isCreator =
     Boolean(options.creatorToken) && options.creatorToken === storedCreatorToken;
+  const isPlayerTwo =
+    Boolean(options.playerToken) &&
+    options.playerToken === options.storedPlayerTwoToken;
 
   if (isCreator) {
     return !connectedPlayerIds.includes(1)
@@ -662,9 +734,15 @@ export function assignMatchSession(options: {
       : createSpectatorAssignment();
   }
 
-  if (storedCreatorToken) {
+  if (isPlayerTwo) {
     return !connectedPlayerIds.includes(2)
-      ? createPlayerAssignment(2)
+      ? createPlayerAssignment(2, options.storedPlayerTwoToken)
+      : createSpectatorAssignment();
+  }
+
+  if (storedCreatorToken) {
+    return !options.storedPlayerTwoToken && !connectedPlayerIds.includes(2)
+      ? createPlayerAssignment(2, options.newPlayerTwoToken)
       : createSpectatorAssignment();
   }
 
@@ -677,6 +755,29 @@ export function assignMatchSession(options: {
     : createSpectatorAssignment();
 }
 
+function resolveAuthenticatedSeat(options: {
+  creatorToken?: string | null;
+  storedCreatorToken?: string | null;
+  playerToken?: string | null;
+  storedPlayerTwoToken?: string | null;
+}): PlayerId | null {
+  if (
+    options.creatorToken &&
+    options.creatorToken === options.storedCreatorToken
+  ) {
+    return 1;
+  }
+
+  if (
+    options.playerToken &&
+    options.playerToken === options.storedPlayerTwoToken
+  ) {
+    return 2;
+  }
+
+  return null;
+}
+
 function createSpectatorAssignment(): MatchSessionAssignment {
   return {
     seat: null,
@@ -684,6 +785,16 @@ function createSpectatorAssignment(): MatchSessionAssignment {
     role: "spectator",
     canControl: false,
   };
+}
+
+function createSeatToken(): string {
+  const randomId =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+
+  return `seat-${randomId}`;
 }
 
 function canSessionSendMessage(

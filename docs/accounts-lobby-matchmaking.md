@@ -220,13 +220,16 @@ Rules:
 
 - The browser never decides `PlayerId` for multiplayer.
 - The WebSocket URL is `/api/matches/:matchId/ws`, with no `player` query param.
-- Until accounts/lobbies exist, the match DO assigns seats from the creator token
-  and active connections, then assigns spectators after P1/P2 are occupied.
+- Until accounts/lobbies exist, the match DO assigns P1 from the creator token,
+  assigns the first non-creator P2 a server-issued seat token, and assigns
+  spectators after P1/P2 are reserved.
 - The Worker authenticates the request, strips any client-supplied internal identity headers, resolves the user session, and forwards a server-authored identity context to the DO with `x-drop-ship-player-id`.
 - The DO maps `user_id` to `player_id` from `match_participants`.
-- `matchStart` remains the moment where the server tells the client its `playerId`.
+- `matchStart` remains the moment where the server tells the client its
+  `playerId` and any reconnect token for the assigned seat.
 - Client messages should eventually omit `playerId`. During migration, keep the field for compatibility but have the DO overwrite it from the session assignment.
-- Reconnect uses session plus `match_id`; it does not accept `playerId` from the client.
+- Reconnect uses session plus `match_id` plus a server-issued seat token when
+  present; it does not accept `playerId` from the client.
 - Debug seed and direct-seat URLs may remain only behind local development flags such as `debugSeat=1`; production app paths should not emit them.
 
 This blocks casual seat stealing and accidental wrong-link bugs. It does not stop a modified client from sending bad commands for its assigned seat, which is acceptable for this phase.

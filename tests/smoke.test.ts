@@ -312,6 +312,48 @@ function testMatchSessionRoleAssignment(): void {
   assert.deepEqual(
     assignMatchSession({
       storedCreatorToken: "creator",
+      newPlayerTwoToken: "p2-token",
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: 2,
+      playerId: 2,
+      role: "player2",
+      canControl: true,
+      seatToken: "p2-token",
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      storedPlayerTwoToken: "p2-token",
+      playerToken: "p2-token",
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: 2,
+      playerId: 2,
+      role: "player2",
+      canControl: true,
+      seatToken: "p2-token",
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
+      storedPlayerTwoToken: "p2-token",
+      connectedPlayerIds: [1],
+    }),
+    {
+      seat: null,
+      playerId: 1,
+      role: "spectator",
+      canControl: false,
+    }
+  );
+  assert.deepEqual(
+    assignMatchSession({
+      storedCreatorToken: "creator",
       creatorToken: "creator",
       connectedPlayerIds: [1],
     }),

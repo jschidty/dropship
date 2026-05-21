@@ -46,8 +46,7 @@ https://<worker-host>/
 ## Current Limits
 
 - no lobby UI yet
-- no reconnect/catch-up command log yet
 - no Durable Object SQLite persistence yet
-- no auth, accounts, matchmaking, or durable seat identity yet
+- no auth, accounts, or matchmaking yet
 - spectators can watch from the share link but cannot control units
 - the DO pauses ticking until both player seats are connected

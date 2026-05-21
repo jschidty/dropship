@@ -80,7 +80,10 @@ import {
   type CommandHistoryEntry,
   type PendingCommandMenuCommand,
 } from "../ui/GameOverlay";
-import { createMatchStatusSnapshot } from "../ui/overlaySelectors";
+import {
+  createMatchEndDialogSnapshot,
+  createMatchStatusSnapshot,
+} from "../ui/overlaySelectors";
 import { createUiStore } from "../ui/store";
 import { createMinimalLocalGame } from "../runtime/localGame";
 import { DEFAULT_LOCAL_PLAYER_ID } from "../runtime/matchConfig";
@@ -193,6 +196,7 @@ type LightingRig = Readonly<{
 
 type RenderScratch = {
   focus: THREE.Vector3;
+  pannedFocus: THREE.Vector3;
   worldUp: THREE.Vector3;
   horizontal: THREE.Vector3;
   cameraOffset: THREE.Vector3;
@@ -240,6 +244,7 @@ const MAX_SIM_FRAME_DELTA_MS = 250;
 const COMMAND_HISTORY_LIMIT = 10;
 const PLANET_SELECTION_MIN_RADIUS_PX = 28;
 const PLANET_SELECTION_RADIUS_MULTIPLIER = 2.16;
+const PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER = 2.28;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const CAMERA_ZOOM_TWEEN_MS = 560;
 const CAMERA_ZOOM_TO_FIT_PADDING = 1.18;
@@ -307,6 +312,7 @@ export function mountMinimalGame(
     preset: "top",
     yaw: CAMERA_PRESETS.top.yaw,
     pitch: CAMERA_PRESETS.top.pitch,
+    panOffset: new THREE.Vector3(),
     viewHeights: {
       tactical: CAMERA_MODES.tactical.defaultViewHeight,
       strategic: CAMERA_MODES.strategic.defaultViewHeight,
@@ -357,6 +363,8 @@ export function mountMinimalGame(
   const planetRingMaterial = createPlanetRingMaterial();
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
+  const planetSelectionRing = createPlanetSelectionRing();
+  worldGroup.add(planetSelectionRing.root);
   const planetHoverRing = createPlanetHoverRing();
   worldGroup.add(planetHoverRing.root);
   const captureProgressRings = new Map<string, CaptureProgressRing>();
@@ -375,6 +383,8 @@ export function mountMinimalGame(
   let networkStartMenuOpen =
     runtime.readConnectionStatus().mode === "network" &&
     (options.initialPaused ?? false);
+  let matchEndDialogOpen = runtime.world.matchResult !== null;
+  let replayRequestPending = false;
   let twoPlayerShareState: "idle" | "creating" | "error" = "idle";
   let twoPlayerShareMessage = "";
   let nextCommandHistoryId = 1;
@@ -451,6 +461,9 @@ export function mountMinimalGame(
       runtime.readyForMatch();
       publishOverlaySnapshot();
     },
+    replayMatch() {
+      replayMatch();
+    },
     createTwoPlayerGame() {
       void createTwoPlayerGameFromPauseMenu();
     },
@@ -492,6 +505,7 @@ export function mountMinimalGame(
   let renderFrameIndex = 0;
   let activeSelectionMode: SelectionMode = "replace";
   let selectionDragStarted = false;
+  let previousCameraFocusContextKey: string | null = null;
   const cameraZoomTween: CameraZoomTween = {
     active: false,
     mode: cameraControls.mode,
@@ -504,6 +518,7 @@ export function mountMinimalGame(
     const units = runtime.readUnits();
     const planets = runtime.readPlanets();
     const connectionStatus = runtime.readConnectionStatus();
+    syncMatchEndDialog();
     syncNetworkStartMenu(connectionStatus);
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
 
@@ -528,7 +543,11 @@ export function mountMinimalGame(
         planets,
         readPendingStatusText(connectionStatus, isSinglePlayerPaused())
       ),
-      hotkeysOpen: hotkeysDialogOpen,
+      matchEnd: createMatchEndDialogSnapshot(runtime, units, planets, {
+        open: matchEndDialogOpen,
+        replaying: replayRequestPending,
+      }),
+      hotkeysOpen: hotkeysDialogOpen && !matchEndDialogOpen,
       connectionStatus,
       pauseMenuMessage: readPauseMenuMessage(connectionStatus),
       twoPlayerShare: {
@@ -634,6 +653,67 @@ export function mountMinimalGame(
     twoPlayerShareMessage = "";
     renderer.domElement.focus();
     return true;
+  }
+
+  function syncMatchEndDialog(): void {
+    if (!runtime.world.matchResult) {
+      matchEndDialogOpen = false;
+      replayRequestPending = false;
+      return;
+    }
+
+    if (replayRequestPending) {
+      return;
+    }
+
+    matchEndDialogOpen = true;
+    hotkeysDialogOpen = false;
+    networkStartMenuOpen = false;
+    singlePlayerPaused = false;
+  }
+
+  function replayMatch(): void {
+    if (!runtime.world.matchResult || replayRequestPending) {
+      return;
+    }
+
+    const connectionStatus = runtime.readConnectionStatus();
+    resetInteractionStateForNewMatch();
+    matchEndDialogOpen = false;
+    replayRequestPending = true;
+
+    if (connectionStatus.mode === "network") {
+      hotkeysDialogOpen = true;
+      networkStartMenuOpen = true;
+    }
+
+    runtime.replayMatch();
+
+    if (connectionStatus.mode === "local") {
+      replayRequestPending = false;
+      hotkeysDialogOpen = false;
+      networkStartMenuOpen = false;
+      singlePlayerPaused = false;
+      startZoomToFit(performance.now());
+      renderer.domElement.focus();
+    }
+
+    publishOverlaySnapshot();
+  }
+
+  function resetInteractionStateForNewMatch(): void {
+    selectedUnitKeys.clear();
+    previousCommandSelectionKeys.clear();
+    selectedPlanetKey = null;
+    commandMenuLeaderKey = null;
+    previousCommandLeaderKey = null;
+    hoveredPlanetKey = null;
+    pendingCommand = null;
+    commandHistory.length = 0;
+    nextCommandHistoryId = 1;
+    twoPlayerShareState = "idle";
+    twoPlayerShareMessage = "";
+    clearZoomToFitFocus();
   }
 
   async function createTwoPlayerGameFromPauseMenu(): Promise<void> {
@@ -778,6 +858,7 @@ export function mountMinimalGame(
 
     zoomToFitFocusEnabled = true;
     zoomToFitContextId += 1;
+    cameraControls.panOffset.set(0, 0, 0);
     cameraZoomTween.active = true;
     cameraZoomTween.mode = cameraControls.mode;
     cameraZoomTween.from = cameraControls.viewHeights[cameraControls.mode];
@@ -934,10 +1015,7 @@ export function mountMinimalGame(
 
     event.preventDefault();
     cameraControls.isDragging = true;
-    cameraControls.dragMode =
-      !canControlUnits() || event.button !== 0 || event.altKey
-        ? "camera"
-        : "select";
+    cameraControls.dragMode = readPointerDragMode(event, canControlUnits());
     cameraControls.pointerId = event.pointerId;
     cameraControls.startPointerX = event.clientX;
     cameraControls.startPointerY = event.clientY;
@@ -947,6 +1025,12 @@ export function mountMinimalGame(
     activeSelectionMode = readSelectionMode(event);
     selectionDragStarted = false;
     clearZoomToFitFocus();
+    if (cameraControls.dragMode === "pan") {
+      previousCameraFocusContextKey = readCameraFocusContextKey(
+        selectedPlanetKey,
+        selectedUnitKeys
+      );
+    }
     hideSelectionBox(selectionBox);
     renderer.domElement.setPointerCapture(event.pointerId);
   };
@@ -974,6 +1058,19 @@ export function mountMinimalGame(
     cameraControls.dragDistancePx += Math.hypot(dx, dy);
     cameraControls.lastPointerX = event.clientX;
     cameraControls.lastPointerY = event.clientY;
+
+    if (cameraControls.dragMode === "pan") {
+      cameraZoomTween.active = false;
+      panCameraByScreenDelta(
+        cameraControls,
+        camera,
+        viewport,
+        dx,
+        dy,
+        scratch
+      );
+      return;
+    }
 
     if (cameraControls.dragMode === "camera") {
       cameraZoomTween.active = false;
@@ -1187,13 +1284,17 @@ export function mountMinimalGame(
       camera,
       cameraControls,
       viewport,
-      writeResizeCameraFocus(
-        cameraFocusTween,
-        scratch.focus,
-        runtime.readUnits(),
-        runtime.readPlanets(),
-        selectedPlanetKey,
-        selectedUnitKeys
+      writePannedCameraFocus(
+        scratch.pannedFocus,
+        writeResizeCameraFocus(
+          cameraFocusTween,
+          scratch.focus,
+          runtime.readUnits(),
+          runtime.readPlanets(),
+          selectedPlanetKey,
+          selectedUnitKeys
+        ),
+        cameraControls
       ),
       scratch
     );
@@ -1344,13 +1445,25 @@ export function mountMinimalGame(
           selectedPlanetKey,
           selectedUnitKeys
         );
+    const cameraFocusContextKey = zoomToFitFocusEnabled
+      ? `fit:${zoomToFitContextId}`
+      : readCameraFocusContextKey(selectedPlanetKey, selectedUnitKeys);
+
+    if (cameraFocusContextKey !== previousCameraFocusContextKey) {
+      cameraControls.panOffset.set(0, 0, 0);
+      previousCameraFocusContextKey = cameraFocusContextKey;
+    }
+
     const displayedFocus = updateCameraFocusTween(
       cameraFocusTween,
-      zoomToFitFocusEnabled
-        ? `fit:${zoomToFitContextId}`
-        : readCameraFocusContextKey(selectedPlanetKey, selectedUnitKeys),
+      cameraFocusContextKey,
       focus,
       now
+    );
+    const cameraFocus = writePannedCameraFocus(
+      scratch.pannedFocus,
+      displayedFocus,
+      cameraControls
     );
     const sunDirection = writeSunDirection(scratch.sunDirection, runtime.world.config);
     const sunColor = writeSunColor(scratch.sunColor, runtime.world.config);
@@ -1371,7 +1484,7 @@ export function mountMinimalGame(
       renderQuality
     );
     updateCameraZoomTween(cameraZoomTween, cameraControls, now);
-    applyCameraControls(camera, cameraControls, viewport, displayedFocus, scratch);
+    applyCameraControls(camera, cameraControls, viewport, cameraFocus, scratch);
     camera.updateMatrixWorld();
     const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, viewport.height);
 
@@ -1426,6 +1539,12 @@ export function mountMinimalGame(
       false,
       cameraControls.preset
     );
+    updatePlanetSelectionRing(
+      planetSelectionRing,
+      selectedPlanet,
+      cameraControls.mode === "tactical",
+      cameraControls.preset
+    );
     updatePlanetHoverRing(
       planetHoverRing,
       hoveredPlanet,
@@ -1451,7 +1570,7 @@ export function mountMinimalGame(
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
-      displayedFocus,
+      cameraFocus,
       planets,
       sunDirection,
       sunDistance,
@@ -1552,13 +1671,17 @@ export function mountMinimalGame(
     camera,
     cameraControls,
     viewport,
-    writeResizeCameraFocus(
-      cameraFocusTween,
-      scratch.focus,
-      runtime.readUnits(),
-      runtime.readPlanets(),
-      selectedPlanetKey,
-      selectedUnitKeys
+    writePannedCameraFocus(
+      scratch.pannedFocus,
+      writeResizeCameraFocus(
+        cameraFocusTween,
+        scratch.focus,
+        runtime.readUnits(),
+        runtime.readPlanets(),
+        selectedPlanetKey,
+        selectedUnitKeys
+      ),
+      cameraControls
     ),
     scratch
   );
@@ -1603,6 +1726,7 @@ export function mountMinimalGame(
       disposeUnitBatchRenderer(unitBatches);
       disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
+      disposePlanetHoverRing(planetSelectionRing);
       disposePlanetHoverRing(planetHoverRing);
       disposeCaptureProgressRings(worldGroup, captureProgressRings);
       disposeTacticalGrid(tacticalGrid);
@@ -1910,6 +2034,7 @@ function isCurrentPlayerReady(status: RuntimeConnectionStatus): boolean {
 function createRenderScratch(): RenderScratch {
   return {
     focus: new THREE.Vector3(),
+    pannedFocus: new THREE.Vector3(),
     worldUp: new THREE.Vector3(0, 1, 0),
     horizontal: new THREE.Vector3(),
     cameraOffset: new THREE.Vector3(),
@@ -1994,6 +2119,62 @@ function updateCameraFocusTween(
     targetFocus,
     smoothstep(0, 1, progress)
   );
+}
+
+function writePannedCameraFocus(
+  target: THREE.Vector3,
+  focus: THREE.Vector3,
+  cameraControls: CameraControls
+): THREE.Vector3 {
+  return target.copy(focus).add(cameraControls.panOffset);
+}
+
+function panCameraByScreenDelta(
+  cameraControls: CameraControls,
+  camera: THREE.OrthographicCamera,
+  viewport: ViewportMetrics,
+  dx: number,
+  dy: number,
+  scratch: RenderScratch
+): void {
+  const worldUnitsPerPixel =
+    cameraControls.viewHeights[cameraControls.mode] /
+    Math.max(viewport.height, 1);
+  const screenRight = writeCameraPanAxis(
+    scratch.cameraRight,
+    camera,
+    0,
+    Math.cos(cameraControls.yaw),
+    -Math.sin(cameraControls.yaw)
+  );
+  const screenUp = writeCameraPanAxis(
+    scratch.cameraUp,
+    camera,
+    1,
+    Math.sin(cameraControls.yaw),
+    Math.cos(cameraControls.yaw)
+  );
+
+  cameraControls.panOffset
+    .addScaledVector(screenRight, -dx * worldUnitsPerPixel)
+    .addScaledVector(screenUp, dy * worldUnitsPerPixel);
+}
+
+function writeCameraPanAxis(
+  target: THREE.Vector3,
+  camera: THREE.OrthographicCamera,
+  column: number,
+  fallbackX: number,
+  fallbackZ: number
+): THREE.Vector3 {
+  target.setFromMatrixColumn(camera.matrixWorld, column);
+  target.y = 0;
+
+  if (target.lengthSq() <= 0.000001) {
+    target.set(fallbackX, 0, fallbackZ);
+  }
+
+  return target.normalize();
 }
 
 function applyCameraControls(
@@ -2573,6 +2754,19 @@ function replaceSelectionWithOwnedUnits(
 
 function isSelectionRemoveModifier(event: PointerEvent): boolean {
   return event.ctrlKey;
+}
+
+function readPointerDragMode(
+  event: PointerEvent,
+  canControlUnits: boolean
+): CameraControls["dragMode"] {
+  if (event.button === 2 && event.shiftKey) {
+    return "pan";
+  }
+
+  return !canControlUnits || event.button !== 0 || event.altKey
+    ? "camera"
+    : "select";
 }
 
 function readSelectionMode(event: PointerEvent): SelectionMode {
@@ -3163,6 +3357,50 @@ function updateTacticalGrid(
   );
   writeTacticalPlaneQuaternion(tacticalGrid.root.quaternion, cameraPreset);
   tacticalGrid.root.scale.setScalar(context.radius);
+}
+
+function createPlanetSelectionRing(): PlanetHoverRing {
+  const root = new THREE.Group();
+  const geometry = createTacticalIntersectionGeometry();
+  const material = new THREE.LineBasicMaterial({
+    color: TACTICAL_OVERLAY_COLOR_HEX,
+    transparent: true,
+    opacity: 0.94,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const ring = new THREE.LineLoop(geometry, material);
+
+  root.name = "selected-planet-tactical-ring";
+  root.visible = false;
+  ring.name = "selected planet tactical selection ring";
+  ring.frustumCulled = false;
+  ring.renderOrder = 9.05;
+  root.add(ring);
+
+  return {
+    root,
+    ring,
+  };
+}
+
+function updatePlanetSelectionRing(
+  selectionRing: PlanetHoverRing,
+  planet: PlanetViewModel | null,
+  enabled: boolean,
+  cameraPreset: CameraPreset | null
+): void {
+  selectionRing.root.visible = enabled && !!planet;
+
+  if (!selectionRing.root.visible || !planet) {
+    return;
+  }
+
+  selectionRing.root.position.copy(planet.position);
+  writeTacticalPlaneQuaternion(selectionRing.root.quaternion, cameraPreset);
+  selectionRing.root.scale.setScalar(
+    planet.radius * PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER
+  );
 }
 
 function createPlanetHoverRing(): PlanetHoverRing {

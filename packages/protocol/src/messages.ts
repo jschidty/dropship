@@ -47,13 +47,19 @@ export type MatchEndReportMessage = Readonly<{
   finalHash: string;
 }>;
 
+export type ReplayMessage = Readonly<{
+  type: "replay";
+  playerId: PlayerId;
+}>;
+
 export type ClientMessage =
   | ReadyMessage
   | CommandMessage
   | HashMessage
   | SnapshotMessage
   | ReconnectMessage
-  | MatchEndReportMessage;
+  | MatchEndReportMessage
+  | ReplayMessage;
 
 export type MatchStartMessage = Readonly<{
   type: "matchStart";

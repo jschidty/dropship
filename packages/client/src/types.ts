@@ -76,6 +76,7 @@ export type LocalGameRuntime = Readonly<{
   readSnapshot: () => CompactSimSnapshot;
   readConnectionStatus: () => RuntimeConnectionStatus;
   readyForMatch: () => void;
+  replayMatch: () => void;
   dispose: () => void;
 }>;
 

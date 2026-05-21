@@ -28,7 +28,10 @@ import {
   type SnapshotStore,
   type StoredSnapshot,
 } from "./snapshotStore";
-import { readOrCreateStoredMatchConfig } from "./matchConfigStore";
+import {
+  MATCH_CONFIG_KEY,
+  readOrCreateStoredMatchConfig,
+} from "./matchConfigStore";
 import { createMatchEndStore, type MatchEndStore } from "./matchEnd";
 import { createTickLoop, type TickLoop } from "./tickLoop";
 
@@ -309,6 +312,11 @@ export class MatchDurableObject {
 
       if (sessionMessage.type === "ready") {
         this.markSessionReady(session);
+        return;
+      }
+
+      if (sessionMessage.type === "replay") {
+        await this.replayMatch(session);
         return;
       }
 
@@ -602,6 +610,55 @@ export class MatchDurableObject {
     this.updateTicking();
   }
 
+  private async replayMatch(session: MatchSession): Promise<void> {
+    if (!this.matchEnded || !session.canControl || session.seat === null) {
+      return;
+    }
+
+    if (this.timerId !== null) {
+      clearInterval(this.timerId);
+      this.timerId = null;
+    }
+
+    const storage = this.state?.storage;
+    await deleteStoredMatchRuntimeState(storage);
+
+    const config = createCaptureDemoConfig({
+      matchId: this.config?.matchId ?? "demo",
+      seed: createRandomSeed(this.config?.seed),
+      contentHash: DEFAULT_CONTENT_HASH,
+    });
+    await storage?.put(MATCH_CONFIG_KEY, config);
+
+    this.config = config;
+    this.coordinator = createMatchCoordinator({
+      commandLogStore: createCommandLogStore(storage),
+      matchEndStore: createMatchEndStore(storage),
+      snapshotStore: createSnapshotStore({
+        storage,
+      }),
+    });
+    this.matchEnded = false;
+    this.matchStarted = this.allPlayersConnected();
+    this.readyPlayerIds.clear();
+    this.broadcastingTick = false;
+
+    for (const activeSession of this.sessions.values()) {
+      this.send(activeSession, {
+        type: "matchStart",
+        playerId: activeSession.playerId,
+        role: activeSession.role,
+        canControl: activeSession.canControl,
+        seatToken: activeSession.seatToken,
+        serverTick: 0,
+        config,
+      });
+    }
+
+    this.updateTicking();
+    this.broadcastConnectionStatus();
+  }
+
   private async finalizeTrustedReportFromConnectedPlayer(): Promise<void> {
     if (
       this.matchEnded ||
@@ -884,6 +941,34 @@ function parseSeed(value: string | null): number | undefined {
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
 }
 
+async function deleteStoredMatchRuntimeState(
+  storage: DurableObjectStorage | undefined
+): Promise<void> {
+  if (!storage) {
+    return;
+  }
+
+  const stored = await storage.list();
+  const keys = [...stored.keys()].filter(
+    (key) => key !== CREATOR_TOKEN_KEY && key !== PLAYER_TWO_TOKEN_KEY
+  );
+
+  await Promise.all(keys.map((key) => storage.delete(key)));
+}
+
+function createRandomSeed(previousSeed?: number): number {
+  let seed: number;
+
+  if (globalThis.crypto?.getRandomValues) {
+    seed =
+      globalThis.crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000_000;
+  } else {
+    seed = Math.floor(Math.random() * 1_000_000_000);
+  }
+
+  return seed === previousSeed ? (seed + 1) % 1_000_000_000 : seed;
+}
+
 function parseMatchIdFromPath(pathname: string): string | null {
   const match = /^\/api\/matches\/([^/]+)(?:\/ws)?$/.exec(pathname);
 
@@ -900,7 +985,8 @@ function parseClientMessage(data: string): ClientMessage | null {
       parsed.type === "hash" ||
       parsed.type === "snapshot" ||
       parsed.type === "reconnect" ||
-      parsed.type === "matchEndReport"
+      parsed.type === "matchEndReport" ||
+      parsed.type === "replay"
     ) {
       return parsed as ClientMessage;
     }

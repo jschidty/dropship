@@ -232,6 +232,16 @@ export function createNetworkedGame(options: {
         playerId: assignedPlayerId,
       });
     },
+    replayMatch() {
+      if (!canControl || assignedRole === "spectator") {
+        return;
+      }
+
+      sendClientMessage({
+        type: "replay",
+        playerId: assignedPlayerId,
+      });
+    },
     dispose() {
       debugLog("connection:dispose", {
         socketState: socket?.readyState ?? null,
@@ -428,6 +438,8 @@ export function createNetworkedGame(options: {
         content: DEFAULT_CONTENT_REGISTRY,
       });
       queuedBatches.clear();
+      pendingEvents.splice(0);
+      clientSeq = 0;
       loggedMatchResultTick = null;
       reportedMatchEndTick = null;
       status = {
@@ -435,6 +447,7 @@ export function createNetworkedGame(options: {
         playerId: message.playerId,
         role: assignedRole,
         canControl,
+        running: false,
         serverTick: message.serverTick,
         players: undefined,
       };
@@ -657,6 +670,13 @@ export function createNetworkedGame(options: {
         tick: message.tick,
         winner: message.winner,
         finalHash: message.finalHash,
+      });
+      return;
+    }
+
+    if (message.type === "replay") {
+      debugLog("match:replay", {
+        isOpen,
       });
     }
   }

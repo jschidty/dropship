@@ -15,9 +15,10 @@ export type CameraControls = {
   preset: CameraPreset | null;
   yaw: number;
   pitch: number;
+  panOffset: THREE.Vector3;
   viewHeights: Record<CameraMode, number>;
   isDragging: boolean;
-  dragMode: "camera" | "select" | null;
+  dragMode: "camera" | "pan" | "select" | null;
   pointerId: number | null;
   startPointerX: number;
   startPointerY: number;

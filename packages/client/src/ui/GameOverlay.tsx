@@ -33,6 +33,26 @@ export type MatchStatusSnapshot = Readonly<{
   resultKind: "pending" | "win" | "lose" | "draw";
 }>;
 
+export type MatchEndPlayerStatsSnapshot = Readonly<{
+  label: string;
+  color: string;
+  planets: number;
+  units: number;
+}>;
+
+export type MatchEndDialogSnapshot = Readonly<{
+  open: boolean;
+  resultText: string;
+  resultKind: MatchStatusSnapshot["resultKind"];
+  reasonText: string;
+  durationText: string;
+  seedText: string;
+  playerOne: MatchEndPlayerStatsSnapshot;
+  playerTwo: MatchEndPlayerStatsSnapshot;
+  canReplay: boolean;
+  replaying: boolean;
+}>;
+
 export type TwoPlayerShareSnapshot = Readonly<{
   canCreate: boolean;
   state: "idle" | "creating" | "error";
@@ -48,6 +68,7 @@ export type GameOverlaySnapshot = Readonly<{
   pendingCommand: PendingCommandMenuCommand;
   commandHistory: readonly CommandHistoryEntry[];
   matchStatus: MatchStatusSnapshot;
+  matchEnd: MatchEndDialogSnapshot;
   hotkeysOpen: boolean;
   connectionStatus: RuntimeConnectionStatus;
   pauseMenuMessage: string;
@@ -66,6 +87,7 @@ export type GameOverlayActions = Readonly<{
   selectCommandHistoryEntry: (entryId: number) => void;
   closeHotkeysDialog: () => void;
   readyForMatch: () => void;
+  replayMatch: () => void;
   createTwoPlayerGame: () => void;
 }>;
 
@@ -89,6 +111,28 @@ export function createInitialOverlaySnapshot(
       playerTwoColor: "#ff4fd8",
       resultText: "",
       resultKind: "pending",
+    },
+    matchEnd: {
+      open: false,
+      resultText: "",
+      resultKind: "pending",
+      reasonText: "",
+      durationText: "",
+      seedText: "",
+      playerOne: {
+        label: "Player 1",
+        color: "#74d9ff",
+        planets: 0,
+        units: 0,
+      },
+      playerTwo: {
+        label: "Player 2",
+        color: "#ff4fd8",
+        planets: 0,
+        units: 0,
+      },
+      canReplay: false,
+      replaying: false,
     },
     hotkeysOpen: false,
     connectionStatus,
@@ -137,6 +181,7 @@ function GameOverlay({
       <CommandMenu snapshot={snapshot} actions={actions} />
       <RoleBadge snapshot={snapshot} />
       <HotkeysDialog snapshot={snapshot} actions={actions} />
+      <MatchEndDialog snapshot={snapshot.matchEnd} actions={actions} />
     </>
   );
 }
@@ -561,6 +606,93 @@ function HotkeysDialog({
         </div>
       </section>
     </div>
+  );
+}
+
+function MatchEndDialog({
+  snapshot,
+  actions,
+}: {
+  snapshot: MatchEndDialogSnapshot;
+  actions: GameOverlayActions;
+}) {
+  return (
+    <div className="match-end-dialog" hidden={!snapshot.open}>
+      <section className="match-end-dialog-panel" aria-label="Match stats">
+        <h2 className="match-end-dialog-title">Match complete</h2>
+        <div
+          className="match-end-dialog-result"
+          data-result={snapshot.resultKind}
+        >
+          {snapshot.resultText}
+        </div>
+        <dl className="match-end-dialog-stats">
+          <dt>Time</dt>
+          <dd>{snapshot.durationText}</dd>
+          <dt>Reason</dt>
+          <dd>{snapshot.reasonText}</dd>
+          <dt>Planets</dt>
+          <dd>
+            <MatchEndStatPair
+              playerOne={snapshot.playerOne}
+              playerTwo={snapshot.playerTwo}
+              readValue={(player) => player.planets}
+            />
+          </dd>
+          <dt>Ships</dt>
+          <dd>
+            <MatchEndStatPair
+              playerOne={snapshot.playerOne}
+              playerTwo={snapshot.playerTwo}
+              readValue={(player) => player.units}
+            />
+          </dd>
+          <dt>Seed</dt>
+          <dd>{snapshot.seedText}</dd>
+        </dl>
+        <button
+          type="button"
+          className="match-end-dialog-replay"
+          disabled={!snapshot.canReplay || snapshot.replaying}
+          onPointerDown={stopOverlayPointer}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            actions.replayMatch();
+            event.currentTarget.blur();
+          }}
+        >
+          {snapshot.replaying ? "Starting..." : "Replay"}
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function MatchEndStatPair({
+  playerOne,
+  playerTwo,
+  readValue,
+}: {
+  playerOne: MatchEndPlayerStatsSnapshot;
+  playerTwo: MatchEndPlayerStatsSnapshot;
+  readValue: (player: MatchEndPlayerStatsSnapshot) => number;
+}) {
+  return (
+    <span className="match-end-stat-pair">
+      <span
+        className="match-end-stat-player"
+        style={{ "--team-color": playerOne.color } as Record<string, string>}
+      >
+        P1 {readValue(playerOne)}
+      </span>
+      <span
+        className="match-end-stat-player"
+        style={{ "--team-color": playerTwo.color } as Record<string, string>}
+      >
+        P2 {readValue(playerTwo)}
+      </span>
+    </span>
   );
 }
 

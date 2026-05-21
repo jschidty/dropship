@@ -16,6 +16,7 @@ type DurableObjectStorageListOptions = {
 type DurableObjectStorage = {
   get: <T = unknown>(key: string) => Promise<T | undefined>;
   put: <T = unknown>(key: string, value: T) => Promise<void>;
+  delete: (key: string) => Promise<boolean>;
   list: <T = unknown>(
     options?: DurableObjectStorageListOptions
   ) => Promise<Map<string, T>>;

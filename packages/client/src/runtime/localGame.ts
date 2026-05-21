@@ -20,9 +20,8 @@ export function createMinimalLocalGame(
   playerId: PlayerId = DEFAULT_LOCAL_PLAYER_ID,
   options: { seed?: number; stressUnits?: number } = {}
 ): LocalGameRuntime {
-  const config = createLocalMatchConfig(options.seed, options.stressUnits);
-  const world = createWorld({
-    config,
+  let world = createWorld({
+    config: createLocalMatchConfig(options.seed, options.stressUnits),
     content: DEFAULT_CONTENT_REGISTRY,
   });
   const pendingCommands: ScheduledCommand[] = [];
@@ -34,7 +33,9 @@ export function createMinimalLocalGame(
 
   return {
     playerId,
-    world,
+    get world() {
+      return world;
+    },
     stepTick() {
       if (world.matchResult) {
         return;
@@ -129,6 +130,19 @@ export function createMinimalLocalGame(
     readyForMatch() {
       // Local games do not wait for a remote ready gate.
     },
+    replayMatch() {
+      world = createWorld({
+        config: createLocalMatchConfig(
+          createRandomSeed(world.config.seed),
+          options.stressUnits
+        ),
+        content: DEFAULT_CONTENT_REGISTRY,
+      });
+      pendingCommands.splice(0);
+      pendingEvents.splice(0);
+      scriptedNpcController.reset?.(world);
+      clientSeq = 0;
+    },
     dispose() {
       pendingCommands.splice(0);
       pendingEvents.splice(0);
@@ -147,4 +161,17 @@ function sortScheduledCommands(
         ? a.clientSeq - b.clientSeq
         : a.playerId - b.playerId
     );
+}
+
+function createRandomSeed(previousSeed?: number): number {
+  let seed: number;
+
+  if (globalThis.crypto?.getRandomValues) {
+    seed =
+      globalThis.crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000_000;
+  } else {
+    seed = Math.floor(Math.random() * 1_000_000_000);
+  }
+
+  return seed === previousSeed ? (seed + 1) % 1_000_000_000 : seed;
 }

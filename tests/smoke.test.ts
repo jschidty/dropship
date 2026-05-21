@@ -85,6 +85,7 @@ testDropShipEliminationEndsMatch();
 testTimerPlanetCountWinner();
 testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
+testLocalRuntimeReplayStartsFreshSeed();
 testLocalRuntimeKeepsFiniteViewModels();
 testLocalRuntimeUsesScriptedNpcController();
 testNpcDefenderIssuesAttackOrders();
@@ -1609,6 +1610,30 @@ function testLocalRuntimeStopsAfterMatchEnd(): void {
   runtime.stepTick();
 
   assert.equal(runtime.world.tick, completedTick);
+  runtime.dispose();
+}
+
+function testLocalRuntimeReplayStartsFreshSeed(): void {
+  const runtime = createMinimalLocalGame(1, { seed: 1337 });
+  const originalSeed = runtime.world.config.seed;
+  const playerTwoDropShips = runtime.world.units.filter(
+    (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(playerTwoDropShips.length > 0);
+
+  for (const unit of playerTwoDropShips) {
+    unit.health.current = 0;
+  }
+
+  runtime.stepTick();
+  assert.ok(runtime.world.matchResult);
+
+  runtime.replayMatch();
+
+  assert.equal(runtime.world.tick, 0);
+  assert.equal(runtime.world.matchResult, null);
+  assert.notEqual(runtime.world.config.seed, originalSeed);
   runtime.dispose();
 }
 

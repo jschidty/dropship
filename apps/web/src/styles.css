@@ -131,7 +131,8 @@ canvas {
 .command-menu-history-entry:focus-visible,
 .command-menu-command:focus-visible,
 .command-menu-panel-summary:focus-visible,
-.hotkeys-dialog-two-player:focus-visible {
+.hotkeys-dialog-two-player:focus-visible,
+.match-end-dialog-replay:focus-visible {
   outline: 1px solid rgb(252 61 33 / 100%);
   outline-offset: 2px;
 }
@@ -626,11 +627,13 @@ canvas {
   pointer-events: auto;
 }
 
-.hotkeys-dialog[hidden] {
+.hotkeys-dialog[hidden],
+.match-end-dialog[hidden] {
   display: none;
 }
 
-.hotkeys-dialog-panel {
+.hotkeys-dialog-panel,
+.match-end-dialog-panel {
   width: min(360px, calc(100vw - 28px));
   border: 1px solid rgb(252 61 33 / 82%);
   background: rgb(5 8 18 / 88%);
@@ -639,11 +642,13 @@ canvas {
   padding: 14px;
 }
 
-.hotkeys-dialog-title {
+.hotkeys-dialog-title,
+.match-end-dialog-title {
   margin: 0 0 10px;
   color: #fc3d21;
   font-size: 14px;
   line-height: 1;
+  text-align: center;
   text-transform: uppercase;
 }
 
@@ -717,6 +722,96 @@ canvas {
 
 .hotkeys-dialog-message[hidden] {
   display: none;
+}
+
+.match-end-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgb(1 2 10 / 62%);
+  pointer-events: auto;
+}
+
+.match-end-dialog-result {
+  margin-bottom: 12px;
+  color: rgb(252 61 33 / 92%);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.match-end-dialog-result[data-result="win"] {
+  color: #74d9ff;
+}
+
+.match-end-dialog-result[data-result="lose"] {
+  color: #ff4fd8;
+}
+
+.match-end-dialog-result[data-result="draw"] {
+  color: #d6dae8;
+}
+
+.match-end-dialog-stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px 14px;
+  width: min(280px, 100%);
+  margin: 0 auto 14px;
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+.match-end-dialog-stats dt {
+  color: #fc3d21;
+  text-align: right;
+}
+
+.match-end-dialog-stats dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-end-stat-pair {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 12px;
+}
+
+.match-end-stat-player {
+  color: var(--team-color, rgb(239 248 255 / 90%));
+  white-space: nowrap;
+}
+
+.match-end-dialog-replay {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid rgb(252 61 33 / 72%);
+  background: rgb(252 61 33 / 12%);
+  color: rgb(252 61 33 / 92%);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.match-end-dialog-replay:hover:not(:disabled),
+.match-end-dialog-replay:focus-visible {
+  border-color: rgb(252 61 33 / 100%);
+  background: rgb(252 61 33 / 20%);
+  outline: 0;
+}
+
+.match-end-dialog-replay:disabled {
+  cursor: default;
+  opacity: 0.48;
 }
 
 @media (max-width: 720px) {

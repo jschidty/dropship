@@ -5,7 +5,6 @@ import {
   type SimBoidsTuningConfig,
   type SimGravityTuningConfig,
   type SimTuningConfig,
-  type PlayerId,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import type { ShipStats } from "@drop-ship/content";
@@ -21,7 +20,6 @@ import {
 import { readSimTuning } from "./config";
 import {
   deterministicAtan2,
-  deterministicFloor,
   deterministicSqrt,
   deterministicSquare,
   quantizeSimFloat,
@@ -44,6 +42,10 @@ import {
   type MutableVec3,
 } from "./movement";
 import {
+  createUnitSpatialIndex,
+  type UnitSpatialIndex,
+} from "./spatialIndex";
+import {
   readUnitShipStats,
 } from "./shipStats";
 
@@ -56,23 +58,6 @@ export type GravitySource = Readonly<{
   mass: number;
   radius: number;
 }>;
-
-type UnitSpatialIndex = Readonly<{
-  forEachRadius: (
-    center: Vec3Data,
-    radius: number,
-    visitor: (unit: SimUnit) => void
-  ) => void;
-  forEachOwnerRadius: (
-    owner: PlayerId,
-    center: Vec3Data,
-    radius: number,
-    visitor: (unit: SimUnit) => void
-  ) => void;
-}>;
-
-type SpatialCells = Map<number, Map<number, Map<number, SimUnit[]>>>;
-const SPATIAL_INDEX_MIN_UNITS = 48;
 
 export function computePlanetGravityVector(
   point: Vec3Data,
@@ -141,7 +126,9 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const units = getUnitsInStableOrder(world);
   const planets = getPlanetsInStableOrder(world);
   const tuning = readSimTuning(world);
-  const spatialIndex = createUnitSpatialIndex(units, tuning.boids);
+  const spatialIndex = createUnitSpatialIndex(units, {
+    cellSize: tuning.boids.neighborRadiusWorldUnits,
+  });
   const nextVelocities: Vec3Data[] = [];
   const shipStats = new Map<number | string, ShipStats>();
   const gravityVector = createZero();
@@ -449,137 +436,4 @@ function addObjectAvoidance(
     avoidanceZ,
     ownStats.maxSpeed
   );
-}
-
-function createUnitSpatialIndex(
-  units: readonly SimUnit[],
-  boids: SimBoidsTuningConfig
-): UnitSpatialIndex {
-  if (units.length < SPATIAL_INDEX_MIN_UNITS) {
-    return {
-      forEachRadius(center, radius, visitor) {
-        const radiusSquared = radius * radius;
-
-        for (const unit of units) {
-          if (distanceSquared(center, unit.position) <= radiusSquared) {
-            visitor(unit);
-          }
-        }
-      },
-      forEachOwnerRadius(owner, center, radius, visitor) {
-        const radiusSquared = radius * radius;
-
-        for (const unit of units) {
-          if (
-            unit.owner === owner &&
-            distanceSquared(center, unit.position) <= radiusSquared
-          ) {
-            visitor(unit);
-          }
-        }
-      },
-    };
-  }
-
-  const cellSize = boids.neighborRadiusWorldUnits;
-  const cells: SpatialCells = new Map();
-  const ownerCells = new Map<PlayerId, SpatialCells>();
-
-  for (const unit of units) {
-    const cellX = deterministicFloor(unit.position.x / cellSize);
-    const cellY = deterministicFloor(unit.position.y / cellSize);
-    const cellZ = deterministicFloor(unit.position.z / cellSize);
-    addUnitToSpatialCells(cells, cellX, cellY, cellZ, unit);
-
-    const ownerCellMap = ownerCells.get(unit.owner) ?? new Map();
-    addUnitToSpatialCells(ownerCellMap, cellX, cellY, cellZ, unit);
-    ownerCells.set(unit.owner, ownerCellMap);
-  }
-
-  return {
-    forEachRadius(center, radius, visitor) {
-      forEachCellRadius(cells, cellSize, center, radius, visitor);
-    },
-    forEachOwnerRadius(owner, center, radius, visitor) {
-      const ownerCellMap = ownerCells.get(owner);
-
-      if (!ownerCellMap) {
-        return;
-      }
-
-      forEachCellRadius(ownerCellMap, cellSize, center, radius, visitor);
-    },
-  };
-}
-
-function addUnitToSpatialCells(
-  cells: SpatialCells,
-  x: number,
-  y: number,
-  z: number,
-  unit: SimUnit
-): void {
-  let xCells = cells.get(x);
-
-  if (!xCells) {
-    xCells = new Map();
-    cells.set(x, xCells);
-  }
-
-  let yCells = xCells.get(y);
-
-  if (!yCells) {
-    yCells = new Map();
-    xCells.set(y, yCells);
-  }
-
-  const cell = yCells.get(z) ?? [];
-  cell.push(unit);
-  yCells.set(z, cell);
-}
-
-function forEachCellRadius(
-  cells: SpatialCells,
-  cellSize: number,
-  center: Vec3Data,
-  radius: number,
-  visitor: (unit: SimUnit) => void
-): void {
-  const radiusSquared = radius * radius;
-  const minX = deterministicFloor((center.x - radius) / cellSize);
-  const maxX = deterministicFloor((center.x + radius) / cellSize);
-  const minY = deterministicFloor((center.y - radius) / cellSize);
-  const maxY = deterministicFloor((center.y + radius) / cellSize);
-  const minZ = deterministicFloor((center.z - radius) / cellSize);
-  const maxZ = deterministicFloor((center.z + radius) / cellSize);
-
-  for (let x = minX; x <= maxX; x += 1) {
-    const xCells = cells.get(x);
-
-    if (!xCells) {
-      continue;
-    }
-
-    for (let y = minY; y <= maxY; y += 1) {
-      const yCells = xCells.get(y);
-
-      if (!yCells) {
-        continue;
-      }
-
-      for (let z = minZ; z <= maxZ; z += 1) {
-        const cell = yCells.get(z);
-
-        if (!cell) {
-          continue;
-        }
-
-        for (const unit of cell) {
-          if (distanceSquared(center, unit.position) <= radiusSquared) {
-            visitor(unit);
-          }
-        }
-      }
-    }
-  }
 }

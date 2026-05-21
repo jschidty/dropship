@@ -1,38 +1,65 @@
+import { compareHandles } from "@drop-ship/protocol";
 import type { UnitWeaponProfile } from "../shipStats";
+import type { UnitSpatialIndex } from "../spatialIndex";
 import {
   findUnitByHandle,
   type SimUnit,
   type SimWorld,
 } from "../world";
 import { distanceSquared } from "../movement";
-import { sameHandle } from "@drop-ship/protocol";
 
 export function findNearestEnemy(
   units: readonly SimUnit[],
+  spatialIndex: UnitSpatialIndex | null,
   unit: SimUnit,
   maxRange: number
 ): SimUnit | null {
-  const maxRangeSquared = maxRange * maxRange;
   let best: SimUnit | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
 
-  for (const candidate of units) {
+  const visitCandidate = (
+    candidate: SimUnit,
+    candidateDistance: number
+  ): void => {
     if (
       candidate.owner === unit.owner ||
       candidate.health.current <= 0 ||
-      sameHandle(candidate.handle, unit.handle)
+      candidate === unit
     ) {
-      continue;
+      return;
     }
 
-    const distance = distanceSquared(unit.position, candidate.position);
-
-    if (distance > maxRangeSquared || distance >= bestDistance) {
-      continue;
+    if (
+      candidateDistance > bestDistance ||
+      (candidateDistance === bestDistance &&
+        best &&
+        compareHandles(candidate.handle, best.handle) >= 0)
+    ) {
+      return;
     }
 
     best = candidate;
-    bestDistance = distance;
+    bestDistance = candidateDistance;
+  };
+
+  if (spatialIndex) {
+    spatialIndex.forEachEnemyRadius(
+      unit.owner,
+      unit.position,
+      maxRange,
+      visitCandidate
+    );
+    return best;
+  }
+
+  const maxRangeSquared = maxRange * maxRange;
+
+  for (const candidate of units) {
+    const candidateDistance = distanceSquared(unit.position, candidate.position);
+
+    if (candidateDistance <= maxRangeSquared) {
+      visitCandidate(candidate, candidateDistance);
+    }
   }
 
   return best;
@@ -41,6 +68,7 @@ export function findNearestEnemy(
 export function findWeaponTarget(
   world: SimWorld,
   units: readonly SimUnit[],
+  spatialIndex: UnitSpatialIndex | null,
   unit: SimUnit,
   weapon: UnitWeaponProfile
 ): SimUnit | null {
@@ -56,7 +84,7 @@ export function findWeaponTarget(
     return orderedTarget;
   }
 
-  return findNearestEnemy(units, unit, weapon.range);
+  return findNearestEnemy(units, spatialIndex, unit, weapon.range);
 }
 
 function readOrderedAttackTarget(world: SimWorld, unit: SimUnit): SimUnit | null {

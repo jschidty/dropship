@@ -2,14 +2,22 @@ import {
   readUnitWeaponProfile,
   type UnitWeaponProfile,
 } from "../shipStats";
-import { getUnitsInStableOrder, type SimSystem } from "../world";
+import { createUnitSpatialIndex, type UnitSpatialIndex } from "../spatialIndex";
+import { getUnitsInStableOrder, type SimSystem, type SimUnit } from "../world";
 import { findWeaponTarget } from "./targeting";
+
+type ArmedUnit = Readonly<{
+  unit: SimUnit;
+  weapon: UnitWeaponProfile;
+}>;
 
 export const CombatSystem: SimSystem = {
   name: "CombatSystem",
   run(world, tick) {
     const weaponProfiles = new Map<number | string, UnitWeaponProfile>();
     const units = getUnitsInStableOrder(world);
+    const armedUnits: ArmedUnit[] = [];
+    let maxWeaponRange = 0;
 
     for (const unit of units) {
       if (unit.weaponCooldownTicks > 0) {
@@ -28,7 +36,24 @@ export const CombatSystem: SimSystem = {
         continue;
       }
 
-      const target = findWeaponTarget(world, units, unit, weapon);
+      armedUnits.push({ unit, weapon });
+      maxWeaponRange = Math.max(maxWeaponRange, weapon.range);
+    }
+
+    const spatialIndex: UnitSpatialIndex | null =
+      maxWeaponRange > 0
+        ? createUnitSpatialIndex(units, {
+            cellSize: maxWeaponRange,
+            dimensions: "xz",
+          })
+        : null;
+
+    for (const { unit, weapon } of armedUnits) {
+      if (unit.health.current <= 0 || unit.weaponCooldownTicks > 0) {
+        continue;
+      }
+
+      const target = findWeaponTarget(world, units, spatialIndex, unit, weapon);
 
       if (!target) {
         continue;

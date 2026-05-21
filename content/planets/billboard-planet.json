@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "planetTemplate",
+  "id": 100,
+  "slug": "billboard-planet",
+  "displayName": "Aurora",
+  "defaultMass": 7200000000,
+  "defaultRadius": 28,
+  "render": {
+    "meshId": 100,
+    "materialId": 100,
+    "scaleTier": 3
+  }
+}

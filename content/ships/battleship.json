@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "kind": "shipTemplate",
+  "id": 3,
+  "slug": "battleship",
+  "displayName": "Battleship",
+  "shipClassId": 3,
+  "hull": {
+    "maxHealth": 360,
+    "colliderRadius": 2.4,
+    "baseMass": 84,
+    "basePower": 30
+  },
+  "slots": [
+    {
+      "id": "main-engine-1",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-2",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-3",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-4",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-5",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-6",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "fuel-1",
+      "type": "fuelTank",
+      "size": "small"
+    },
+    {
+      "id": "weapon-1",
+      "type": "weapon",
+      "size": "small",
+      "arc": "turret"
+    },
+    {
+      "id": "weapon-2",
+      "type": "weapon",
+      "size": "small",
+      "arc": "turret"
+    },
+    {
+      "id": "weapon-3",
+      "type": "weapon",
+      "size": "small",
+      "arc": "turret"
+    },
+    {
+      "id": "weapon-4",
+      "type": "weapon",
+      "size": "small",
+      "arc": "turret"
+    },
+    {
+      "id": "weapon-5",
+      "type": "weapon",
+      "size": "small",
+      "arc": "turret"
+    }
+  ],
+  "defaultLoadout": {
+    "slug": "battleship-default",
+    "displayName": "Heavy Battery",
+    "componentsBySlot": {
+      "main-engine-1": 1,
+      "main-engine-2": 1,
+      "main-engine-3": 1,
+      "main-engine-4": 1,
+      "main-engine-5": 1,
+      "main-engine-6": 1,
+      "fuel-1": 2,
+      "weapon-1": 4,
+      "weapon-2": 4,
+      "weapon-3": 4,
+      "weapon-4": 4,
+      "weapon-5": 4
+    }
+  },
+  "initialVelocity": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  },
+  "render": {
+    "meshId": 1,
+    "materialIdsByPlayer": {
+      "1": 1,
+      "2": 2
+    },
+    "scaleTier": 1
+  }
+}

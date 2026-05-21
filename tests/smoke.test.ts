@@ -4,6 +4,7 @@ import {
   DEFAULT_CONTENT_REGISTRY,
   SHIP_COMPONENT_IDS,
   TEMPLATE_IDS,
+  validateContentRegistry,
 } from "../packages/content/src/index";
 import {
   DEFAULT_CAPTURE_DEMO_RULES,
@@ -51,6 +52,7 @@ import type { UnitViewModel } from "../packages/client/src/index";
 await testCommandSchedulingAndCatchup();
 await testStoredMatchConfigPersistsResolvedConfig();
 await testMatchEndAgreementPersistsAndBroadcasts();
+testDefaultContentRegistryLoadsRawTemplates();
 testDeterministicMathReferenceValues();
 testSeededMatchGeneration();
 testPlanetaryOrbitMotion();
@@ -205,6 +207,24 @@ async function testMatchEndAgreementPersistsAndBroadcasts(): Promise<void> {
     firstReport,
     secondReport,
   ]);
+}
+
+function testDefaultContentRegistryLoadsRawTemplates(): void {
+  const validation = validateContentRegistry(DEFAULT_CONTENT_REGISTRY);
+  const fighter = DEFAULT_CONTENT_REGISTRY.getUnitTemplate(TEMPLATE_IDS.fighterShip);
+  const dropShip = DEFAULT_CONTENT_REGISTRY.getUnitTemplate(TEMPLATE_IDS.dropShip);
+  const battleship = DEFAULT_CONTENT_REGISTRY.getUnitTemplate(TEMPLATE_IDS.battleship);
+  const engine = DEFAULT_CONTENT_REGISTRY.getShipComponent(
+    SHIP_COMPONENT_IDS.ionEngineSmall
+  );
+
+  assert.equal(validation.ok, true, validation.errors.join("\n"));
+  assert.equal(fighter.slug, "scout-ship");
+  assert.equal(dropShip.slug, "drop-ship");
+  assert.equal(battleship.slug, "battleship");
+  assert.equal(engine.slug, "ion-engine-small");
+  assert.equal(dropShip.defaultLoadout.componentsBySlot["main-engine-4"], 1);
+  assert.equal(battleship.defaultLoadout.componentsBySlot["weapon-5"], 4);
 }
 
 function testDeterministicMathReferenceValues(): void {

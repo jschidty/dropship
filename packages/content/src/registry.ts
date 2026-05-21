@@ -4,15 +4,12 @@ import {
   type ShipClassId,
   type Vec3Data,
 } from "@drop-ship/protocol";
-import {
-  CONTENT_VERSION,
-  MATERIAL_IDS,
-  MESH_IDS,
-  SCALE_TIERS,
-  SHIP_CLASS_IDS,
-  SHIP_COMPONENT_IDS,
-  TEMPLATE_IDS,
-} from "./numericIds";
+import { CONTENT_VERSION } from "./numericIds";
+import shipComponentsData from "../../../content/ships/components.json";
+import scoutShipTemplateData from "../../../content/ships/scout-ship.json";
+import dropShipTemplateData from "../../../content/ships/drop-ship.json";
+import battleshipTemplateData from "../../../content/ships/battleship.json";
+import billboardPlanetTemplateData from "../../../content/planets/billboard-planet.json";
 
 export type ShipComponentType = "engine" | "fuelTank" | "cargo" | "weapon";
 export type ShipSlotSize = "small" | "medium" | "large";
@@ -149,212 +146,14 @@ export type ContentRegistry = Readonly<{
 const SHIP_SPEED_MASS_FACTOR = 1.8;
 const SHIP_CRUISE_SPEED_RATIO = 22 / 30;
 
-const ION_ENGINE_SMALL: ShipEngineComponent = {
-  id: SHIP_COMPONENT_IDS.ionEngineSmall,
-  slug: "ion-engine-small",
-  displayName: "Small Ion Engine",
-  type: "engine",
-  size: "small",
-  mass: 2,
-  powerDraw: 3,
-  thrust: 648,
-  turnThrust: 24,
-  fuelUsePerSecond: 0.2,
-};
-
-const FUEL_TANK_SMALL: ShipFuelTankComponent = {
-  id: SHIP_COMPONENT_IDS.fuelTankSmall,
-  slug: "fuel-tank-small",
-  displayName: "Small Fuel Tank",
-  type: "fuelTank",
-  size: "small",
-  mass: 1,
-  powerDraw: 0,
-  fuelCapacity: 80,
-};
-
-const CARGO_BAY_SMALL: ShipCargoComponent = {
-  id: SHIP_COMPONENT_IDS.cargoBaySmall,
-  slug: "cargo-bay-small",
-  displayName: "Small Cargo Bay",
-  type: "cargo",
-  size: "small",
-  mass: 1,
-  powerDraw: 0,
-  cargoCapacity: 16,
-};
-
-const PULSE_LASER_SMALL: ShipWeaponComponent = {
-  id: SHIP_COMPONENT_IDS.pulseLaserSmall,
-  slug: "pulse-laser-small",
-  displayName: "Small Pulse Laser",
-  type: "weapon",
-  size: "small",
-  mass: 0,
-  powerDraw: 2,
-  damage: 8,
-  cooldownTicks: 12,
-  range: 90,
-};
-
-const SCOUT_SHIP_TEMPLATE: ShipTemplateDefinition = {
-  id: TEMPLATE_IDS.scoutShip,
-  slug: "scout-ship",
-  displayName: "Fighter",
-  shipClassId: SHIP_CLASS_IDS.fighter,
-  hull: {
-    maxHealth: 100,
-    colliderRadius: 0.9,
-    baseMass: 18,
-    basePower: 10,
-  },
-  slots: [
-    { id: "main-engine-1", type: "engine", size: "small" },
-    { id: "main-engine-2", type: "engine", size: "small" },
-    { id: "fuel-1", type: "fuelTank", size: "small" },
-    { id: "cargo-1", type: "cargo", size: "small" },
-    { id: "weapon-1", type: "weapon", size: "small", arc: "front" },
-  ],
-  defaultLoadout: {
-    slug: "scout-default",
-    displayName: "Scout Patrol",
-    componentsBySlot: {
-      "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
-      "cargo-1": SHIP_COMPONENT_IDS.cargoBaySmall,
-      "weapon-1": SHIP_COMPONENT_IDS.pulseLaserSmall,
-    },
-  },
-  initialVelocity: { x: 0, y: 0, z: 0 },
-  render: {
-    meshId: MESH_IDS.scoutShip,
-    materialIdsByPlayer: {
-      1: MATERIAL_IDS.playerOneHull,
-      2: MATERIAL_IDS.playerTwoHull,
-    },
-    scaleTier: SCALE_TIERS.ship,
-  },
-};
-
-const DROP_SHIP_TEMPLATE: ShipTemplateDefinition = {
-  id: TEMPLATE_IDS.dropShip,
-  slug: "drop-ship",
-  displayName: "Drop Ship",
-  shipClassId: SHIP_CLASS_IDS.dropShip,
-  hull: {
-    maxHealth: 180,
-    colliderRadius: 1.45,
-    baseMass: 44,
-    basePower: 16,
-  },
-  slots: [
-    { id: "main-engine-1", type: "engine", size: "small" },
-    { id: "main-engine-2", type: "engine", size: "small" },
-    { id: "main-engine-3", type: "engine", size: "small" },
-    { id: "main-engine-4", type: "engine", size: "small" },
-    { id: "fuel-1", type: "fuelTank", size: "small" },
-    { id: "cargo-1", type: "cargo", size: "small" },
-  ],
-  defaultLoadout: {
-    slug: "drop-ship-default",
-    displayName: "Capture Lander",
-    componentsBySlot: {
-      "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-3": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-4": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
-      "cargo-1": SHIP_COMPONENT_IDS.cargoBaySmall,
-    },
-  },
-  initialVelocity: { x: 0, y: 0, z: 0 },
-  render: {
-    meshId: MESH_IDS.scoutShip,
-    materialIdsByPlayer: {
-      1: MATERIAL_IDS.playerOneHull,
-      2: MATERIAL_IDS.playerTwoHull,
-    },
-    scaleTier: SCALE_TIERS.ship,
-  },
-};
-
-const BATTLESHIP_TEMPLATE: ShipTemplateDefinition = {
-  id: TEMPLATE_IDS.battleship,
-  slug: "battleship",
-  displayName: "Battleship",
-  shipClassId: SHIP_CLASS_IDS.battleship,
-  hull: {
-    maxHealth: 360,
-    colliderRadius: 2.4,
-    baseMass: 84,
-    basePower: 30,
-  },
-  slots: [
-    { id: "main-engine-1", type: "engine", size: "small" },
-    { id: "main-engine-2", type: "engine", size: "small" },
-    { id: "main-engine-3", type: "engine", size: "small" },
-    { id: "main-engine-4", type: "engine", size: "small" },
-    { id: "main-engine-5", type: "engine", size: "small" },
-    { id: "main-engine-6", type: "engine", size: "small" },
-    { id: "fuel-1", type: "fuelTank", size: "small" },
-    { id: "weapon-1", type: "weapon", size: "small", arc: "turret" },
-    { id: "weapon-2", type: "weapon", size: "small", arc: "turret" },
-    { id: "weapon-3", type: "weapon", size: "small", arc: "turret" },
-    { id: "weapon-4", type: "weapon", size: "small", arc: "turret" },
-    { id: "weapon-5", type: "weapon", size: "small", arc: "turret" },
-  ],
-  defaultLoadout: {
-    slug: "battleship-default",
-    displayName: "Heavy Battery",
-    componentsBySlot: {
-      "main-engine-1": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-2": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-3": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-4": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-5": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "main-engine-6": SHIP_COMPONENT_IDS.ionEngineSmall,
-      "fuel-1": SHIP_COMPONENT_IDS.fuelTankSmall,
-      "weapon-1": SHIP_COMPONENT_IDS.pulseLaserSmall,
-      "weapon-2": SHIP_COMPONENT_IDS.pulseLaserSmall,
-      "weapon-3": SHIP_COMPONENT_IDS.pulseLaserSmall,
-      "weapon-4": SHIP_COMPONENT_IDS.pulseLaserSmall,
-      "weapon-5": SHIP_COMPONENT_IDS.pulseLaserSmall,
-    },
-  },
-  initialVelocity: { x: 0, y: 0, z: 0 },
-  render: {
-    meshId: MESH_IDS.scoutShip,
-    materialIdsByPlayer: {
-      1: MATERIAL_IDS.playerOneHull,
-      2: MATERIAL_IDS.playerTwoHull,
-    },
-    scaleTier: SCALE_TIERS.ship,
-  },
-};
-
-const BILLBOARD_PLANET_TEMPLATE: PlanetTemplate = {
-  id: TEMPLATE_IDS.billboardPlanet,
-  slug: "billboard-planet",
-  displayName: "Aurora",
-  defaultMass: 7_200_000_000,
-  defaultRadius: 28,
-  render: {
-    meshId: MESH_IDS.billboardPlanet,
-    materialId: MATERIAL_IDS.palePlanet,
-    scaleTier: SCALE_TIERS.planetary,
-  },
-};
-
 export const DEFAULT_CONTENT_REGISTRY: ContentRegistry = createContentRegistry({
-  shipComponents: [
-    ION_ENGINE_SMALL,
-    FUEL_TANK_SMALL,
-    CARGO_BAY_SMALL,
-    PULSE_LASER_SMALL,
-  ],
-  unitTemplates: [SCOUT_SHIP_TEMPLATE, DROP_SHIP_TEMPLATE, BATTLESHIP_TEMPLATE],
-  planetTemplates: [BILLBOARD_PLANET_TEMPLATE],
+  shipComponents: shipComponentsData as readonly ShipComponentTemplate[],
+  unitTemplates: [
+    scoutShipTemplateData,
+    dropShipTemplateData,
+    battleshipTemplateData,
+  ] as readonly ShipTemplateDefinition[],
+  planetTemplates: [billboardPlanetTemplateData] as readonly PlanetTemplate[],
 });
 
 export function createContentRegistry(options: {

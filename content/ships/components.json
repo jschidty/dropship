@@ -1,0 +1,46 @@
+[
+  {
+    "id": 1,
+    "slug": "ion-engine-small",
+    "displayName": "Small Ion Engine",
+    "type": "engine",
+    "size": "small",
+    "mass": 2,
+    "powerDraw": 3,
+    "thrust": 648,
+    "turnThrust": 24,
+    "fuelUsePerSecond": 0.2
+  },
+  {
+    "id": 2,
+    "slug": "fuel-tank-small",
+    "displayName": "Small Fuel Tank",
+    "type": "fuelTank",
+    "size": "small",
+    "mass": 1,
+    "powerDraw": 0,
+    "fuelCapacity": 80
+  },
+  {
+    "id": 3,
+    "slug": "cargo-bay-small",
+    "displayName": "Small Cargo Bay",
+    "type": "cargo",
+    "size": "small",
+    "mass": 1,
+    "powerDraw": 0,
+    "cargoCapacity": 16
+  },
+  {
+    "id": 4,
+    "slug": "pulse-laser-small",
+    "displayName": "Small Pulse Laser",
+    "type": "weapon",
+    "size": "small",
+    "mass": 0,
+    "powerDraw": 2,
+    "damage": 8,
+    "cooldownTicks": 12,
+    "range": 90
+  }
+]

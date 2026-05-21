@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "kind": "shipTemplate",
-  "id": 1,
-  "slug": "scout-ship",
-  "displayName": "Fighter",
-  "shipClassId": 1,
+  "id": 2,
+  "slug": "drop-ship",
+  "displayName": "Drop Ship",
+  "shipClassId": 2,
   "hull": {
-    "maxHealth": 100,
-    "colliderRadius": 0.9,
-    "baseMass": 18,
-    "basePower": 10
+    "maxHealth": 180,
+    "colliderRadius": 1.45,
+    "baseMass": 44,
+    "basePower": 16
   },
   "slots": [
     {
@@ -23,6 +23,16 @@
       "size": "small"
     },
     {
+      "id": "main-engine-3",
+      "type": "engine",
+      "size": "small"
+    },
+    {
+      "id": "main-engine-4",
+      "type": "engine",
+      "size": "small"
+    },
+    {
       "id": "fuel-1",
       "type": "fuelTank",
       "size": "small"
@@ -31,23 +41,18 @@
       "id": "cargo-1",
       "type": "cargo",
       "size": "small"
-    },
-    {
-      "id": "weapon-1",
-      "type": "weapon",
-      "size": "small",
-      "arc": "front"
     }
   ],
   "defaultLoadout": {
-    "slug": "scout-default",
-    "displayName": "Scout Patrol",
+    "slug": "drop-ship-default",
+    "displayName": "Capture Lander",
     "componentsBySlot": {
       "main-engine-1": 1,
       "main-engine-2": 1,
+      "main-engine-3": 1,
+      "main-engine-4": 1,
       "fuel-1": 2,
-      "cargo-1": 3,
-      "weapon-1": 4
+      "cargo-1": 3
     }
   },
   "initialVelocity": {

@@ -28,7 +28,7 @@ The Durable Object (DO) is a coordinator:
 6. Stores compact snapshots from the trusted snapshot author.
 7. Coordinates reconnect, spectator catch-up, match end agreement, and retention cleanup.
 
-The DO does not run physics or validate winners in Phase 1. If both clients report the same match end tick, winner, and final hash, the DO records and broadcasts `matchEnd`. If one player disconnects, the remaining player can finish locally and the DO records the host/client result as trusted.
+The DO does not run physics or validate winners in Phase 1. If both clients report the same match end tick, winner, reason, and final hash, the DO records and broadcasts `matchEnd` with `source = "agreed"`. If one player disconnects, the remaining player can finish locally and the DO records the host/client result as `source = "trusted"`. If reports disagree, the DO records a terminal `source = "conflict"` result with `reason = "desync"`.
 
 ## Headless games
 
@@ -239,8 +239,8 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 | `{ type: "command", clientSeq, localTick, command }` | Player command intent |
 | `{ type: "hash", tick, hash }` | Periodic state hash |
 | `{ type: "snapshot", tick, snapshot }` | Trusted full snapshot from the elected author |
-| `{ type: "matchEndReport", tick, winner, finalHash }` | Client-reported deterministic match end |
-| `{ type: "reconnect", playerId, lastTick }` | Resume from disconnect |
+| `{ type: "matchEndReport", tick, winner, reason, finalHash }` | Client-reported deterministic match end |
+| `{ type: "reconnect", lastTick }` | Resume from disconnect; legacy clients may still include `playerId`, but the DO overwrites it from the session |
 
 ### DO to client
 
@@ -253,7 +253,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 | `{ type: "resyncSoft", tick, diffs }` | Trusted small correction |
 | `{ type: "resyncHard", tick, snapshot }` | Trusted full state reload |
 | `{ type: "catchup", snapshotTick, snapshot, commands }` | Reconnect/spectator catch-up |
-| `{ type: "matchEnd", tick, winner, finalHash }` | Agreed or trusted match end |
+| `{ type: "matchEnd", tick, winner, reason, finalHash, source, reports, ratingDeltas }` | Agreed, trusted, or conflict terminal match end |
 
 ## Tick model
 
@@ -355,7 +355,7 @@ After match end and retention, archive the command log plus final snapshot to R2
 
 ## Reconnect
 
-1. Client sends `{ type: "reconnect", playerId, lastTick }`.
+1. Client sends `{ type: "reconnect", lastTick }`; during migration it may include `playerId`, but the DO ignores it.
 2. DO finds the latest snapshot at or before current tick.
 3. DO sends that snapshot plus all non-empty command batches after it.
 4. Client loads the snapshot, fast-simulates to the latest tick batch it has, and resumes.

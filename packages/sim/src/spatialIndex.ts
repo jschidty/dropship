@@ -23,7 +23,13 @@ export type UnitSpatialIndex = Readonly<{
   ) => void;
 }>;
 
-type SpatialCells = Map<number, Map<number, Map<number, SimUnit[]>>>;
+type SpatialCell = {
+  x: number;
+  y: number;
+  z: number;
+  units: SimUnit[];
+};
+type SpatialCells = Map<number, SpatialCell[]>;
 type SpatialDimensions = "xyz" | "xz";
 
 const DEFAULT_SPATIAL_INDEX_MIN_UNITS = 48;
@@ -151,23 +157,24 @@ function addUnitToSpatialCells(
   z: number,
   unit: SimUnit
 ): void {
-  let xCells = cells.get(x);
+  const key = cellHash(x, y, z);
+  const bucket = cells.get(key);
 
-  if (!xCells) {
-    xCells = new Map();
-    cells.set(x, xCells);
+  if (!bucket) {
+    cells.set(key, [{ x, y, z, units: [unit] }]);
+    return;
   }
 
-  let yCells = xCells.get(y);
+  const cell = bucket.find(
+    (candidate) => candidate.x === x && candidate.y === y && candidate.z === z
+  );
 
-  if (!yCells) {
-    yCells = new Map();
-    xCells.set(y, yCells);
+  if (cell) {
+    cell.units.push(unit);
+    return;
   }
 
-  const cell = yCells.get(z) ?? [];
-  cell.push(unit);
-  yCells.set(z, cell);
+  bucket.push({ x, y, z, units: [unit] });
 }
 
 function forEachCellRadius(
@@ -189,34 +196,36 @@ function forEachCellRadius(
   const maxZ = deterministicFloor((center.z + radius) / cellSize);
 
   for (let x = minX; x <= maxX; x += 1) {
-    const xCells = cells.get(x);
-
-    if (!xCells) {
-      continue;
-    }
-
     for (let y = minY; y <= maxY; y += 1) {
-      const yCells = xCells.get(y);
-
-      if (!yCells) {
-        continue;
-      }
-
       for (let z = minZ; z <= maxZ; z += 1) {
-        const cell = yCells.get(z);
+        const bucket = cells.get(cellHash(x, y, z));
 
-        if (!cell) {
+        if (!bucket) {
           continue;
         }
 
-        for (const unit of cell) {
-          const unitDistanceSquared = distanceSquared(center, unit.position);
+        for (const cell of bucket) {
+          if (cell.x !== x || cell.y !== y || cell.z !== z) {
+            continue;
+          }
 
-          if (unitDistanceSquared <= radiusSquared) {
-            visitor(unit, unitDistanceSquared);
+          for (const unit of cell.units) {
+            const unitDistanceSquared = distanceSquared(center, unit.position);
+
+            if (unitDistanceSquared <= radiusSquared) {
+              visitor(unit, unitDistanceSquared);
+            }
           }
         }
       }
     }
   }
+}
+
+function cellHash(x: number, y: number, z: number): number {
+  return (
+    Math.imul(x, 73856093) ^
+    Math.imul(y, 19349663) ^
+    Math.imul(z, 83492791)
+  );
 }

@@ -152,6 +152,12 @@ export type SimSystem = Readonly<{
   run: (world: SimWorld, tick: number) => void;
 }>;
 
+export type SimMutableVec3 = {
+  x: number;
+  y: number;
+  z: number;
+};
+
 type StableOrderCache = {
   unitMutation: number;
   planetMutation: number;
@@ -159,6 +165,11 @@ type StableOrderCache = {
   orderedPlanetsMutation: number;
   orderedUnits: readonly SimUnit[];
   orderedPlanets: readonly SimPlanet[];
+};
+
+type SimScratch = {
+  unitVelocityBuffers: [SimMutableVec3[], SimMutableVec3[]];
+  unitVelocityBufferIndex: 0 | 1;
 };
 
 export type SimWorld = {
@@ -179,6 +190,7 @@ export type SimWorld = {
     reason: MatchEndReason;
   } | null;
   stableOrderCache: StableOrderCache;
+  scratch: SimScratch;
 };
 
 export type CreateWorldOptions = Readonly<{
@@ -258,6 +270,7 @@ export function createEmptyWorld(options: {
     ],
     matchResult: null,
     stableOrderCache: createStableOrderCache(),
+    scratch: createSimScratch(),
   };
 }
 
@@ -488,6 +501,13 @@ function invalidateUnitStableOrder(world: SimWorld): void {
 
 function invalidatePlanetStableOrder(world: SimWorld): void {
   world.stableOrderCache.planetMutation += 1;
+}
+
+function createSimScratch(): SimScratch {
+  return {
+    unitVelocityBuffers: [[], []],
+    unitVelocityBufferIndex: 0,
+  };
 }
 
 export function capturePrevPositions(world: SimWorld): void {

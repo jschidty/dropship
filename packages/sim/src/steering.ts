@@ -12,6 +12,7 @@ import {
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   findPlanetByHandle,
+  type SimMutableVec3,
   type SimPlanet,
   type SimUnit,
   type SimWorld,
@@ -28,7 +29,6 @@ import {
   SIM_EPSILON as EPSILON,
   addNormalizedScaled,
   addScaled,
-  approachVelocity,
   clamp,
   computeOrbitVelocityAroundPlanet,
   createZero,
@@ -129,11 +129,12 @@ export function steerUnits(world: SimWorld, tick: number): void {
   const spatialIndex = createUnitSpatialIndex(units, {
     cellSize: tuning.boids.neighborRadiusWorldUnits,
   });
-  const nextVelocities: Vec3Data[] = [];
+  const nextVelocities = nextUnitVelocityBuffer(world);
   const shipStats = new Map<number | string, ShipStats>();
   const gravityVector = createZero();
 
-  for (const unit of units) {
+  for (let index = 0; index < units.length; index += 1) {
+    const unit = units[index];
     const stats = readUnitShipStats(world, shipStats, unit);
     const desiredVelocity = createZero();
     const orderVelocity = unit.desiredVelocity;
@@ -170,18 +171,62 @@ export function steerUnits(world: SimWorld, tick: number): void {
     );
 
     const limitedDesired = limitLength(desiredVelocity, stats.maxSpeed);
-    nextVelocities.push(
-      approachVelocity(
-        unit.velocity,
-        limitedDesired,
-        stats.maxAcceleration * SIM_DT_SECONDS
-      )
+    writeApproachedVelocity(
+      unit.velocity,
+      limitedDesired,
+      stats.maxAcceleration * SIM_DT_SECONDS,
+      readBufferedVelocity(nextVelocities, index)
     );
   }
 
   for (let index = 0; index < units.length; index += 1) {
     units[index].velocity = nextVelocities[index] ?? units[index].velocity;
   }
+}
+
+function nextUnitVelocityBuffer(world: SimWorld): SimMutableVec3[] {
+  world.scratch.unitVelocityBufferIndex =
+    world.scratch.unitVelocityBufferIndex === 0 ? 1 : 0;
+  return world.scratch.unitVelocityBuffers[
+    world.scratch.unitVelocityBufferIndex
+  ];
+}
+
+function readBufferedVelocity(
+  buffer: SimMutableVec3[],
+  index: number
+): SimMutableVec3 {
+  const velocity = buffer[index];
+
+  if (velocity) {
+    return velocity;
+  }
+
+  const nextVelocity = createZero();
+  buffer[index] = nextVelocity;
+  return nextVelocity;
+}
+
+function writeApproachedVelocity(
+  current: Vec3Data,
+  target: Vec3Data,
+  maxDelta: number,
+  output: SimMutableVec3
+): void {
+  const deltaX = target.x - current.x;
+  const deltaY = target.y - current.y;
+  const deltaZ = target.z - current.z;
+  const deltaLength = deterministicSqrt(
+    deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
+  );
+  const scale =
+    deltaLength > maxDelta && deltaLength > EPSILON
+      ? maxDelta / deltaLength
+      : 1;
+
+  output.x = quantizeSimFloat(current.x + deltaX * scale);
+  output.y = quantizeSimFloat(current.y + deltaY * scale);
+  output.z = quantizeSimFloat(current.z + deltaZ * scale);
 }
 
 export function integrateUnitMotion(world: SimWorld): void {

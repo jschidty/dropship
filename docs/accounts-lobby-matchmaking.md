@@ -230,6 +230,9 @@ Rules:
 - Client messages should eventually omit `playerId`. During migration, keep the field for compatibility but have the DO overwrite it from the session assignment.
 - Reconnect uses session plus `match_id` plus a server-issued seat token when
   present; it does not accept `playerId` from the client.
+- In the v1 share-link flow, `ready` is a player-loaded signal sent only after
+  the player presses Ready in the pause menu; the match DO does not tick until
+  both seated players are connected and ready.
 - Debug seed and direct-seat URLs may remain only behind local development flags such as `debugSeat=1`; production app paths should not emit them.
 
 This blocks casual seat stealing and accidental wrong-link bugs. It does not stop a modified client from sending bad commands for its assigned seat, which is acceptable for this phase.

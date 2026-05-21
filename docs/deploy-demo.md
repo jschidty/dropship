@@ -49,4 +49,4 @@ https://<worker-host>/
 - no Durable Object SQLite persistence yet
 - no auth, accounts, or matchmaking yet
 - spectators can watch from the share link but cannot control units
-- the DO pauses ticking until both player seats are connected
+- the DO pauses ticking until both player seats are connected and ready

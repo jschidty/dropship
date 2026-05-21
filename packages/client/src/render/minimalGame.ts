@@ -447,6 +447,10 @@ export function mountMinimalGame(
     closeHotkeysDialog() {
       closeHotkeysDialog();
     },
+    readyForMatch() {
+      runtime.readyForMatch();
+      publishOverlaySnapshot();
+    },
     createTwoPlayerGame() {
       void createTwoPlayerGameFromPauseMenu();
     },
@@ -577,11 +581,23 @@ export function mountMinimalGame(
         return;
       }
 
-      container.querySelector<HTMLButtonElement>(".hotkeys-dialog-close")?.focus();
+      (
+        container.querySelector<HTMLButtonElement>(".hotkeys-dialog-ready") ??
+        container.querySelector<HTMLButtonElement>(".hotkeys-dialog-close")
+      )?.focus();
     });
   }
 
   function closeHotkeysDialog(): void {
+    const connectionStatus = runtime.readConnectionStatus();
+
+    if (connectionStatus.mode === "network" && !connectionStatus.running) {
+      hotkeysDialogOpen = true;
+      networkStartMenuOpen = true;
+      publishOverlaySnapshot();
+      return;
+    }
+
     singlePlayerPaused = false;
     hotkeysDialogOpen = false;
     networkStartMenuOpen = false;
@@ -1840,6 +1856,23 @@ function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
     status.players?.filter((player) => !player.connected) ?? [];
 
   if (missingPlayers.length === 0) {
+    const waitingForReadyPlayers =
+      status.players?.filter((player) => !player.ready) ?? [];
+
+    if (waitingForReadyPlayers.length > 0) {
+      const currentPlayerReady = isCurrentPlayerReady(status);
+
+      if (!currentPlayerReady && status.canControl) {
+        return "Press Ready when loaded.";
+      }
+
+      if (waitingForReadyPlayers.length === 1) {
+        return `Ready. Waiting for player ${waitingForReadyPlayers[0].playerId}...`;
+      }
+
+      return "Waiting for players to ready...";
+    }
+
     if (status.players && status.players.length > 0) {
       return "Starting...";
     }
@@ -1860,6 +1893,18 @@ function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
   }
 
   return "Waiting for players...";
+}
+
+function isCurrentPlayerReady(status: RuntimeConnectionStatus): boolean {
+  if (status.role === "spectator") {
+    return false;
+  }
+
+  const playerId: PlayerId = status.role === "player2" ? 2 : 1;
+  return (
+    status.players?.find((player) => player.playerId === playerId)?.ready ??
+    false
+  );
 }
 
 function createRenderScratch(): RenderScratch {

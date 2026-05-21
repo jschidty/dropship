@@ -150,6 +150,7 @@ export class MatchDurableObject {
   private config: MatchConfig | null = null;
   private matchEnded = false;
   private matchStarted = false;
+  private readonly readyPlayerIds = new Set<PlayerId>();
   private timerId: ReturnType<typeof setInterval> | null = null;
   private broadcastingTick = false;
   private nextSessionId = 1;
@@ -297,7 +298,6 @@ export class MatchDurableObject {
       | null;
 
     try {
-      const coordinator = await this.getCoordinator();
       if (!canSessionSendMessage(session, message)) {
         return;
       }
@@ -306,6 +306,13 @@ export class MatchDurableObject {
         ...message,
         playerId: session.seat ?? session.playerId,
       };
+
+      if (sessionMessage.type === "ready") {
+        this.markSessionReady(session);
+        return;
+      }
+
+      const coordinator = await this.getCoordinator();
       result =
         sessionMessage.type === "matchEndReport" &&
         this.shouldTrustSingleMatchEndReport()
@@ -345,17 +352,27 @@ export class MatchDurableObject {
   }
 
   private disconnect(sessionId: string): void {
-    if (!this.sessions.delete(sessionId)) {
+    const session = this.sessions.get(sessionId);
+
+    if (!session || !this.sessions.delete(sessionId)) {
       return;
     }
 
-    this.broadcastConnectionStatus();
+    if (!this.matchStarted && session.seat !== null) {
+      this.readyPlayerIds.delete(session.seat);
+    }
+
     this.updateTicking();
+    this.broadcastConnectionStatus();
     void this.finalizeTrustedReportFromConnectedPlayer();
   }
 
   private updateTicking(): void {
-    if (!this.matchStarted && this.allPlayersConnected()) {
+    if (
+      !this.matchStarted &&
+      this.allPlayersConnected() &&
+      this.allPlayersReady()
+    ) {
       this.matchStarted = true;
     }
 
@@ -419,6 +436,7 @@ export class MatchDurableObject {
       players: PHASE_ONE_PLAYER_IDS.map((playerId) => ({
         playerId,
         connected: this.hasConnectedPlayer(playerId),
+        ready: this.matchStarted || this.readyPlayerIds.has(playerId),
       })),
       spectatorCount: this.countSpectators(),
     };
@@ -450,6 +468,22 @@ export class MatchDurableObject {
     return PHASE_ONE_PLAYER_IDS.every((playerId) =>
       this.hasConnectedPlayer(playerId)
     );
+  }
+
+  private allPlayersReady(): boolean {
+    return PHASE_ONE_PLAYER_IDS.every((playerId) =>
+      this.readyPlayerIds.has(playerId)
+    );
+  }
+
+  private markSessionReady(session: MatchSession): void {
+    if (this.matchStarted || session.seat === null || !session.canControl) {
+      return;
+    }
+
+    this.readyPlayerIds.add(session.seat);
+    this.updateTicking();
+    this.broadcastConnectionStatus();
   }
 
   private async assignSession(
@@ -501,6 +535,10 @@ export class MatchDurableObject {
       }
 
       this.sessions.delete(session.id);
+
+      if (!this.matchStarted) {
+        this.readyPlayerIds.delete(seat);
+      }
 
       try {
         session.socket.close(1000, "seat-replaced");

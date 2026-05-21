@@ -75,6 +75,7 @@ export type LocalGameRuntime = Readonly<{
   readHash: () => string;
   readSnapshot: () => CompactSimSnapshot;
   readConnectionStatus: () => RuntimeConnectionStatus;
+  readyForMatch: () => void;
   dispose: () => void;
 }>;
 
@@ -100,6 +101,7 @@ export type RuntimeConnectionStatus = Readonly<{
   players?: readonly Readonly<{
     playerId: PlayerId;
     connected: boolean;
+    ready?: boolean;
   }>[];
 }>;
 

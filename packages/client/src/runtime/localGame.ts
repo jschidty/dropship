@@ -126,6 +126,9 @@ export function createMinimalLocalGame(
         canControl: true,
       };
     },
+    readyForMatch() {
+      // Local games do not wait for a remote ready gate.
+    },
     dispose() {
       pendingCommands.splice(0);
       pendingEvents.splice(0);

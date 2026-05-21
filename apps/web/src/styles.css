@@ -670,11 +670,12 @@ canvas {
   gap: 8px;
 }
 
-.hotkeys-dialog-actions[data-has-two-player="false"] {
+.hotkeys-dialog-actions[data-columns="1"] {
   grid-template-columns: 1fr;
 }
 
 .hotkeys-dialog-two-player,
+.hotkeys-dialog-ready,
 .hotkeys-dialog-close {
   width: 100%;
   min-height: 28px;
@@ -688,6 +689,8 @@ canvas {
 
 .hotkeys-dialog-two-player:hover:not(:disabled),
 .hotkeys-dialog-two-player:focus-visible,
+.hotkeys-dialog-ready:hover:not(:disabled),
+.hotkeys-dialog-ready:focus-visible,
 .hotkeys-dialog-close:hover,
 .hotkeys-dialog-close:focus-visible {
   border-color: rgb(252 61 33 / 100%);
@@ -695,7 +698,8 @@ canvas {
   outline: 0;
 }
 
-.hotkeys-dialog-two-player:disabled {
+.hotkeys-dialog-two-player:disabled,
+.hotkeys-dialog-ready:disabled {
   cursor: default;
   opacity: 0.48;
 }

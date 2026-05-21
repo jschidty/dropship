@@ -211,6 +211,27 @@ export function createNetworkedGame(options: {
     readConnectionStatus() {
       return status;
     },
+    readyForMatch() {
+      if (!canControl || assignedRole === "spectator" || status.running) {
+        return;
+      }
+
+      status = {
+        ...status,
+        players: status.players?.map((player) =>
+          player.playerId === assignedPlayerId
+            ? {
+                ...player,
+                ready: true,
+              }
+            : player
+        ),
+      };
+      sendClientMessage({
+        type: "ready",
+        playerId: assignedPlayerId,
+      });
+    },
     dispose() {
       debugLog("connection:dispose", {
         socketState: socket?.readyState ?? null,
@@ -268,10 +289,6 @@ export function createNetworkedGame(options: {
       debugLog("connection:open", {
         outboxMessages: outbox.length,
         ...summarizeWorld(world),
-      });
-      sendClientMessage({
-        type: "ready",
-        playerId: assignedPlayerId,
       });
       flushOutbox();
     });
@@ -769,7 +786,8 @@ function createConnectionStatusLogKey(
     message.running ? "running" : "paused",
     `spectators:${message.spectatorCount ?? 0}`,
     ...message.players.map(
-      (player) => `${player.playerId}:${player.connected ? "1" : "0"}`
+      (player) =>
+        `${player.playerId}:${player.connected ? "1" : "0"}:${player.ready ? "1" : "0"}`
     ),
   ].join("|");
 }

@@ -65,6 +65,7 @@ export type GameOverlayActions = Readonly<{
   toggleOrbitPlanetCommand: () => void;
   selectCommandHistoryEntry: (entryId: number) => void;
   closeHotkeysDialog: () => void;
+  readyForMatch: () => void;
   createTwoPlayerGame: () => void;
 }>;
 
@@ -470,6 +471,12 @@ function HotkeysDialog({
   snapshot: GameOverlaySnapshot;
   actions: GameOverlayActions;
 }) {
+  const showReadyButton = shouldShowReadyButton(snapshot.connectionStatus);
+  const showCloseButton = shouldShowCloseButton(snapshot.connectionStatus);
+  const actionCount =
+    (snapshot.twoPlayerShare.canCreate ? 1 : 0) +
+    (showReadyButton ? 1 : 0) +
+    (showCloseButton ? 1 : 0);
   const statusMessage =
     snapshot.twoPlayerShare.message || snapshot.pauseMenuMessage;
   const statusState = snapshot.twoPlayerShare.message
@@ -490,7 +497,7 @@ function HotkeysDialog({
         </dl>
         <div
           className="hotkeys-dialog-actions"
-          data-has-two-player={snapshot.twoPlayerShare.canCreate}
+          data-columns={actionCount <= 1 ? "1" : "2"}
         >
           {snapshot.twoPlayerShare.canCreate ? (
             <button
@@ -510,19 +517,40 @@ function HotkeysDialog({
                 : "Two player"}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="hotkeys-dialog-close"
-            onPointerDown={stopOverlayPointer}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              actions.closeHotkeysDialog();
-              event.currentTarget.blur();
-            }}
-          >
-            Resume
-          </button>
+          {showReadyButton ? (
+            <button
+              type="button"
+              className="hotkeys-dialog-ready"
+              disabled={
+                isCurrentPlayerReady(snapshot.connectionStatus) ||
+                snapshot.connectionStatus.state !== "open"
+              }
+              onPointerDown={stopOverlayPointer}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                actions.readyForMatch();
+                event.currentTarget.blur();
+              }}
+            >
+              Ready
+            </button>
+          ) : null}
+          {showCloseButton ? (
+            <button
+              type="button"
+              className="hotkeys-dialog-close"
+              onPointerDown={stopOverlayPointer}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                actions.closeHotkeysDialog();
+                event.currentTarget.blur();
+              }}
+            >
+              Resume
+            </button>
+          ) : null}
         </div>
         <div
           className="hotkeys-dialog-message"
@@ -619,4 +647,25 @@ function formatRoleLabel(status: RuntimeConnectionStatus): string {
     default:
       return "P1";
   }
+}
+
+function shouldShowReadyButton(status: RuntimeConnectionStatus): boolean {
+  return (
+    status.mode === "network" &&
+    status.canControl &&
+    status.role !== "spectator" &&
+    !status.running
+  );
+}
+
+function shouldShowCloseButton(status: RuntimeConnectionStatus): boolean {
+  return status.mode !== "network" || status.running;
+}
+
+function isCurrentPlayerReady(status: RuntimeConnectionStatus): boolean {
+  const playerId = status.role === "player2" ? 2 : 1;
+  return (
+    status.players?.find((player) => player.playerId === playerId)?.ready ??
+    false
+  );
 }

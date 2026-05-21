@@ -235,7 +235,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 
 | Message | Purpose |
 |---|---|
-| `{ type: "ready" }` | Lobby ready signal |
+| `{ type: "ready" }` | Player-loaded signal; the DO starts the match only after both seated players send it |
 | `{ type: "command", clientSeq, localTick, command }` | Player command intent |
 | `{ type: "hash", tick, hash }` | Periodic state hash |
 | `{ type: "snapshot", tick, snapshot }` | Trusted full snapshot from the elected author |
@@ -253,6 +253,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 | `{ type: "resyncSoft", tick, diffs }` | Trusted small correction |
 | `{ type: "resyncHard", tick, snapshot }` | Trusted full state reload |
 | `{ type: "catchup", snapshotTick, snapshot, commands }` | Reconnect/spectator catch-up |
+| `{ type: "connectionStatus", serverTick, running, players, spectatorCount }` | Presence, ready state, spectator count, and timer state |
 | `{ type: "matchEnd", tick, winner, reason, finalHash, source, reports, ratingDeltas }` | Agreed, trusted, or conflict terminal match end |
 
 ## Tick model
@@ -383,7 +384,7 @@ This is not cheat-resistant. It is a recovery tool for friendly play and determi
 
 1. **Create**: Worker creates or resolves the match DO and returns a match ID.
 2. **Lobby**: players connect and ready up.
-3. **Start**: DO chooses seed, broadcasts `matchStart`, starts server tick at 0.
+3. **Start**: DO chooses seed, sends `matchStart`, waits for both players to press Ready after loading, then starts server tick at 0.
 4. **Play**: DO broadcasts tick command batches, stores non-empty commands, checks hashes, stores snapshots.
 5. **End**: clients report deterministic match end; DO records agreement or trusted remaining-player result.
 6. **Archive**: final command log and final snapshot are written to R2.

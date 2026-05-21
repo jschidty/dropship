@@ -105,6 +105,7 @@ export type ConnectionStatusMessage = Readonly<{
   players: readonly Readonly<{
     playerId: PlayerId;
     connected: boolean;
+    ready?: boolean;
   }>[];
 }>;
 

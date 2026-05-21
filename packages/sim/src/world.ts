@@ -100,6 +100,7 @@ export type SimUnit = {
   desiredVelocity: Vec3Data | null;
   rotation: QuaternionData;
   moveOrder: SimUnitOrder | null;
+  orderQueue: SimUnitOrder[];
   health: {
     current: number;
     max: number;
@@ -264,6 +265,7 @@ export function spawnUnit(
     velocity?: Vec3Data;
     rotation?: QuaternionData;
     moveOrder?: SimUnitOrder | null;
+    orderQueue?: readonly SimUnitOrder[];
     health?: { current: number; max: number };
     weaponCooldownTicks?: number;
     orbit?: SimOrbitState;
@@ -304,6 +306,7 @@ export function spawnUnit(
     desiredVelocity: null,
     rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
     moveOrder: copyUnitOrder(options.moveOrder ?? null),
+    orderQueue: copyUnitOrders(options.orderQueue ?? []),
     health: {
       current: health.current,
       max: health.max,
@@ -570,6 +573,42 @@ export function copyUnitOrder(order: SimUnitOrder | null): SimUnitOrder | null {
     type: order.type,
     planet: order.planet,
   };
+}
+
+export function copyUnitOrders(
+  orders: readonly SimUnitOrder[]
+): SimUnitOrder[] {
+  return orders
+    .map((order) => copyUnitOrder(order))
+    .filter((order): order is SimUnitOrder => order !== null);
+}
+
+export function replaceUnitOrder(unit: SimUnit, order: SimUnitOrder | null): void {
+  unit.moveOrder = copyUnitOrder(order);
+  unit.orderQueue = [];
+}
+
+export function appendUnitOrder(unit: SimUnit, order: SimUnitOrder): void {
+  const copiedOrder = copyUnitOrder(order);
+
+  if (!copiedOrder) {
+    return;
+  }
+
+  if (!unit.moveOrder) {
+    unit.moveOrder = copiedOrder;
+    return;
+  }
+
+  unit.orderQueue.push(copiedOrder);
+}
+
+export function promoteQueuedUnitOrder(unit: SimUnit): void {
+  if (unit.moveOrder || unit.orderQueue.length === 0) {
+    return;
+  }
+
+  unit.moveOrder = unit.orderQueue.shift() ?? null;
 }
 
 export function copyFighterSpawnState(

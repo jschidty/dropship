@@ -4,8 +4,9 @@ import { deterministicCos, deterministicSin, SIM_TAU } from "../deterministicMat
 import { findPrngStream, nextFloat01 } from "../prng";
 import { readUnitShipStats } from "../shipStats";
 import {
-  copyUnitOrder,
+  appendUnitOrder,
   getUnitsInStableOrder,
+  replaceUnitOrder,
   yawRotation,
   type SimSystem,
 } from "../world";
@@ -46,14 +47,14 @@ export const CommandIntakeSystem: SimSystem = {
             continue;
           }
 
-          unit.moveOrder = {
+          replaceUnitOrder(unit, {
             type: "moveTo",
             target: {
               x: scheduled.command.target.x,
               y: scheduled.command.target.y,
               z: scheduled.command.target.z,
             },
-          };
+          });
         }
       }
 
@@ -68,7 +69,11 @@ export const CommandIntakeSystem: SimSystem = {
             continue;
           }
 
-          unit.moveOrder = copyUnitOrder(scheduled.command.order);
+          if (scheduled.command.queueMode === "append") {
+            appendUnitOrder(unit, scheduled.command.order);
+          } else {
+            replaceUnitOrder(unit, scheduled.command.order);
+          }
         }
       }
     }

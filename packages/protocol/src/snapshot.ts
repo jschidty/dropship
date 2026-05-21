@@ -55,6 +55,7 @@ export type UnitSnapshot = Readonly<{
   velocity: Vec3Data;
   rotation: QuaternionData;
   moveOrder: UnitOrderSnapshot | null;
+  orderQueue?: readonly UnitOrderSnapshot[];
   health: HealthSnapshot;
   weaponCooldownTicks: number;
   orbit: UnitOrbitStateSnapshot;

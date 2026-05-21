@@ -57,6 +57,7 @@ testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
+testAppendOrderAdvancesAfterCurrentOrderCompletes();
 testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
 testOrbitPlanetOrderFacesAwayFromGravity();
@@ -610,6 +611,80 @@ function testMoveOrderInfluencesSteering(): void {
     distance(unit.position, target) < initialDistance,
     "Expected move command intent to pull the selected unit toward its target"
   );
+}
+
+function testAppendOrderAdvancesAfterCurrentOrderCompletes(): void {
+  const world = createWorld({
+    config: createMinimalSkirmishConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+
+  assert.ok(unit);
+
+  const firstTarget = {
+    x: unit.position.x + 32,
+    y: unit.position.y,
+    z: unit.position.z,
+  };
+  const secondTarget = {
+    x: unit.position.x + 72,
+    y: unit.position.y,
+    z: unit.position.z + 12,
+  };
+
+  runTick(world, {
+    tick: 0,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "moveTo",
+            target: firstTarget,
+          },
+          queueMode: "replace",
+        },
+      },
+      {
+        playerId: 1,
+        clientSeq: 2,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "moveTo",
+            target: secondTarget,
+          },
+          queueMode: "append",
+        },
+      },
+    ],
+  });
+
+  assert.equal(unit.moveOrder?.type, "moveTo");
+  assert.deepEqual(
+    unit.moveOrder?.type === "moveTo" ? unit.moveOrder.target : null,
+    firstTarget
+  );
+  assert.equal(unit.orderQueue.length, 1);
+
+  unit.position = firstTarget;
+  unit.prevPosition = firstTarget;
+  unit.velocity = { x: 0, y: 0, z: 0 };
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(unit.moveOrder?.type, "moveTo");
+  assert.deepEqual(
+    unit.moveOrder?.type === "moveTo" ? unit.moveOrder.target : null,
+    secondTarget
+  );
+  assert.equal(unit.orderQueue.length, 0);
 }
 
 function testEscortOrderCommand(): void {

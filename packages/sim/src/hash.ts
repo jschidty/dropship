@@ -21,18 +21,27 @@ export function hashSnapshot(snapshot: CompactSimSnapshot): string {
 function quantizeSnapshot(snapshot: CompactSimSnapshot): CompactSimSnapshot {
   return {
     ...snapshot,
-    units: snapshot.units.map((unit) => ({
-      ...unit,
-      position: quantizeVec3(unit.position),
-      velocity: quantizeVec3(unit.velocity),
-      rotation: {
-        x: quantize(unit.rotation.x),
-        y: quantize(unit.rotation.y),
-        z: quantize(unit.rotation.z),
-        w: quantize(unit.rotation.w),
-      },
-      moveOrder: quantizeUnitOrder(unit.moveOrder),
-    })),
+    units: snapshot.units.map((unit) => {
+      const quantized = {
+        ...unit,
+        position: quantizeVec3(unit.position),
+        velocity: quantizeVec3(unit.velocity),
+        rotation: {
+          x: quantize(unit.rotation.x),
+          y: quantize(unit.rotation.y),
+          z: quantize(unit.rotation.z),
+          w: quantize(unit.rotation.w),
+        },
+        moveOrder: quantizeUnitOrder(unit.moveOrder),
+      };
+
+      return unit.orderQueue
+        ? {
+            ...quantized,
+            orderQueue: unit.orderQueue.map((order) => quantizeUnitOrder(order)),
+          }
+        : quantized;
+    }),
     planets: snapshot.planets.map((planet) => ({
       ...planet,
       position: quantizeVec3(planet.position),

@@ -15,6 +15,7 @@ import {
   findPlanetByHandle,
   findUnitByHandle,
   getUnitsInStableOrder,
+  promoteQueuedUnitOrder,
   type SimUnit,
   type SimWorld,
 } from "../world";
@@ -31,6 +32,8 @@ export function updateShipOrderIntents(world: SimWorld, tick: number): void {
   const tuning = readSimTuning(world);
 
   for (const unit of getUnitsInStableOrder(world)) {
+    promoteQueuedUnitOrder(unit);
+
     const stats = readUnitShipStats(world, shipStats, unit);
     unit.desiredVelocity = computeOrderVelocity(
       unit,

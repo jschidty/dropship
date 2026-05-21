@@ -16,6 +16,7 @@ import {
   createEmptyWorld,
   copyComponentsBySlot,
   copyMoveOrder,
+  copyUnitOrders,
   copyOrbitState,
   copyPlanetOrbit,
   copyPlanetControl,
@@ -95,6 +96,7 @@ export function hydrateWorldFromSnapshot(
       velocity: unit.velocity,
       rotation: unit.rotation,
       moveOrder: copyMoveOrder(unit.moveOrder),
+      orderQueue: copyUnitOrders(unit.orderQueue ?? []),
       health: unit.health,
       weaponCooldownTicks: unit.weaponCooldownTicks,
       orbit: copyOrbitState(unit.orbit ?? null),
@@ -133,7 +135,7 @@ export function hydrateWorldFromSnapshot(
 }
 
 function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
-  return {
+  const snapshot: UnitSnapshot = {
     handle: unit.handle,
     owner: unit.owner,
     templateId: unit.templateId,
@@ -160,6 +162,13 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     render: unit.render,
     spawnedTick: unit.spawnedTick,
   };
+
+  return unit.orderQueue.length > 0
+    ? {
+        ...snapshot,
+        orderQueue: copyUnitOrders(unit.orderQueue),
+      }
+    : snapshot;
 }
 
 function planetToSnapshot(planet: SimWorld["planets"][number]): PlanetSnapshot {

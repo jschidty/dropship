@@ -152,6 +152,15 @@ export type SimSystem = Readonly<{
   run: (world: SimWorld, tick: number) => void;
 }>;
 
+type StableOrderCache = {
+  unitMutation: number;
+  planetMutation: number;
+  orderedUnitsMutation: number;
+  orderedPlanetsMutation: number;
+  orderedUnits: readonly SimUnit[];
+  orderedPlanets: readonly SimPlanet[];
+};
+
 export type SimWorld = {
   config: MatchConfig;
   content: ContentRegistry;
@@ -169,6 +178,7 @@ export type SimWorld = {
     completedTick: number;
     reason: MatchEndReason;
   } | null;
+  stableOrderCache: StableOrderCache;
 };
 
 export type CreateWorldOptions = Readonly<{
@@ -247,6 +257,7 @@ export function createEmptyWorld(options: {
       createPrngStream(options.config.seed, "spawn"),
     ],
     matchResult: null,
+    stableOrderCache: createStableOrderCache(),
   };
 }
 
@@ -323,6 +334,7 @@ export function spawnUnit(
   };
 
   world.units.push(unit);
+  invalidateUnitStableOrder(world);
   bindHandle(world.ids, handle, runtimeEntityId);
   return unit;
 }
@@ -387,20 +399,39 @@ export function spawnPlanet(
   };
 
   world.planets.push(planet);
+  invalidatePlanetStableOrder(world);
   bindHandle(world.ids, handle, runtimeEntityId);
   return planet;
 }
 
 export function getUnitsInStableOrder(world: SimWorld): readonly SimUnit[] {
-  return world.units
-    .slice()
-    .sort((a, b) => compareHandles(a.handle, b.handle));
+  if (
+    world.stableOrderCache.orderedUnitsMutation !==
+    world.stableOrderCache.unitMutation
+  ) {
+    world.stableOrderCache.orderedUnits = world.units
+      .slice()
+      .sort((a, b) => compareHandles(a.handle, b.handle));
+    world.stableOrderCache.orderedUnitsMutation =
+      world.stableOrderCache.unitMutation;
+  }
+
+  return world.stableOrderCache.orderedUnits;
 }
 
 export function getPlanetsInStableOrder(world: SimWorld): readonly SimPlanet[] {
-  return world.planets
-    .slice()
-    .sort((a, b) => compareHandles(a.handle, b.handle));
+  if (
+    world.stableOrderCache.orderedPlanetsMutation !==
+    world.stableOrderCache.planetMutation
+  ) {
+    world.stableOrderCache.orderedPlanets = world.planets
+      .slice()
+      .sort((a, b) => compareHandles(a.handle, b.handle));
+    world.stableOrderCache.orderedPlanetsMutation =
+      world.stableOrderCache.planetMutation;
+  }
+
+  return world.stableOrderCache.orderedPlanets;
 }
 
 export function findUnitByHandle(
@@ -436,7 +467,27 @@ export function removeUnit(world: SimWorld, unit: SimUnit): void {
   }
 
   world.units.splice(index, 1);
+  invalidateUnitStableOrder(world);
   unbindHandle(world.ids, unit.handle, unit.runtimeEntityId);
+}
+
+function createStableOrderCache(): StableOrderCache {
+  return {
+    unitMutation: 0,
+    planetMutation: 0,
+    orderedUnitsMutation: -1,
+    orderedPlanetsMutation: -1,
+    orderedUnits: [],
+    orderedPlanets: [],
+  };
+}
+
+function invalidateUnitStableOrder(world: SimWorld): void {
+  world.stableOrderCache.unitMutation += 1;
+}
+
+function invalidatePlanetStableOrder(world: SimWorld): void {
+  world.stableOrderCache.planetMutation += 1;
 }
 
 export function capturePrevPositions(world: SimWorld): void {

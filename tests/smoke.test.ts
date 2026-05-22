@@ -624,6 +624,8 @@ function testDefaultContentRegistryLoadsRawTemplates(): void {
   assert.ok(bombardLaser.type === "weapon");
   assert.equal(bombardLaser.damage, pulseLaser.damage);
   assert.equal(bombardLaser.cooldownTicks, pulseLaser.cooldownTicks);
+  assert.equal(pulseLaser.minRange ?? 0, 0);
+  assert.equal(bombardLaser.minRange, 75);
   assert.ok(bombardLaser.range > pulseLaser.range);
   assert.equal(dropShip.defaultLoadout.componentsBySlot["main-engine-4"], 1);
   assert.equal(
@@ -789,7 +791,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "afa03075");
+  assert.equal(first, "49992a14");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -803,11 +805,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "afa03075");
+  assert.equal(result.finalHash, "49992a14");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "afa03075",
+      hash: "49992a14",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -873,7 +875,7 @@ function testHeadlessControllerCommandsUseCommandBatches(): void {
 }
 
 function testHeadlessMetricsTracksBattleshipDamage(): void {
-  const runner = createHeadlessMatchRunner({
+  const closeRunner = createHeadlessMatchRunner({
     config: createMinimalSkirmishConfig({
       seed: 1337,
       initialPlanets: [],
@@ -893,11 +895,36 @@ function testHeadlessMetricsTracksBattleshipDamage(): void {
     maxTicks: 1,
     hashIntervalTicks: 0,
   });
+  const closeResult = closeRunner.run();
+
+  assert.equal(closeResult.metrics.eventCounts.weaponFired, 0);
+  assert.equal(closeResult.metrics.damageDone.battleship.total, 0);
+
+  const runner = createHeadlessMatchRunner({
+    config: createMinimalSkirmishConfig({
+      seed: 1337,
+      initialPlanets: [],
+      initialUnits: [
+        {
+          owner: 1,
+          templateId: TEMPLATE_IDS.battleship,
+          position: { x: 0, y: 0, z: 0 },
+        },
+        {
+          owner: 2,
+          templateId: TEMPLATE_IDS.dropShip,
+          position: { x: 100, y: 0, z: 0 },
+        },
+      ],
+    }),
+    maxTicks: 1,
+    hashIntervalTicks: 0,
+  });
   const result = runner.run();
   const battleshipClassKey = String(SHIP_CLASS_IDS.battleship);
 
-  assert.equal(result.metrics.eventCounts.weaponFired, 1);
-  assert.ok(result.metrics.damageDone.battleship.total > 0);
+  assert.equal(result.metrics.eventCounts.weaponFired, 5);
+  assert.equal(result.metrics.damageDone.battleship.total, 40);
   assert.equal(
     result.metrics.damageDone.bySourceShipClass[battleshipClassKey],
     result.metrics.damageDone.battleship.total

@@ -62,6 +62,7 @@ export type SimEvent =
       target: EntityHandle;
       owner: PlayerId;
       weaponId: number;
+      weaponSlotId: string;
       sourceShipClassId: number;
       targetShipClassId: number;
       damage: number;
@@ -107,6 +108,7 @@ export type SimUnit = {
     max: number;
   };
   weaponCooldownTicks: number;
+  weaponCooldownTicksBySlot: Record<string, number>;
   orbit: SimOrbitState;
   fighterSpawn: SimFighterSpawnState | null;
   render: {
@@ -293,6 +295,7 @@ export function spawnUnit(
     orderQueue?: readonly SimUnitOrder[];
     health?: { current: number; max: number };
     weaponCooldownTicks?: number;
+    weaponCooldownTicksBySlot?: Readonly<Record<string, number>> | null;
     orbit?: SimOrbitState;
     fighterSpawn?: SimFighterSpawnState | null;
     spawnedTick?: number;
@@ -337,6 +340,9 @@ export function spawnUnit(
       max: health.max,
     },
     weaponCooldownTicks: options.weaponCooldownTicks ?? 0,
+    weaponCooldownTicksBySlot: copyWeaponCooldownTicksBySlot(
+      options.weaponCooldownTicksBySlot
+    ),
     orbit: copyOrbitState(options.orbit ?? null),
     fighterSpawn: copyFighterSpawnState(options.fighterSpawn ?? null),
     render: {
@@ -595,6 +601,26 @@ export function copyComponentsBySlot(
   componentsBySlot: Readonly<Record<string, number>> | null | undefined
 ): Readonly<Record<string, number>> | null {
   return componentsBySlot ? { ...componentsBySlot } : null;
+}
+
+export function copyWeaponCooldownTicksBySlot(
+  cooldowns: Readonly<Record<string, number>> | null | undefined
+): Record<string, number> {
+  const copied: Record<string, number> = {};
+
+  if (!cooldowns) {
+    return copied;
+  }
+
+  for (const slotId of Object.keys(cooldowns)) {
+    const cooldown = cooldowns[slotId];
+
+    if (cooldown > 0) {
+      copied[slotId] = cooldown;
+    }
+  }
+
+  return copied;
 }
 
 export function copyPlanetOrbit(orbit: PlanetOrbitConfig): PlanetOrbitConfig {

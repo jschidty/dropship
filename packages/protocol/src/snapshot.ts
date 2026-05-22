@@ -58,6 +58,7 @@ export type UnitSnapshot = Readonly<{
   orderQueue?: readonly UnitOrderSnapshot[];
   health: HealthSnapshot;
   weaponCooldownTicks: number;
+  weaponCooldownTicksBySlot?: Readonly<Record<string, number>>;
   orbit: UnitOrbitStateSnapshot;
   fighterSpawn: UnitFighterSpawnSnapshot | null;
   render: RenderSnapshot;

@@ -27,6 +27,15 @@ export function validateContentRegistry(
     if (component.powerDraw < 0) {
       errors.push(`Ship component ${component.slug} must not have negative power draw`);
     }
+
+    if (
+      component.type === "weapon" &&
+      (component.minRange ?? 0) > component.range
+    ) {
+      errors.push(
+        `Ship component ${component.slug} must not have min range greater than range`
+      );
+    }
   }
 
   for (const template of registry.unitTemplates) {

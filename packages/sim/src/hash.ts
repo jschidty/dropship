@@ -90,6 +90,7 @@ function hashUnit(hasher: FnvHasher, value: unknown): void {
     ["templateId"],
     ["velocity", hashQuantizedVec3],
     ["weaponCooldownTicks"],
+    ["weaponCooldownTicksBySlot"],
   ]);
 }
 

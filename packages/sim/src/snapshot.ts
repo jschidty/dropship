@@ -20,6 +20,7 @@ import {
   copyOrbitState,
   copyPlanetOrbit,
   copyPlanetControl,
+  copyWeaponCooldownTicksBySlot,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   spawnPlanet,
@@ -99,6 +100,7 @@ export function hydrateWorldFromSnapshot(
       orderQueue: copyUnitOrders(unit.orderQueue ?? []),
       health: unit.health,
       weaponCooldownTicks: unit.weaponCooldownTicks,
+      weaponCooldownTicksBySlot: unit.weaponCooldownTicksBySlot,
       orbit: copyOrbitState(unit.orbit ?? null),
       fighterSpawn: unit.fighterSpawn
         ? {
@@ -135,6 +137,9 @@ export function hydrateWorldFromSnapshot(
 }
 
 function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
+  const weaponCooldownTicksBySlot = copyWeaponCooldownTicksBySlot(
+    unit.weaponCooldownTicksBySlot
+  );
   const snapshot: UnitSnapshot = {
     handle: unit.handle,
     owner: unit.owner,
@@ -163,12 +168,20 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     spawnedTick: unit.spawnedTick,
   };
 
+  const snapshotWithCooldowns =
+    Object.keys(weaponCooldownTicksBySlot).length > 0
+      ? {
+          ...snapshot,
+          weaponCooldownTicksBySlot,
+        }
+      : snapshot;
+
   return unit.orderQueue.length > 0
     ? {
-        ...snapshot,
+        ...snapshotWithCooldowns,
         orderQueue: copyUnitOrders(unit.orderQueue),
       }
-    : snapshot;
+    : snapshotWithCooldowns;
 }
 
 function planetToSnapshot(planet: SimWorld["planets"][number]): PlanetSnapshot {

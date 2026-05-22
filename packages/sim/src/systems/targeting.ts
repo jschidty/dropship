@@ -12,10 +12,12 @@ export function findNearestEnemy(
   units: readonly SimUnit[],
   spatialIndex: UnitSpatialIndex | null,
   unit: SimUnit,
-  maxRange: number
+  maxRange: number,
+  minRange = 0
 ): SimUnit | null {
   let best: SimUnit | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
+  const minRangeSquared = minRange * minRange;
 
   const visitCandidate = (
     candidate: SimUnit,
@@ -26,6 +28,10 @@ export function findNearestEnemy(
       candidate.health.current <= 0 ||
       candidate === unit
     ) {
+      return;
+    }
+
+    if (candidateDistance < minRangeSquared) {
       return;
     }
 
@@ -78,13 +84,31 @@ export function findWeaponTarget(
     orderedTarget &&
     orderedTarget.owner !== unit.owner &&
     orderedTarget.health.current > 0 &&
-    distanceSquared(unit.position, orderedTarget.position) <=
-      weapon.range * weapon.range
+    isDistanceInWeaponRange(
+      distanceSquared(unit.position, orderedTarget.position),
+      weapon
+    )
   ) {
     return orderedTarget;
   }
 
-  return findNearestEnemy(units, spatialIndex, unit, weapon.range);
+  return findNearestEnemy(
+    units,
+    spatialIndex,
+    unit,
+    weapon.range,
+    weapon.minRange
+  );
+}
+
+function isDistanceInWeaponRange(
+  distanceSquaredValue: number,
+  weapon: UnitWeaponProfile
+): boolean {
+  return (
+    distanceSquaredValue >= weapon.minRange * weapon.minRange &&
+    distanceSquaredValue <= weapon.range * weapon.range
+  );
 }
 
 function readOrderedAttackTarget(world: SimWorld, unit: SimUnit): SimUnit | null {

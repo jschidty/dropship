@@ -10,8 +10,14 @@ export type UnitWeaponProfile = Readonly<{
   weaponId: number;
   damage: number;
   cooldownTicks: number;
+  minRange: number;
   range: number;
 }>;
+
+export type UnitWeaponSlotProfile = UnitWeaponProfile &
+  Readonly<{
+    slotId: string;
+  }>;
 
 export function readShipStats(
   world: SimWorld,
@@ -74,13 +80,49 @@ export function readUnitWeaponProfile(
     return cached.weaponId === 0 ? null : cached;
   }
 
-  const template = world.content.getUnitTemplate(unit.templateId);
-  const componentsBySlot =
-    unit.componentsBySlot ?? template.defaultLoadout.componentsBySlot;
   let weaponId = 0;
   let damage = 0;
   let cooldownTicks = Number.POSITIVE_INFINITY;
+  let minRange = Number.POSITIVE_INFINITY;
   let range = 0;
+
+  for (const weapon of readUnitWeaponSlots(world, new Map(), unit)) {
+    weaponId =
+      weaponId === 0 ? weapon.weaponId : Math.min(weaponId, weapon.weaponId);
+    damage += weapon.damage;
+    cooldownTicks = Math.min(cooldownTicks, weapon.cooldownTicks);
+    minRange = Math.min(minRange, weapon.minRange);
+    range = Math.max(range, weapon.range);
+  }
+
+  const profile: UnitWeaponProfile = {
+    weaponId,
+    damage,
+    cooldownTicks: Number.isFinite(cooldownTicks) ? cooldownTicks : 0,
+    minRange: Number.isFinite(minRange) ? minRange : 0,
+    range,
+  };
+
+  cache.set(cacheKey, profile);
+  return profile.weaponId === 0 ? null : profile;
+}
+
+export function readUnitWeaponSlots(
+  world: SimWorld,
+  cache: Map<number | string, readonly UnitWeaponSlotProfile[]>,
+  unit: SimUnit
+): readonly UnitWeaponSlotProfile[] {
+  const cacheKey = createShipStatsCacheKey(unit.templateId, unit.componentsBySlot);
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  const template = world.content.getUnitTemplate(unit.templateId);
+  const componentsBySlot =
+    unit.componentsBySlot ?? template.defaultLoadout.componentsBySlot;
+  const weapons: UnitWeaponSlotProfile[] = [];
 
   for (const slot of template.slots) {
     const componentId = componentsBySlot[slot.id];
@@ -95,21 +137,18 @@ export function readUnitWeaponProfile(
       continue;
     }
 
-    weaponId = weaponId === 0 ? component.id : Math.min(weaponId, component.id);
-    damage += component.damage;
-    cooldownTicks = Math.min(cooldownTicks, component.cooldownTicks);
-    range = Math.max(range, component.range);
+    weapons.push({
+      slotId: slot.id,
+      weaponId: component.id,
+      damage: component.damage,
+      cooldownTicks: component.cooldownTicks,
+      minRange: component.minRange ?? 0,
+      range: component.range,
+    });
   }
 
-  const profile: UnitWeaponProfile = {
-    weaponId,
-    damage,
-    cooldownTicks: Number.isFinite(cooldownTicks) ? cooldownTicks : 0,
-    range,
-  };
-
-  cache.set(cacheKey, profile);
-  return profile.weaponId === 0 ? null : profile;
+  cache.set(cacheKey, weapons);
+  return weapons;
 }
 
 function readShipComponent(
@@ -142,6 +181,7 @@ export function validateShipComponentOverride(
     "cargoCapacity",
     "damage",
     "cooldownTicks",
+    "minRange",
     "range",
   ] as const) {
     const value = override[key];
@@ -150,7 +190,10 @@ export function validateShipComponentOverride(
       continue;
     }
 
-    if (!(key in component)) {
+    if (
+      !(key in component) &&
+      !(component.type === "weapon" && key === "minRange")
+    ) {
       throw new Error(
         `Ship component ${component.slug} cannot override ${key}`
       );
@@ -159,6 +202,17 @@ export function validateShipComponentOverride(
     if (!Number.isFinite(value) || value < 0) {
       throw new Error(
         `Ship component ${component.slug} override ${key} must be a non-negative finite number`
+      );
+    }
+  }
+
+  if (component.type === "weapon") {
+    const minRange = override.minRange ?? component.minRange ?? 0;
+    const range = override.range ?? component.range;
+
+    if (minRange > range) {
+      throw new Error(
+        `Ship component ${component.slug} override minRange must not exceed range`
       );
     }
   }
@@ -182,11 +236,15 @@ export function applyShipComponentOverride<T extends ShipComponentTemplate>(
     "cargoCapacity",
     "damage",
     "cooldownTicks",
+    "minRange",
     "range",
   ] as const) {
     const value = override[key];
 
-    if (value !== undefined && key in merged) {
+    if (
+      value !== undefined &&
+      (key in merged || (component.type === "weapon" && key === "minRange"))
+    ) {
       merged[key] = value;
     }
   }

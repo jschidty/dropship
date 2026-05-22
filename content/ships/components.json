@@ -53,6 +53,7 @@
     "powerDraw": 2,
     "damage": 8,
     "cooldownTicks": 12,
+    "minRange": 75,
     "range": 150
   }
 ]

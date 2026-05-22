@@ -72,6 +72,7 @@ export type ShipWeaponComponent = ShipComponentBase &
     type: "weapon";
     damage: number;
     cooldownTicks: number;
+    minRange?: number;
     range: number;
   }>;
 

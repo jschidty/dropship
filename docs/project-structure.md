@@ -57,7 +57,8 @@ drop-ship/
     |-- gameplay-demo.md
     |-- piloting.md
     |-- project-structure.md
-    `-- rendering.md
+    |-- rendering.md
+    `-- ui-state-model.md
 ```
 
 ## Package boundaries
@@ -155,6 +156,8 @@ client/src/
 The client may import `sim`, `protocol`, `content`, and `controllers`. It must write to sim state only through command intake or explicit resync APIs.
 
 Renderer modules should stay split by responsibility. The mount loop may orchestrate scene setup, input wiring, and frame scheduling, while reusable render mechanisms such as unit instancing, projectile particles, shader materials, quality presets, and render math live in separate files under `client/src/render/`.
+
+Tactical UI state and input behavior are architecture-level concerns. Selection, target resolution, reticles, command defaults, and camera focus rules are defined in [ui-state-model.md](ui-state-model.md) and should be kept in small pure helpers as they grow.
 
 ### `packages/server`
 

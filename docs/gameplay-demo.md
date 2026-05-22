@@ -12,7 +12,7 @@ This mode must sit on the same deterministic lockstep architecture as the rest o
 - snapshots and hashes include every gameplay value that can affect the future
 - client UI, camera, effects, and audio read sim state but never become sim authority
 
-See [determinism.md](determinism.md), [command-hierarchy.md](command-hierarchy.md), [ecs.md](ecs.md), and [rendering.md](rendering.md) for the underlying contracts. First-person piloting remains a future feature and is intentionally out of scope for this demo.
+See [determinism.md](determinism.md), [command-hierarchy.md](command-hierarchy.md), [ecs.md](ecs.md), [rendering.md](rendering.md), and [ui-state-model.md](ui-state-model.md) for the underlying contracts. First-person piloting remains a future feature and is intentionally out of scope for this demo.
 
 ## Game Shape
 
@@ -427,6 +427,8 @@ Client-only tactical UI:
 - match result overlay
 
 The capture UI should display `captureTicks / PLANET_CAPTURE_TICKS` from sim state. It should not run its own timer.
+
+Tactical controls should follow the contextual command resolver in [ui-state-model.md](ui-state-model.md). A click should do the single obvious command for the current selected units and target: attack enemy units, escort friendly units, guard owned planets, capture neutral or enemy planets, and move on empty tactical space. Orbit uses click-drag on a planet so the player sees and chooses the lane.
 
 ## Implementation Milestones
 

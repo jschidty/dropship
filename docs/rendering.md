@@ -192,6 +192,8 @@ Flow:
 
 Single-player uses a local scheduler with the same command-batch interface. Do not special-case direct ECS mutation for solo play.
 
+The tactical input state machine, scene target priority, contextual command resolver, and camera focus rules are defined in [ui-state-model.md](ui-state-model.md). Rendering code should ask that model what a target means instead of duplicating click semantics in reticles, panels, and command emission.
+
 ## Selection
 
 Selection is local-only client state.
@@ -205,6 +207,8 @@ It can be a set of stable handles:
 - double-click type in viewport
 
 Selection drives outlines, command panels, target defaults, and local UI. It is not part of sim snapshots or hashes.
+
+Selection and hover are separate. Hover/cycle state identifies one active scene target at a time; selection identifies the command group. The active target plus current command group determines the default action.
 
 ## Effects
 
@@ -263,6 +267,8 @@ Phase 1 UI:
 The first capture demo implements all player-facing controls in tactical view. Cockpit HUD and first-person piloting UI are reserved for a later milestone.
 
 UI click handlers produce command intents. They do not write ECS state.
+
+When a command has an unambiguous contextual default, the viewport interaction should express that default directly. For example, selected units clicking an enemy unit attacks it, selected units clicking an owned planet guards it, and selected units clicking a neutral or enemy planet captures it. Orbit requires a planet drag because the lane preview is part of the command.
 
 ## Network client
 

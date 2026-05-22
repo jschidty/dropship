@@ -68,6 +68,7 @@ testPlanetaryOrbitMotion();
 testPlanetGravityVector();
 testDefaultSteeringMovesUnits();
 testMoveOrderInfluencesSteering();
+testCloseRangeBoidSeparationPreservesFalloff();
 testAppendOrderAdvancesAfterCurrentOrderCompletes();
 testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
@@ -619,10 +620,10 @@ function testSeededMatchGeneration(): void {
   assert.deepEqual(first.initialPlanets, second.initialPlanets);
   assert.deepEqual(first.environment, second.environment);
   assert.ok(Number.isFinite(first.environment.sun.orbitCenter.x));
-  assert.ok(first.initialPlanets.length >= 4);
-  assert.ok(first.initialPlanets.length <= 10);
-  assert.ok(parentPlanetCount >= 4);
-  assert.ok(moonCount <= 6);
+  assert.ok(first.initialPlanets.length >= 8);
+  assert.ok(first.initialPlanets.length <= 11);
+  assert.ok(parentPlanetCount >= 7);
+  assert.ok(moonCount <= 4);
   const ringedPlanets = first.initialPlanets.filter(
     (planet) => planet.appearance.hasRings
   );
@@ -664,9 +665,9 @@ function testSeededMatchGeneration(): void {
       (planet) => planet.parentPlanetIndex === null
     ).length;
 
-    assert.ok(config.initialPlanets.length >= 4);
-    assert.ok(config.initialPlanets.length <= 10);
-    assert.ok(parentCount >= 4);
+    assert.ok(config.initialPlanets.length >= 8);
+    assert.ok(config.initialPlanets.length <= 11);
+    assert.ok(parentCount >= 7);
   }
 }
 
@@ -754,7 +755,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "154e0260");
+  assert.equal(first, "8f768808");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -768,11 +769,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "154e0260");
+  assert.equal(result.finalHash, "8f768808");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "154e0260",
+      hash: "8f768808",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -1004,6 +1005,47 @@ function testMoveOrderInfluencesSteering(): void {
   );
 }
 
+function testCloseRangeBoidSeparationPreservesFalloff(): void {
+  const target = { x: 1000, y: 0, z: 0 };
+  const world = createWorld({
+    config: createMinimalSkirmishConfig({
+      seed: 62001,
+      initialPlanets: [],
+      initialUnits: [
+        {
+          owner: 1,
+          templateId: TEMPLATE_IDS.battleship,
+          position: { x: 0, y: 0, z: 0 },
+          initialOrder: { type: "moveTo", target },
+        },
+        ...[-2.5, -1.5, -0.5, 0.5, 1.5, 2.5].map((x, index) => ({
+          owner: 1 as const,
+          templateId: TEMPLATE_IDS.fighterShip,
+          position: {
+            x,
+            y: (index % 3) - 1,
+            z: 7,
+          },
+          initialOrder: { type: "moveTo" as const, target },
+        })),
+      ],
+    }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const battleship = world.units.find(
+    (unit) => unit.shipClassId === SHIP_CLASS_IDS.battleship
+  );
+
+  assert.ok(battleship);
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.ok(
+    angleFromPositiveX(battleship.velocity) < 6,
+    "Expected close fighter separation to preserve falloff instead of overpowering move intent"
+  );
+}
+
 function testAppendOrderAdvancesAfterCurrentOrderCompletes(): void {
   const world = createWorld({
     config: createMinimalSkirmishConfig(),
@@ -1212,7 +1254,7 @@ function testCaptureDemoConfig(): void {
     (planet) => planet.control.capturable
   );
 
-  assert.ok(capturablePlanets.length >= 4);
+  assert.ok(capturablePlanets.length >= 7);
   assert.equal(
     capturablePlanets.length,
     parentPlanets.length,
@@ -1227,6 +1269,8 @@ function testCaptureDemoConfig(): void {
 
   const playerOneDropShip = assertCaptureDemoFleet(world, 1);
   const playerTwoDropShip = assertCaptureDemoFleet(world, 2);
+
+  assertEqualPlayerFleetStats(world);
 
   assert.ok(
     distance(playerOneDropShip.position, playerTwoDropShip.position) > 450,
@@ -1438,7 +1482,7 @@ function testDropShipSpawnsFighters(): void {
     (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
   ).length - initialFighters;
 
-  assert.equal(spawnedFighters, 4);
+  assert.equal(spawnedFighters, 8);
 }
 
 function testSpawnedFightersEscortParentDropShip(): void {
@@ -1914,6 +1958,7 @@ function testNpcFightersHoldEscortWhenDropShipIsNotThreatened(): void {
     rules: {
       npc: {
         aggroRangeWorldUnits: 120,
+        dropShipThreatRangeWorldUnits: 120,
         thinkIntervalTicks: 1,
       },
       spawning: {
@@ -2020,7 +2065,7 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
     "npc"
   );
   assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 1_000);
-  assert.equal(hydrated.config.rules.npc.dropShipThreatRangeWorldUnits, 180);
+  assert.equal(hydrated.config.rules.npc.dropShipThreatRangeWorldUnits, 300);
 
   const scriptedNpcController = createScriptedNpcController();
   const commands = scriptedNpcController.commandsForTick(hydrated);
@@ -2407,9 +2452,9 @@ function assertCaptureDemoFleet(
   );
   const dropShip = dropShips[0];
 
-  assert.equal(dropShips.length, 2);
-  assert.equal(fighters.length, 12);
-  assert.equal(battleships.length, 2);
+  assert.equal(dropShips.length, 4);
+  assert.equal(fighters.length, 24);
+  assert.equal(battleships.length, 5);
   assert.ok(dropShip);
   assert.ok(dropShips[1]);
   assert.ok(
@@ -2427,6 +2472,20 @@ function assertCaptureDemoFleet(
     );
   }
 
+  for (const dropShip of dropShips) {
+    const escortedFighters = fighters.filter(
+      (fighter) =>
+        fighter.moveOrder?.type === "escort" &&
+        sameHandle(fighter.moveOrder.target, dropShip.handle)
+    );
+
+    assert.equal(
+      escortedFighters.length,
+      6,
+      "Expected every starting drop-ship squadron to have six fighter escorts"
+    );
+  }
+
   for (const unit of playerUnits) {
     assert.ok(
       dropShips.some((candidate) => distance(unit.position, candidate.position) < 90),
@@ -2435,6 +2494,34 @@ function assertCaptureDemoFleet(
   }
 
   return dropShip;
+}
+
+function assertEqualPlayerFleetStats(world: ReturnType<typeof createWorld>): void {
+  assert.deepEqual(
+    readPlayerFleetStatSignature(world, 1),
+    readPlayerFleetStatSignature(world, 2),
+    "Expected both players to start with matching unit counts and derived ship stats"
+  );
+}
+
+function readPlayerFleetStatSignature(
+  world: ReturnType<typeof createWorld>,
+  playerId: PlayerId
+): readonly string[] {
+  return world.units
+    .filter((unit) => unit.owner === playerId)
+    .map((unit) => {
+      const stats = readUnitShipStats(world, new Map(), unit);
+
+      return JSON.stringify({
+        templateId: unit.templateId,
+        shipClassId: unit.shipClassId,
+        componentsBySlot: unit.componentsBySlot,
+        health: unit.health.max,
+        stats,
+      });
+    })
+    .sort();
 }
 
 function placeDropShipInCaptureOrbit(
@@ -2535,6 +2622,22 @@ function distance(
   b: Readonly<{ x: number; y: number; z: number }>
 ): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function angleFromPositiveX(
+  vector: Readonly<{ x: number; y: number; z: number }>
+): number {
+  const magnitude = Math.hypot(vector.x, vector.y, vector.z);
+
+  if (magnitude <= 0.000001) {
+    return 0;
+  }
+
+  return (
+    Math.acos(Math.max(-1, Math.min(1, vector.x / magnitude))) *
+    180 /
+    Math.PI
+  );
 }
 
 function assertUnitsOutsidePlanets(world: ReturnType<typeof createWorld>): void {

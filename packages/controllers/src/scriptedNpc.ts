@@ -253,14 +253,64 @@ function findProtectedDropShip(world: SimWorld, unit: SimUnit): SimUnit | null {
     return unit;
   }
 
+  const escortedDropShip = findEscortedFriendlyDropShip(world, unit);
+
+  if (escortedDropShip) {
+    return escortedDropShip;
+  }
+
+  return findNearestFriendlyDropShip(world, unit);
+}
+
+function findEscortedFriendlyDropShip(
+  world: SimWorld,
+  unit: SimUnit
+): SimUnit | null {
+  if (unit.moveOrder?.type !== "escort") {
+    return null;
+  }
+
+  const escortedTarget = unit.moveOrder.target;
+
   return (
     getUnitsInStableOrder(world).find(
       (candidate) =>
         candidate.owner === unit.owner &&
         candidate.shipClassId === SHIP_CLASS_IDS.dropShip &&
-        candidate.health.current > 0
+        candidate.health.current > 0 &&
+        sameHandle(candidate.handle, escortedTarget)
     ) ?? null
   );
+}
+
+function findNearestFriendlyDropShip(
+  world: SimWorld,
+  unit: SimUnit
+): SimUnit | null {
+  let nearest: SimUnit | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of getUnitsInStableOrder(world)) {
+    if (
+      candidate.owner !== unit.owner ||
+      candidate.shipClassId !== SHIP_CLASS_IDS.dropShip ||
+      candidate.health.current <= 0 ||
+      sameHandle(candidate.handle, unit.handle)
+    ) {
+      continue;
+    }
+
+    const candidateDistance = distanceSquared(unit.position, candidate.position);
+
+    if (candidateDistance >= nearestDistance) {
+      continue;
+    }
+
+    nearest = candidate;
+    nearestDistance = candidateDistance;
+  }
+
+  return nearest;
 }
 
 function chooseDropShipTargetPlanet(

@@ -929,7 +929,16 @@ function resolveConnectionPlayerId(
 }
 
 function allowsDebugSeat(url: URL): boolean {
-  return url.searchParams.get("debugSeat") === "1";
+  return url.searchParams.get("debugSeat") === "1" && isLocalDebugHost(url.hostname);
+}
+
+function isLocalDebugHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }
 
 function parseSeed(value: string | null): number | undefined {

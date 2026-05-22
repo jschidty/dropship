@@ -74,11 +74,13 @@ import {
   hideSelectionBox,
   updateSelectionBox,
 } from "../ui/controls";
+import { createPlanetStatsRenderCache } from "./planetStatsRender";
 import {
   createInitialOverlaySnapshot,
   mountGameOverlay,
   type CommandHistoryEntry,
   type PendingCommandMenuCommand,
+  type SelectedPlanetStatsSnapshot,
 } from "../ui/GameOverlay";
 import {
   createMatchEndDialogSnapshot,
@@ -352,7 +354,12 @@ export function mountMinimalGame(
   const planetGeometry = new THREE.PlaneGeometry(1, 1);
   let planetRingGeometry = createPlanetRingGeometry(renderQuality);
   const gasGiantTextures = createGasGiantTextureSet();
-  const planetMaterial = createPlanetBillboardMaterial(
+  const planetStatsRenderCache = createPlanetStatsRenderCache(
+    renderer,
+    gasGiantTextures
+  );
+  const planetStatsSunDirection = new THREE.Vector3();
+  let planetMaterial = createPlanetBillboardMaterial(
     gasGiantTextures,
     renderQuality.mode
   );
@@ -521,12 +528,24 @@ export function mountMinimalGame(
     syncMatchEndDialog();
     syncNetworkStartMenu(connectionStatus);
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
 
     overlayStore.setSnapshot({
       activeCameraPreset: cameraControls.preset,
       tacticalOverlayEnabled,
       renderMode: renderQuality.mode,
       selectedUnits,
+      selectedPlanet: selectedPlanet
+        ? createSelectedPlanetStatsSnapshot(
+            selectedPlanet,
+            planetStatsRenderCache.readImageUrl(
+              selectedPlanet,
+              writeSunDirection(planetStatsSunDirection, runtime.world.config)
+            ),
+            runtime.world.config.players,
+            readCaptureRules(runtime.world)
+          )
+        : null,
       commandMenuLeaderKey,
       pendingCommand,
       commandHistory: commandHistory.map(
@@ -571,6 +590,11 @@ export function mountMinimalGame(
     planetRingGeometry = createPlanetRingGeometry(renderQuality);
     disposePlanetProxies(worldGroup, planetProxies);
     previousPlanetRingGeometry.dispose();
+    planetMaterial.dispose();
+    planetMaterial = createPlanetBillboardMaterial(
+      gasGiantTextures,
+      renderQuality.mode
+    );
     planetGlowMaterial?.dispose();
     planetGlowMaterial = renderQuality.planetGlowEnabled
       ? createPlanetGlowMaterial(gasGiantTextures, renderQuality.mode)
@@ -1731,6 +1755,7 @@ export function mountMinimalGame(
       disposeCaptureProgressRings(worldGroup, captureProgressRings);
       disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
+      planetStatsRenderCache.dispose();
       planetGeometry.dispose();
       planetRingGeometry.dispose();
       planetMaterial.dispose();
@@ -2002,21 +2027,21 @@ function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
     }
 
     if (status.role === "player1") {
-      return "Waiting for player 2...";
+      return "Player 2 has not connected yet.";
     }
 
     if (status.role === "player2") {
-      return "Waiting for player 1...";
+      return "Player 1 has not connected yet.";
     }
 
     return status.state === "connecting" ? "Connecting..." : "Waiting...";
   }
 
   if (missingPlayers.length === 1) {
-    return `Waiting for player ${missingPlayers[0].playerId}...`;
+    return `Player ${missingPlayers[0].playerId} has not connected yet.`;
   }
 
-  return "Waiting for players...";
+  return "Players have not connected yet.";
 }
 
 function isCurrentPlayerReady(status: RuntimeConnectionStatus): boolean {
@@ -2331,6 +2356,79 @@ function getSelectedPlanet(
   return selectedPlanetKey
     ? planets.find((planet) => planet.key === selectedPlanetKey) ?? null
     : null;
+}
+
+function createSelectedPlanetStatsSnapshot(
+  planet: PlanetViewModel,
+  imageUrl: string,
+  players: readonly PlayerConfig[],
+  rules: CaptureRulesConfig
+): SelectedPlanetStatsSnapshot {
+  const owner = readPlayerConfig(players, planet.control.owner);
+  const controlColor = owner?.color ?? "#d6dae8";
+  const capturingPlayer = readPlayerConfig(
+    players,
+    planet.control.capturingPlayer
+  );
+  const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
+  const captureProgress =
+    planet.control.capturingPlayer === 0
+      ? null
+      : clamp(planet.control.captureTicks / Math.max(requiredTicks, 1), 0, 1);
+  const capturePercent =
+    captureProgress === null ? 0 : Math.round(captureProgress * 100);
+
+  return {
+    planet,
+    imageUrl,
+    controlLabel: formatSelectedPlanetControlLabel(planet, owner),
+    controlColor,
+    captureLabel:
+      captureProgress === null
+        ? planet.control.contested
+          ? "Contested"
+          : "Idle"
+        : planet.control.contested
+          ? `Capture stalled: ${formatPlayerName(
+              capturingPlayer,
+              planet.control.capturingPlayer
+            )} ${capturePercent}%`
+          : `${formatPlayerName(
+              capturingPlayer,
+              planet.control.capturingPlayer
+            )} capture ${capturePercent}%`,
+    captureColor: capturingPlayer?.color ?? controlColor,
+    captureProgress,
+  };
+}
+
+function formatSelectedPlanetControlLabel(
+  planet: PlanetViewModel,
+  owner: PlayerConfig | null
+): string {
+  if (!planet.control.capturable) {
+    return "Unclaimable";
+  }
+
+  if (!owner) {
+    return "Neutral";
+  }
+
+  return `Controlled by ${owner.name}`;
+}
+
+function formatPlayerName(
+  player: PlayerConfig | null,
+  playerId: PlayerId | 0
+): string {
+  return player?.name ?? (playerId === 0 ? "Neutral" : `Player ${playerId}`);
+}
+
+function readPlayerConfig(
+  players: readonly PlayerConfig[],
+  playerId: PlayerId | 0
+): PlayerConfig | null {
+  return players.find((player) => player.id === playerId) ?? null;
 }
 
 function readCameraFocusContextKey(
@@ -4056,6 +4154,9 @@ function createPlanetGlowMaterial(
       uPlanetSeed: { value: 113 },
       uTime: { value: 0 },
       uRenderMode: { value: renderQualityToShaderValue(renderMode) },
+      uGlowNoiseScale: { value: 1 },
+      uGlowNoiseStrength: { value: 1 },
+      uGlowOpacityFalloff: { value: 0 },
     },
     vertexShader: PLANET_BILLBOARD_VERTEX_SHADER,
     fragmentShader: PLANET_GLOW_FRAGMENT_SHADER,

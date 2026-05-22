@@ -8,8 +8,10 @@ import {
 } from "@drop-ship/protocol";
 import { createUnitSymbolImageUrl } from "../render/canvasTextures";
 import type {
+  PlanetViewModel,
   RenderQualityMode,
   RuntimeConnectionStatus,
+  UnitLoadoutSlotViewModel,
   UnitViewModel,
 } from "../types";
 import type { UiStore } from "./store";
@@ -59,11 +61,22 @@ export type TwoPlayerShareSnapshot = Readonly<{
   message: string;
 }>;
 
+export type SelectedPlanetStatsSnapshot = Readonly<{
+  planet: PlanetViewModel;
+  imageUrl: string;
+  controlLabel: string;
+  controlColor: string;
+  captureLabel: string;
+  captureColor: string;
+  captureProgress: number | null;
+}>;
+
 export type GameOverlaySnapshot = Readonly<{
   activeCameraPreset: CameraPreset | null;
   tacticalOverlayEnabled: boolean;
   renderMode: RenderQualityMode;
   selectedUnits: readonly UnitViewModel[];
+  selectedPlanet: SelectedPlanetStatsSnapshot | null;
   commandMenuLeaderKey: string | null;
   pendingCommand: PendingCommandMenuCommand;
   commandHistory: readonly CommandHistoryEntry[];
@@ -100,6 +113,7 @@ export function createInitialOverlaySnapshot(
     tacticalOverlayEnabled: true,
     renderMode,
     selectedUnits: [],
+    selectedPlanet: null,
     commandMenuLeaderKey: null,
     pendingCommand: null,
     commandHistory: [],
@@ -178,7 +192,7 @@ function GameOverlay({
       <TopLeftControls snapshot={snapshot} actions={actions} />
       <MatchStatus snapshot={snapshot.matchStatus} />
       <CommandHistoryMenu snapshot={snapshot} actions={actions} />
-      <CommandMenu snapshot={snapshot} actions={actions} />
+      <RightSideStack snapshot={snapshot} actions={actions} />
       <RoleBadge snapshot={snapshot} />
       <HotkeysDialog snapshot={snapshot} actions={actions} />
       <MatchEndDialog snapshot={snapshot.matchEnd} actions={actions} />
@@ -348,6 +362,308 @@ function CommandHistoryMenu({
         ))}
       </div>
     </aside>
+  );
+}
+
+function RightSideStack({
+  snapshot,
+  actions,
+}: {
+  snapshot: GameOverlaySnapshot;
+  actions: GameOverlayActions;
+}) {
+  const hasRightSideContent =
+    snapshot.selectedUnits.length > 0 || snapshot.selectedPlanet !== null;
+
+  return (
+    <div className="right-side-stack" hidden={!hasRightSideContent}>
+      <SelectedObjectStatsPanel snapshot={snapshot} />
+      <CommandMenu snapshot={snapshot} actions={actions} />
+    </div>
+  );
+}
+
+function SelectedObjectStatsPanel({
+  snapshot,
+}: {
+  snapshot: GameOverlaySnapshot;
+}) {
+  const selectedUnit = readSelectedStatsUnit(snapshot);
+
+  if (selectedUnit) {
+    return (
+      <ShipStatsPanel
+        unit={selectedUnit}
+        selectedUnits={snapshot.selectedUnits}
+      />
+    );
+  }
+
+  if (snapshot.selectedPlanet) {
+    return <PlanetStatsPanel snapshot={snapshot.selectedPlanet} />;
+  }
+
+  return null;
+}
+
+function PlanetStatsPanel({
+  snapshot,
+}: {
+  snapshot: SelectedPlanetStatsSnapshot;
+}) {
+  const { planet } = snapshot;
+
+  return (
+    <aside
+      className="selected-object-stats selected-object-stats-planet"
+      aria-label="Selected planet stats"
+      style={
+        {
+          "--object-color": planet.color,
+          "--control-color": snapshot.controlColor,
+          "--capture-color": snapshot.captureColor,
+          "--capture-progress": `${clamp01(snapshot.captureProgress ?? 0) * 100}%`,
+        } as Record<string, string>
+      }
+      onPointerDown={stopOverlayPointer}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+      <img
+        className="selected-object-planet-render"
+        src={snapshot.imageUrl}
+        alt=""
+        draggable={false}
+        aria-hidden="true"
+      />
+      <div className="selected-object-header">
+        <h2 className="selected-object-title">{planet.label}</h2>
+        <div className="selected-object-subtitle">
+          {formatPlanetClass(planet.appearance.planetClass)}{" "}
+          {planet.parentPlanetIndex === null ? "primary" : "moon"}
+        </div>
+      </div>
+      <div className="selected-planet-control">
+        <div className="selected-planet-owner">
+          <span className="selected-planet-owner-label">Control</span>
+          <span className="selected-planet-owner-value">
+            {snapshot.controlLabel}
+          </span>
+        </div>
+        <div
+          className="selected-planet-capture"
+          hidden={snapshot.captureProgress === null}
+        >
+          <div className="selected-planet-capture-copy">
+            {snapshot.captureLabel}
+          </div>
+          <div className="selected-planet-capture-track" aria-hidden="true">
+            <div className="selected-planet-capture-fill" />
+          </div>
+        </div>
+      </div>
+      <dl className="selected-object-stat-list">
+        <SelectedObjectStat label="Size" value={formatScalar(planet.radius * 2)} />
+        <SelectedObjectStat label="Radius" value={formatScalar(planet.radius)} />
+        <SelectedObjectStat label="Mass" value={formatScalar(planet.mass)} />
+        <SelectedObjectStat
+          label="Atmo"
+          value={planet.hasAtmosphere ? "Present" : "None"}
+        />
+      </dl>
+    </aside>
+  );
+}
+
+function ShipStatsPanel({
+  unit,
+  selectedUnits,
+}: {
+  unit: UnitViewModel;
+  selectedUnits: readonly UnitViewModel[];
+}) {
+  const totalHealth = selectedUnits.reduce(
+    (sum, selectedUnit) => sum + selectedUnit.health.current,
+    0
+  );
+  const totalMaxHealth = selectedUnits.reduce(
+    (sum, selectedUnit) => sum + selectedUnit.health.max,
+    0
+  );
+
+  return (
+    <aside
+      className="selected-object-stats selected-object-stats-ship"
+      aria-label="Selected ship stats"
+      style={{ "--object-color": unit.color } as Record<string, string>}
+      onPointerDown={stopOverlayPointer}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    >
+      <div className="selected-object-ship-heading">
+        <img
+          className="selected-object-ship-symbol"
+          src={createUnitSymbolImageUrl(unit.color, unit.owner, unit.shipClassId)}
+          alt=""
+          draggable={false}
+          aria-hidden="true"
+        />
+        <div className="selected-object-header">
+          <h2 className="selected-object-title">
+            {unit.label} #{unit.handle.id}
+          </h2>
+          <div className="selected-object-subtitle">
+            {unit.ownerName} / {unit.loadout.displayName}
+          </div>
+        </div>
+      </div>
+      <ShipLoadoutGraph unit={unit} />
+      <dl className="selected-object-stat-list selected-object-stat-list-bars">
+        <SelectedObjectStat
+          label={selectedUnits.length > 1 ? "Group HP" : "Hull"}
+          value={`${formatScalar(totalHealth)} / ${formatScalar(totalMaxHealth)}`}
+          fill={readRatio(totalHealth, totalMaxHealth)}
+        />
+        <SelectedObjectStat
+          label="Mass"
+          value={formatScalar(unit.stats.dryMass)}
+          fill={readRatio(unit.stats.dryMass, 120)}
+        />
+        <SelectedObjectStat
+          label="Power"
+          value={`${formatScalar(unit.stats.powerAvailable)} spare`}
+          fill={readRatio(unit.stats.powerDraw, unit.stats.basePower)}
+          state={unit.stats.powerAvailable < 0 ? "warn" : "ok"}
+        />
+        <SelectedObjectStat
+          label="Speed"
+          value={formatScalar(unit.stats.maxSpeed)}
+          fill={readRatio(unit.stats.maxSpeed, 36)}
+        />
+        <SelectedObjectStat
+          label="Accel"
+          value={formatScalar(unit.stats.maxAcceleration)}
+          fill={readRatio(unit.stats.maxAcceleration, 64)}
+        />
+        <SelectedObjectStat
+          label="Weapons"
+          value={unit.stats.weaponCount.toString()}
+          fill={readRatio(unit.stats.weaponCount, 6)}
+        />
+        <SelectedObjectStat
+          label="Fuel"
+          value={formatScalar(unit.stats.fuelCapacity)}
+          fill={readRatio(unit.stats.fuelCapacity, 120)}
+        />
+        <SelectedObjectStat
+          label="Cargo"
+          value={formatScalar(unit.stats.cargoCapacity)}
+          fill={readRatio(unit.stats.cargoCapacity, 32)}
+        />
+      </dl>
+      <div
+        className="selected-object-selection-count"
+        hidden={selectedUnits.length <= 1}
+      >
+        Selected {selectedUnits.length} ships / focused #{unit.handle.id}
+      </div>
+    </aside>
+  );
+}
+
+function ShipLoadoutGraph({ unit }: { unit: UnitViewModel }) {
+  const midpoint = Math.ceil(unit.loadout.slots.length / 2);
+  const leftSlots = unit.loadout.slots.slice(0, midpoint);
+  const rightSlots = unit.loadout.slots.slice(midpoint);
+
+  return (
+    <div className="selected-object-loadout-graph" aria-label="Ship loadout">
+      <div className="selected-object-loadout-column" data-side="left">
+        {leftSlots.map((slot) => (
+          <LoadoutSlotNode key={slot.slot.id} slot={slot} side="left" />
+        ))}
+      </div>
+      <div className="selected-object-hull-node">
+        <span className="selected-object-hull-label">Hull</span>
+        <span className="selected-object-hull-value">
+          {formatScalar(unit.stats.maxHealth)} HP
+        </span>
+        <span className="selected-object-hull-value">
+          {formatScalar(unit.stats.basePower)} PWR
+        </span>
+      </div>
+      <div className="selected-object-loadout-column" data-side="right">
+        {rightSlots.map((slot) => (
+          <LoadoutSlotNode key={slot.slot.id} slot={slot} side="right" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoadoutSlotNode({
+  slot,
+  side,
+}: {
+  slot: UnitLoadoutSlotViewModel;
+  side: "left" | "right";
+}) {
+  return (
+    <div
+      className="selected-object-loadout-node"
+      data-side={side}
+      data-slot-type={slot.slot.type}
+      data-empty={slot.component ? "false" : "true"}
+      style={
+        {
+          "--slot-color": readLoadoutSlotColor(slot.slot.type),
+        } as Record<string, string>
+      }
+    >
+      <span className="selected-object-loadout-slot">
+        {formatLoadoutSlotLabel(slot)}
+      </span>
+      <span className="selected-object-loadout-component">
+        {slot.component?.displayName ?? "Empty"}
+      </span>
+      <span className="selected-object-loadout-metric">
+        {formatComponentMetric(slot)}
+      </span>
+    </div>
+  );
+}
+
+function SelectedObjectStat({
+  label,
+  value,
+  fill,
+  state = "neutral",
+}: {
+  label: string;
+  value: string;
+  fill?: number;
+  state?: "neutral" | "ok" | "warn";
+}) {
+  return (
+    <div
+      className="selected-object-stat"
+      data-state={state}
+      style={
+        fill === undefined
+          ? undefined
+          : ({ "--stat-fill": `${clamp01(fill) * 100}%` } as Record<
+              string,
+              string
+            >)
+      }
+    >
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }
 
@@ -696,6 +1012,128 @@ function MatchEndStatPair({
   );
 }
 
+function readSelectedStatsUnit(
+  snapshot: GameOverlaySnapshot
+): UnitViewModel | null {
+  if (snapshot.selectedUnits.length === 0) {
+    return null;
+  }
+
+  return (
+    snapshot.selectedUnits.find(
+      (unit) => unit.key === snapshot.commandMenuLeaderKey
+    ) ??
+    snapshot.selectedUnits
+      .slice()
+      .sort((first, second) => first.handle.id - second.handle.id)[0] ??
+    null
+  );
+}
+
+function formatPlanetClass(
+  planetClass: PlanetViewModel["appearance"]["planetClass"]
+): string {
+  switch (planetClass) {
+    case "gas-giant":
+      return "Gas giant";
+    case "terran":
+      return "Terran";
+    case "ice":
+      return "Ice";
+    default:
+      return planetClass;
+  }
+}
+
+function formatLoadoutSlotLabel(slot: UnitLoadoutSlotViewModel): string {
+  const slotNumber = slot.slot.id.match(/-(\d+)$/)?.[1];
+  const label = formatSlotType(slot.slot.type);
+
+  return slotNumber ? `${label} ${slotNumber}` : label;
+}
+
+function formatSlotType(type: UnitLoadoutSlotViewModel["slot"]["type"]): string {
+  switch (type) {
+    case "engine":
+      return "Engine";
+    case "fuelTank":
+      return "Fuel";
+    case "cargo":
+      return "Cargo";
+    case "weapon":
+      return "Weapon";
+    default:
+      return type;
+  }
+}
+
+function formatComponentMetric(slot: UnitLoadoutSlotViewModel): string {
+  const { component } = slot;
+
+  if (!component) {
+    return `${slot.slot.size} slot`;
+  }
+
+  if (component.type === "engine") {
+    return `${formatScalar(component.thrust)} thrust`;
+  }
+
+  if (component.type === "fuelTank") {
+    return `${formatScalar(component.fuelCapacity)} fuel`;
+  }
+
+  if (component.type === "cargo") {
+    return `${formatScalar(component.cargoCapacity)} cargo`;
+  }
+
+  return `${formatScalar(component.damage)} dmg / ${component.cooldownTicks}t`;
+}
+
+function readLoadoutSlotColor(
+  type: UnitLoadoutSlotViewModel["slot"]["type"]
+): string {
+  switch (type) {
+    case "engine":
+      return "#74d9ff";
+    case "fuelTank":
+      return "#86f0a8";
+    case "cargo":
+      return "#ffd166";
+    case "weapon":
+      return "#ff4fd8";
+    default:
+      return "#d6dae8";
+  }
+}
+
+function readRatio(value: number, max: number): number {
+  return max > 0 ? clamp01(value / max) : 0;
+}
+
+function clamp01(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function formatScalar(value: number): string {
+  if (Math.abs(value) >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(1)}B`;
+  }
+
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+
+  if (Math.abs(value) >= 1000) {
+    return `${(value / 1000).toFixed(1)}k`;
+  }
+
+  if (Number.isInteger(value)) {
+    return value.toString();
+  }
+
+  return value.toFixed(value >= 10 ? 1 : 2);
+}
+
 type CommandUnitGroupId = "fighter" | "dropShip" | "battleship";
 
 type CommandUnitGroupDefinition = Readonly<{
@@ -772,12 +1210,12 @@ function formatMatchTime(ticks: number): string {
 function formatRoleLabel(status: RuntimeConnectionStatus): string {
   switch (status.role) {
     case "player2":
-      return "P2";
+      return "Player 2";
     case "spectator":
       return "Spectator";
     case "player1":
     default:
-      return "P1";
+      return "Player 1";
   }
 }
 

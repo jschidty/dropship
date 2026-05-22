@@ -274,6 +274,9 @@ uniform float uPlanetClass;
 uniform float uPlanetSeed;
 uniform float uTime;
 uniform float uRenderMode;
+uniform float uGlowNoiseScale;
+uniform float uGlowNoiseStrength;
+uniform float uGlowOpacityFalloff;
 
 varying vec2 vUv;
 
@@ -429,16 +432,20 @@ void main() {
   vec3 noisePoint = spunNormal * (1.0 + radialFalloff * 0.18 - dustEmission);
   float broadNoise = sampleGlowNoise(
     noisePoint,
-    1.3,
+    1.3 * uGlowNoiseScale,
     vec3(uPlanetSeed * 0.013, uPlanetSeed * 0.017, uPlanetSeed * 0.021)
   );
   float fineNoise = sampleGlowNoise(
     noisePoint,
-    3.75,
+    3.75 * uGlowNoiseScale,
     vec3(uPlanetSeed * 0.007, uPlanetSeed * 0.011, uPlanetSeed * 0.019)
   );
+  float glowNoiseContrast = mix(1.0, uGlowNoiseStrength, gasMask);
+  broadNoise = clamp((broadNoise - 0.5) * glowNoiseContrast + 0.5, 0.0, 1.0);
+  fineNoise = clamp((fineNoise - 0.5) * glowNoiseContrast + 0.5, 0.0, 1.0);
   float farMedia = smoothstep(0.26, 0.9, radialFalloff);
   float mediaNoise = mix(broadNoise, fineNoise, mix(0.24, 0.08, farMedia));
+  mediaNoise = clamp((mediaNoise - 0.5) * glowNoiseContrast + 0.5, 0.0, 1.0);
   float nearDensity = mix(0.82, 1.22, smoothstep(0.18, 0.92, mediaNoise));
   float farDensity = mix(0.68, 1.08, smoothstep(0.12, 0.92, broadNoise));
   float farBreakup = mix(
@@ -478,6 +485,33 @@ void main() {
     mediaDensity;
   alpha += terminatorDust * mix(0.009, 0.036, gasMask) * (0.25 + litDust) *
     mediaDensity;
+  float thumbnailBreakup = clamp((uGlowNoiseStrength - 1.0) * 0.55, 0.0, 1.0);
+  float cloudBreakup = mix(
+    1.0,
+    mix(0.42, 1.52, smoothstep(0.18, 0.9, mediaNoise)),
+    gasMask * thumbnailBreakup
+  );
+  float previewFalloff = clamp(uGlowOpacityFalloff, 0.0, 1.0) * gasMask;
+  float edgeDistance = smoothstep(0.08, 1.0, radialFalloff);
+  float edgeFalloff = pow(
+    clamp(1.0 - edgeDistance, 0.0, 1.0),
+    1.0 + previewFalloff * 1.95
+  );
+  float edgeNoiseBreakup = mix(
+    1.0,
+    mix(0.28, 1.0, smoothstep(0.16, 0.86, mediaNoise)),
+    previewFalloff * smoothstep(0.18, 0.95, radialFalloff)
+  );
+  float rimBreakupMask = smoothstep(bodyEdge - 0.015, bodyEdge + 0.095, radius);
+  float rimNoiseBreakup = mix(
+    1.0,
+    mix(0.28, 1.0, smoothstep(0.08, 0.88, mediaNoise)),
+    previewFalloff * rimBreakupMask
+  );
+  alpha *= cloudBreakup;
+  alpha *= mix(1.0, edgeFalloff, previewFalloff) *
+    edgeNoiseBreakup *
+    rimNoiseBreakup;
   alpha *= outerFade;
   alpha *= 0.9 + pulse * 0.1;
   alpha *= mix(1.0, 0.28 + projectedGlowLight * 0.98 + warmLimb * 0.25, gasMask);

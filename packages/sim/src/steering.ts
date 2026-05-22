@@ -386,11 +386,12 @@ function addBoidForces(
     cohesionZ / neighborCount - unit.position.z,
     stats.cruiseSpeed * boids.cohesionWeight
   );
-  addNormalizedScaled(
+  addScaled(
     desiredVelocity,
-    separationX,
-    separationY,
-    separationZ,
+    limitLength(
+      { x: separationX, y: separationY, z: separationZ },
+      1
+    ),
     stats.maxSpeed * boids.separationWeight
   );
 }

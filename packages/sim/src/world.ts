@@ -34,6 +34,7 @@ import {
   deterministicSin,
   quantizeSimFloat,
 } from "./deterministicMath";
+import { distanceSquared } from "./movement";
 
 export type SimUnitMoveOrder = {
   type: "moveTo";
@@ -729,22 +730,18 @@ function assignInitialCaptureDemoOrders(world: SimWorld): void {
   }
 
   for (const player of world.config.players) {
-    const dropShip = getUnitsInStableOrder(world).find(
-      (unit) =>
-        unit.owner === player.id &&
-        unit.shipClassId === SHIP_CLASS_IDS.dropShip
-    );
-
-    if (!dropShip) {
-      continue;
-    }
-
     for (const unit of getUnitsInStableOrder(world)) {
-      if (unit.owner !== player.id || unit.handle.id === dropShip.handle.id) {
+      if (
+        unit.owner !== player.id ||
+        unit.shipClassId !== SHIP_CLASS_IDS.fighter ||
+        unit.moveOrder
+      ) {
         continue;
       }
 
-      if (unit.shipClassId === SHIP_CLASS_IDS.fighter && !unit.moveOrder) {
+      const dropShip = findNearestFriendlyDropShip(world, unit);
+
+      if (dropShip) {
         unit.moveOrder = {
           type: "escort",
           target: dropShip.handle,
@@ -752,6 +749,35 @@ function assignInitialCaptureDemoOrders(world: SimWorld): void {
       }
     }
   }
+}
+
+function findNearestFriendlyDropShip(
+  world: SimWorld,
+  unit: SimUnit
+): SimUnit | null {
+  let nearest: SimUnit | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const candidate of getUnitsInStableOrder(world)) {
+    if (
+      candidate.owner !== unit.owner ||
+      candidate.shipClassId !== SHIP_CLASS_IDS.dropShip ||
+      candidate.health.current <= 0
+    ) {
+      continue;
+    }
+
+    const candidateDistance = distanceSquared(unit.position, candidate.position);
+
+    if (candidateDistance >= nearestDistance) {
+      continue;
+    }
+
+    nearest = candidate;
+    nearestDistance = candidateDistance;
+  }
+
+  return nearest;
 }
 
 function allocateRuntimeEntityId(world: SimWorld): RuntimeEntityId {

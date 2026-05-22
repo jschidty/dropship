@@ -1,17 +1,25 @@
 import * as THREE from "three";
-import type { ShipStats } from "@drop-ship/content";
+import type {
+  ShipStats,
+  UnitTemplate,
+} from "@drop-ship/content";
 import {
   handleKey,
   type EntityHandle,
   type PlanetAppearanceConfig,
   type PlayerId,
 } from "@drop-ship/protocol";
-import { hashWorld, type SimWorld } from "@drop-ship/sim";
-import type { PlanetViewModel, UnitViewModel } from "../types";
+import { hashWorld, readUnitShipStats, type SimWorld } from "@drop-ship/sim";
+import type {
+  PlanetViewModel,
+  UnitLoadoutViewModel,
+  UnitViewModel,
+} from "../types";
 
 type MutableUnitViewModel = {
   handle: EntityHandle;
   key: string;
+  templateId: number;
   label: string;
   owner: PlayerId;
   ownerName: string;
@@ -30,6 +38,7 @@ type MutableUnitViewModel = {
     max: number;
   };
   stats: ShipStats;
+  loadout: UnitLoadoutViewModel;
 };
 
 type MutablePlanetViewModel = {
@@ -59,6 +68,8 @@ type ViewModelCache = {
   planetTick: number;
   units: MutableUnitViewModel[];
   planets: MutablePlanetViewModel[];
+  shipStats: Map<number | string, ShipStats>;
+  loadouts: Map<string, UnitLoadoutViewModel>;
 };
 
 type HashCache = {
@@ -74,6 +85,8 @@ export function createViewModelCache(): ViewModelCache {
     planetTick: -1,
     units: [],
     planets: [],
+    shipStats: new Map(),
+    loadouts: new Map(),
   };
 }
 
@@ -85,10 +98,12 @@ export function readCachedUnitViewModels(
     cache.world = world;
     cache.unitTick = -1;
     cache.planetTick = -1;
+    cache.shipStats.clear();
+    cache.loadouts.clear();
   }
 
   if (cache.unitTick !== world.tick || cache.units.length !== world.units.length) {
-    syncUnitViewModels(cache.units, world);
+    syncUnitViewModels(cache.units, world, cache);
     cache.unitTick = world.tick;
   }
 
@@ -97,7 +112,8 @@ export function readCachedUnitViewModels(
 
 function syncUnitViewModels(
   target: MutableUnitViewModel[],
-  world: SimWorld
+  world: SimWorld,
+  cache: ViewModelCache
 ): void {
   target.length = world.units.length;
 
@@ -105,6 +121,13 @@ function syncUnitViewModels(
     const unit = world.units[index];
     const player = world.config.players.find((entry) => entry.id === unit.owner);
     const template = world.content.getUnitTemplate(unit.templateId);
+    const stats = readUnitShipStats(world, cache.shipStats, unit);
+    const loadout = readUnitLoadoutViewModel(
+      world,
+      template,
+      unit.componentsBySlot,
+      cache.loadouts
+    );
     const key = handleKey(unit.handle);
     let view = target[index];
 
@@ -112,6 +135,7 @@ function syncUnitViewModels(
       view = {
         handle: unit.handle,
         key,
+        templateId: unit.templateId,
         label: template.displayName,
         owner: unit.owner,
         ownerName: player?.name ?? `Player ${unit.owner}`,
@@ -129,12 +153,14 @@ function syncUnitViewModels(
           current: unit.health.current,
           max: unit.health.max,
         },
-        stats: template.stats,
+        stats,
+        loadout,
       };
       target[index] = view;
     }
 
     view.handle = unit.handle;
+    view.templateId = unit.templateId;
     view.label = template.displayName;
     view.owner = unit.owner;
     view.ownerName = player?.name ?? `Player ${unit.owner}`;
@@ -157,7 +183,8 @@ function syncUnitViewModels(
     view.orbit.orbitTicks = unit.orbit.orbitTicks;
     view.health.current = unit.health.current;
     view.health.max = unit.health.max;
-    view.stats = template.stats;
+    view.stats = stats;
+    view.loadout = loadout;
   }
 }
 
@@ -169,6 +196,8 @@ export function readCachedPlanetViewModels(
     cache.world = world;
     cache.unitTick = -1;
     cache.planetTick = -1;
+    cache.shipStats.clear();
+    cache.loadouts.clear();
   }
 
   if (
@@ -255,13 +284,18 @@ export function readCachedHash(world: SimWorld, cache: HashCache): string {
 }
 
 export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
+  const shipStats = new Map<number | string, ShipStats>();
+  const loadouts = new Map<string, UnitLoadoutViewModel>();
+
   return world.units.map((unit) => {
     const player = world.config.players.find((entry) => entry.id === unit.owner);
     const template = world.content.getUnitTemplate(unit.templateId);
+    const stats = readUnitShipStats(world, shipStats, unit);
 
     return {
       handle: unit.handle,
       key: handleKey(unit.handle),
+      templateId: unit.templateId,
       label: template.displayName,
       owner: unit.owner,
       ownerName: player?.name ?? `Player ${unit.owner}`,
@@ -279,9 +313,63 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
         current: unit.health.current,
         max: unit.health.max,
       },
-      stats: template.stats,
+      stats,
+      loadout: readUnitLoadoutViewModel(
+        world,
+        template,
+        unit.componentsBySlot,
+        loadouts
+      ),
     };
   });
+}
+
+function readUnitLoadoutViewModel(
+  world: SimWorld,
+  template: UnitTemplate,
+  componentsBySlotOverride: Readonly<Record<string, number>> | null,
+  cache: Map<string, UnitLoadoutViewModel>
+): UnitLoadoutViewModel {
+  const componentsBySlot =
+    componentsBySlotOverride ?? template.defaultLoadout.componentsBySlot;
+  const cacheKey = createLoadoutCacheKey(template.id, componentsBySlotOverride);
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  const loadout: UnitLoadoutViewModel = {
+    displayName: componentsBySlotOverride
+      ? "Custom Loadout"
+      : template.defaultLoadout.displayName,
+    slots: template.slots.map((slot) => {
+      const componentId = componentsBySlot[slot.id];
+
+      return {
+        slot,
+        component:
+          componentId === undefined ? null : world.content.getShipComponent(componentId),
+      };
+    }),
+  };
+
+  cache.set(cacheKey, loadout);
+  return loadout;
+}
+
+function createLoadoutCacheKey(
+  templateId: number,
+  componentsBySlot: Readonly<Record<string, number>> | null
+): string {
+  if (!componentsBySlot) {
+    return templateId.toString();
+  }
+
+  return `${templateId}:${Object.keys(componentsBySlot)
+    .sort()
+    .map((slotId) => `${slotId}=${componentsBySlot[slotId]}`)
+    .join(",")}`;
 }
 
 export function readPlanetViewModels(world: SimWorld): readonly PlanetViewModel[] {

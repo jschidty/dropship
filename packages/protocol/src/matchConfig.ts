@@ -242,16 +242,16 @@ export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
     breakGraceTicks: 30,
   },
   spawning: {
-    fighterSpawnIntervalTicks: 165,
-    fighterSpawnCapPerDropShip: 4,
+    fighterSpawnIntervalTicks: 75,
+    fighterSpawnCapPerDropShip: 7,
   },
   matchEnd: {
-    durationTicks: 5 * 60 * PHASE_ONE_SIM_HZ,
+    durationTicks: 6 * 60 * PHASE_ONE_SIM_HZ,
   },
   npc: {
     thinkIntervalTicks: 30,
-    aggroRangeWorldUnits: 130,
-    dropShipThreatRangeWorldUnits: 180,
+    aggroRangeWorldUnits: 220,
+    dropShipThreatRangeWorldUnits: 300,
   },
 };
 
@@ -276,7 +276,7 @@ export const DEFAULT_SIM_TUNING: SimTuningConfig = {
   movement: {
     arrivalDistanceWorldUnits: 1.8,
     slowRadiusWorldUnits: 24,
-    moveOrderWeight: 1.35,
+    moveOrderWeight: 2.3,
     defaultOrbitWeight: 0.95,
     approachHoldSpeedRatio: 0.12,
     approachMinSpeedRatio: 0.35,
@@ -402,10 +402,10 @@ const PLANET_NAMES = [
   "Icarus",
 ];
 const MATCH_TAU = Math.PI * 2;
-const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.25;
-const MIN_GENERATED_PLANETS = 4;
-const MAX_GENERATED_PLANETS = 10;
-const MIN_PARENT_PLANETS = 4;
+const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.5;
+const MIN_GENERATED_PLANETS = 8;
+const MAX_GENERATED_PLANETS = 11;
+const MIN_PARENT_PLANETS = 7;
 const MAX_MOONS_PER_PLANET = 2;
 const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
   { id: 1, name: "Player 1", color: "#74d9ff" },
@@ -643,7 +643,7 @@ function createCaptureDemoUnits(
         position: {
           x: anchor.x + offset.x * facing,
           y: anchor.y + offset.y,
-          z: anchor.z + offset.z,
+          z: anchor.z + offset.z * facing,
         },
       });
     }
@@ -651,41 +651,60 @@ function createCaptureDemoUnits(
 
   const addBattleships = (
     owner: PlayerId,
-    anchor: Vec3Data,
+    anchors: readonly Vec3Data[],
     facing: 1 | -1,
   ): void => {
-    offsets.push(
-      {
+    const battleshipOffsets: readonly (Vec3Data & { anchorIndex: number })[] = [
+      { anchorIndex: 0, x: -32, y: 0, z: 24 },
+      { anchorIndex: 0, x: 34, y: 2, z: 30 },
+      { anchorIndex: 1, x: -38, y: 4, z: -24 },
+      { anchorIndex: 2, x: 30, y: -2, z: 26 },
+      { anchorIndex: 3, x: -28, y: 3, z: -30 },
+    ];
+
+    for (const offset of battleshipOffsets) {
+      const anchor = anchors[offset.anchorIndex] ?? anchors[0];
+
+      if (!anchor) {
+        continue;
+      }
+
+      offsets.push({
         owner,
         templateId: TEMPLATE_IDS.battleship,
         position: {
-          x: anchor.x - 32 * facing,
-          y: anchor.y,
-          z: anchor.z + 24,
+          x: anchor.x + offset.x * facing,
+          y: anchor.y + offset.y,
+          z: anchor.z + offset.z * facing,
         },
-      },
-      {
-        owner,
-        templateId: TEMPLATE_IDS.battleship,
-        position: {
-          x: anchor.x + 34 * facing,
-          y: anchor.y + 2,
-          z: anchor.z + 30,
-        },
-      },
-    );
+      });
+    }
   };
 
-  const playerOneAnchor = { x: -220, y: 8, z: -120 };
-  const playerTwoAnchor = { x: 220, y: 8, z: 120 };
+  const playerOneAnchors: readonly Vec3Data[] = [
+    { x: -220, y: 8, z: -120 },
+    { x: -292, y: 12, z: -48 },
+    { x: -360, y: 10, z: -190 },
+    { x: -430, y: 14, z: 110 },
+  ];
+  const playerTwoAnchors: readonly Vec3Data[] = [
+    { x: 220, y: 8, z: 120 },
+    { x: 292, y: 12, z: 48 },
+    { x: 360, y: 10, z: 190 },
+    { x: 430, y: 14, z: -110 },
+  ];
 
-  addSquadron(1, playerOneAnchor, 1);
-  addSquadron(1, { x: -292, y: 12, z: -48 }, 1);
-  addBattleships(1, playerOneAnchor, 1);
+  for (const anchor of playerOneAnchors) {
+    addSquadron(1, anchor, 1);
+  }
 
-  addSquadron(2, playerTwoAnchor, -1);
-  addSquadron(2, { x: 292, y: 12, z: 48 }, -1);
-  addBattleships(2, playerTwoAnchor, -1);
+  addBattleships(1, playerOneAnchors, 1);
+
+  for (const anchor of playerTwoAnchors) {
+    addSquadron(2, anchor, -1);
+  }
+
+  addBattleships(2, playerTwoAnchors, -1);
 
   return offsets.map((unit) => ({
     ...unit,

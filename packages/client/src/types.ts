@@ -1,5 +1,9 @@
 import type * as THREE from "three";
-import type { ShipStats } from "@drop-ship/content";
+import type {
+  ShipComponentTemplate,
+  ShipStats,
+  ShipSlot,
+} from "@drop-ship/content";
 import type {
   CompactSimSnapshot,
   EntityHandle,
@@ -12,9 +16,20 @@ import type { SimWorld } from "@drop-ship/sim";
 import type { SimEvent } from "@drop-ship/sim";
 import type { UnitOrderIntent } from "@drop-ship/protocol";
 
+export type UnitLoadoutSlotViewModel = Readonly<{
+  slot: ShipSlot;
+  component: ShipComponentTemplate | null;
+}>;
+
+export type UnitLoadoutViewModel = Readonly<{
+  displayName: string;
+  slots: readonly UnitLoadoutSlotViewModel[];
+}>;
+
 export type UnitViewModel = Readonly<{
   handle: EntityHandle;
   key: string;
+  templateId: number;
   label: string;
   owner: PlayerId;
   ownerName: string;
@@ -33,6 +48,7 @@ export type UnitViewModel = Readonly<{
     max: number;
   }>;
   stats: ShipStats;
+  loadout: UnitLoadoutViewModel;
 }>;
 
 export type PlanetViewModel = Readonly<{

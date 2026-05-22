@@ -7,6 +7,7 @@ import {
   handleKey,
   type CaptureRulesConfig,
   type MatchConfig,
+  type OrbitLaneSpec,
   type PlanetClass,
   type PlayerId,
   type PlayerConfig,
@@ -145,6 +146,7 @@ type IssuedUnitCommand = Readonly<{
   label: string;
   units: readonly UnitViewModel[];
   attackTargetKey?: string;
+  orbitLaneSelection?: SelectedOrbitLane;
 }>;
 
 type CompleteIssuedCommandOptions = Readonly<{
@@ -158,6 +160,32 @@ type CaptureProgressRing = {
   readonly progressPositions: Float32Array;
   lastSeenFrame: number;
 };
+
+type OrbitLaneRing = {
+  readonly root: THREE.Group;
+  readonly line: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  lastSeenFrame: number;
+};
+
+type OrbitLaneVisual = Readonly<{
+  key: string;
+  planet: PlanetViewModel;
+  lane: OrbitLaneSpec;
+  color: number;
+  opacity: number;
+}>;
+
+type OrbitLaneDragState = {
+  planetKey: string;
+  anchorPoint: THREE.Vector3;
+  anchorNormal: THREE.Vector3;
+  lane: OrbitLaneSpec;
+};
+
+type SelectedOrbitLane = Readonly<{
+  planetKey: string;
+  lane: OrbitLaneSpec;
+}>;
 
 type SelectionMode = "add" | "remove" | "replace";
 
@@ -285,6 +313,11 @@ type RenderScratch = {
   cameraForward: THREE.Vector3;
   screenPosition: THREE.Vector2;
   sunScreenPosition: THREE.Vector4;
+  orbitDragPoint: THREE.Vector3;
+  orbitDragVector: THREE.Vector3;
+  orbitDragTangent: THREE.Vector3;
+  orbitDragAxis: THREE.Vector3;
+  orbitHeading: THREE.Vector3;
 };
 
 type GravityOverlay = {
@@ -338,6 +371,10 @@ const TACTICAL_GRID_MASK_RADIUS = 1;
 const TACTICAL_OVERLAY_COLOR_HEX = 0xfc3d21;
 const CAPTURE_PROGRESS_SEGMENTS = 96;
 const CAPTURE_PROGRESS_RADIUS_MULTIPLIER = 1.42;
+const ORBIT_LANE_SEGMENTS = 160;
+const ORBIT_LANE_MIN_RADIUS_MULTIPLIER = 1.18;
+const ORBIT_LANE_MAX_RADIUS_MULTIPLIER = 8;
+const ORBIT_LANE_DRAG_MIN_WORLD_UNITS = 1.5;
 const PLANET_BODY_BILLBOARD_SCALE = 2.12;
 const PLANET_RING_INNER_RADIUS = 1.18;
 const PLANET_RING_OUTER_RADIUS = 2.05;
@@ -450,6 +487,7 @@ export function mountMinimalGame(
   const selectedPlanetMarker = createPlanetSelectionMarker(container, "selected");
   const hoveredPlanetMarker = createPlanetSelectionMarker(container, "hover");
   const captureProgressRings = new Map<string, CaptureProgressRing>();
+  const orbitLaneRings = new Map<string, OrbitLaneRing>();
   const selectedUnitKeys = new Set<string>();
   const previousCommandSelectionKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
@@ -458,6 +496,7 @@ export function mountMinimalGame(
   let hoveredSelectionTarget: SceneSelectionTarget | null = null;
   let cycledAttackTargetKey: string | null = null;
   let lockedAttackTargetKey: string | null = null;
+  let selectedOrbitLane: SelectedOrbitLane | null = null;
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = true;
   let singlePlayerPaused =
@@ -592,6 +631,7 @@ export function mountMinimalGame(
   let renderFrameIndex = 0;
   let activeSelectionMode: SelectionMode = "replace";
   let selectionDragStarted = false;
+  let orbitLaneDragState: OrbitLaneDragState | null = null;
   let previousCameraFocusContextKey: string | null = null;
   let lastPointerClientX: number | null = null;
   let lastPointerClientY: number | null = null;
@@ -822,6 +862,8 @@ export function mountMinimalGame(
     previousCommandLeaderKey = null;
     clearHoveredSelectionTarget();
     pendingCommand = null;
+    orbitLaneDragState = null;
+    selectedOrbitLane = null;
     commandHistory.length = 0;
     nextCommandHistoryId = 1;
     clearAttackTargeting();
@@ -947,6 +989,7 @@ export function mountMinimalGame(
     clearHoveredSelectionTarget();
     cycledAttackTargetKey = command.attackTargetKey ?? null;
     lockedAttackTargetKey = command.attackTargetKey ?? null;
+    selectedOrbitLane = command.orbitLaneSelection ?? selectedOrbitLane;
     publishOverlaySnapshot();
   }
 
@@ -1019,6 +1062,44 @@ export function mountMinimalGame(
     cameraZoomTween.from = cameraControls.viewHeights[cameraControls.mode];
     cameraZoomTween.to = targetHeight;
     cameraZoomTween.startAt = now;
+  }
+
+  function startZoomToSelection(now: number): boolean {
+    const units = runtime.readUnits();
+    const planets = runtime.readPlanets();
+    const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
+    const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+    let targetHeight: number;
+
+    if (selectedPlanet) {
+      zoomToFitFocus.copy(selectedPlanet.position);
+      targetHeight = clamp(
+        selectedPlanet.radius * 7.2,
+        CAMERA_MODES[cameraControls.mode].minViewHeight,
+        CAMERA_MODES[cameraControls.mode].maxViewHeight
+      );
+    } else if (selectedUnits.length > 0) {
+      writeUnitCentroidFocus(zoomToFitFocus, selectedUnits);
+      targetHeight = readZoomToFitViewHeight(
+        selectedUnits,
+        [],
+        zoomToFitFocus,
+        viewport,
+        cameraControls.mode
+      );
+    } else {
+      return false;
+    }
+
+    zoomToFitFocusEnabled = true;
+    zoomToFitContextId += 1;
+    cameraControls.panOffset.set(0, 0, 0);
+    cameraZoomTween.active = true;
+    cameraZoomTween.mode = cameraControls.mode;
+    cameraZoomTween.from = cameraControls.viewHeights[cameraControls.mode];
+    cameraZoomTween.to = targetHeight;
+    cameraZoomTween.startAt = now;
+    return true;
   }
 
   function clearZoomToFitFocus(): void {
@@ -1108,6 +1189,8 @@ export function mountMinimalGame(
 
     if (key === "escape") {
       pendingCommand = null;
+      orbitLaneDragState = null;
+      selectedOrbitLane = null;
       clearHoveredSelectionTarget();
       clearAttackTargeting();
       publishOverlaySnapshot();
@@ -1211,6 +1294,14 @@ export function mountMinimalGame(
       return;
     }
 
+    if (key === "z") {
+      if (startZoomToSelection(performance.now())) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+
     if (key === "t") {
       tacticalOverlayEnabled = !tacticalOverlayEnabled;
       publishOverlaySnapshot();
@@ -1250,8 +1341,20 @@ export function mountMinimalGame(
       clearAttackTargeting();
     }
 
+    orbitLaneDragState = beginOrbitLaneDrag(
+      event,
+      renderer.domElement,
+      camera,
+      runtime,
+      selectedUnitKeys,
+      planetProxies,
+      scratch
+    );
+
     cameraControls.isDragging = true;
-    cameraControls.dragMode = readPointerDragMode(event, canControlUnits());
+    cameraControls.dragMode = orbitLaneDragState
+      ? "orbitLane"
+      : readPointerDragMode(event, canControlUnits());
     cameraControls.pointerId = event.pointerId;
     cameraControls.startPointerX = event.clientX;
     cameraControls.startPointerY = event.clientY;
@@ -1261,6 +1364,12 @@ export function mountMinimalGame(
     activeSelectionMode = readSelectionMode(event);
     selectionDragStarted = false;
     clearZoomToFitFocus();
+    if (orbitLaneDragState) {
+      selectedPlanetKey = orbitLaneDragState.planetKey;
+      pendingCommand = null;
+      clearAttackTargeting();
+      publishOverlaySnapshot();
+    }
     if (cameraControls.dragMode === "pan") {
       previousCameraFocusContextKey =
         readCameraFocusContextKey(selectedUnitKeys);
@@ -1318,6 +1427,19 @@ export function mountMinimalGame(
       return;
     }
 
+    if (cameraControls.dragMode === "orbitLane") {
+      orbitLaneDragState = updateOrbitLaneDrag(
+        orbitLaneDragState,
+        event,
+        renderer.domElement,
+        camera,
+        runtime,
+        selectedUnitKeys,
+        scratch
+      );
+      return;
+    }
+
     if (
       cameraControls.dragMode === "select" &&
       cameraControls.dragDistancePx > 5
@@ -1352,9 +1474,11 @@ export function mountMinimalGame(
 
     const wasClick = cameraControls.dragDistancePx <= 5;
     const dragMode = cameraControls.dragMode;
+    const completedOrbitLaneDrag = orbitLaneDragState;
     cameraControls.isDragging = false;
     cameraControls.dragMode = null;
     cameraControls.pointerId = null;
+    orbitLaneDragState = null;
     hideSelectionBox(selectionBox);
 
     if (renderer.domElement.hasPointerCapture(event.pointerId)) {
@@ -1367,6 +1491,47 @@ export function mountMinimalGame(
 
     lastPointerClientX = event.clientX;
     lastPointerClientY = event.clientY;
+
+    if (dragMode === "orbitLane") {
+      if (completedOrbitLaneDrag && !wasClick) {
+        const issuedCommand = issuePlanetOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          completedOrbitLaneDrag.planetKey,
+          "orbitPlanet",
+          completedOrbitLaneDrag.lane
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand, { preserveSelection: true });
+        } else {
+          publishOverlaySnapshot();
+        }
+        return;
+      }
+
+      if (completedOrbitLaneDrag) {
+        const lane =
+          selectedOrbitLane?.planetKey === completedOrbitLaneDrag.planetKey
+            ? selectedOrbitLane.lane
+            : undefined;
+        const issuedCommand = issuePlanetOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          completedOrbitLaneDrag.planetKey,
+          "orbitPlanet",
+          lane
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand, { preserveSelection: true });
+          return;
+        }
+      }
+
+      publishOverlaySnapshot();
+      return;
+    }
 
     if (dragMode === "select" && !wasClick) {
       selectOwnedUnitsInBox(
@@ -1737,6 +1902,8 @@ export function mountMinimalGame(
     }
 
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+    selectedOrbitLane =
+      readSelectedOrbitLane(selectedUnits, planets) ?? selectedOrbitLane;
     const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
     const hoveredPlanet = getSelectedPlanet(planets, readHoveredPlanetKey());
     const focus = zoomToFitFocusEnabled
@@ -1887,6 +2054,16 @@ export function mountMinimalGame(
       renderFrameIndex,
       cameraControls.mode === "tactical" || tacticalOverlayEnabled,
       cameraControls.preset
+    );
+    updateOrbitLaneRings(
+      worldGroup,
+      orbitLaneRings,
+      selectedUnits,
+      planets,
+      selectedOrbitLane,
+      orbitLaneDragState,
+      renderFrameIndex,
+      tacticalOverlayEnabled || orbitLaneDragState !== null
     );
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
@@ -2048,6 +2225,7 @@ export function mountMinimalGame(
       disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
       disposeCaptureProgressRings(worldGroup, captureProgressRings);
+      disposeOrbitLaneRings(worldGroup, orbitLaneRings);
       disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
       planetStatsRenderCache.dispose();
@@ -2928,6 +3106,11 @@ function createRenderScratch(): RenderScratch {
     cameraForward: new THREE.Vector3(0, 0, 1),
     screenPosition: new THREE.Vector2(),
     sunScreenPosition: new THREE.Vector4(),
+    orbitDragPoint: new THREE.Vector3(),
+    orbitDragVector: new THREE.Vector3(),
+    orbitDragTangent: new THREE.Vector3(),
+    orbitDragAxis: new THREE.Vector3(),
+    orbitHeading: new THREE.Vector3(),
   };
 }
 
@@ -3190,6 +3373,33 @@ function getSelectedPlanet(
   return selectedPlanetKey
     ? planets.find((planet) => planet.key === selectedPlanetKey) ?? null
     : null;
+}
+
+function readSelectedOrbitLane(
+  selectedUnits: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[]
+): SelectedOrbitLane | null {
+  for (const unit of selectedUnits) {
+    const order = unit.moveOrder;
+
+    if (order?.type !== "orbitPlanet" || !order.lane) {
+      continue;
+    }
+
+    const planet =
+      planets.find((entry) => entry.key === handleKey(order.planet)) ?? null;
+
+    if (!planet) {
+      continue;
+    }
+
+    return {
+      planetKey: planet.key,
+      lane: order.lane,
+    };
+  }
+
+  return null;
 }
 
 function readSelectedStatsUnit(
@@ -3531,7 +3741,8 @@ function issuePlanetOrderFromSelection(
   runtime: LocalGameRuntime,
   selectedUnitKeys: ReadonlySet<string>,
   selectedPlanetKey: string | null,
-  orderType: "capturePlanet" | "guardPlanet" | "orbitPlanet"
+  orderType: "capturePlanet" | "guardPlanet" | "orbitPlanet",
+  lane?: OrbitLaneSpec
 ): IssuedUnitCommand | null {
   if (!selectedPlanetKey || selectedUnitKeys.size === 0) {
     return null;
@@ -3558,14 +3769,27 @@ function issuePlanetOrderFromSelection(
 
   runtime.enqueueUnitOrder(
     selectedUnits.map((unit) => unit.handle),
-    {
-      type: orderType,
-      planet: planet.handle,
-    }
+    orderType === "orbitPlanet" && lane
+      ? {
+          type: orderType,
+          planet: planet.handle,
+          lane,
+        }
+      : {
+          type: orderType,
+          planet: planet.handle,
+        }
   );
   return {
     label: `${formatPlanetOrderLabel(orderType)} ${planet.label}`,
     units: selectedUnits,
+    orbitLaneSelection:
+      orderType === "orbitPlanet" && lane
+        ? {
+            planetKey: planet.key,
+            lane,
+          }
+        : undefined,
   };
 }
 
@@ -3695,6 +3919,351 @@ function formatCommandHistoryUnits(units: readonly UnitViewModel[]): string {
     .filter((part): part is string => part !== null);
 
   return parts.length > 0 ? parts.join(", ") : `${units.length} units`;
+}
+
+function beginOrbitLaneDrag(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  proxies: ReadonlyMap<string, PlanetProxy>,
+  scratch: RenderScratch
+): OrbitLaneDragState | null {
+  if (
+    event.button !== 0 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    selectedUnitKeys.size === 0 ||
+    !runtime.readConnectionStatus().canControl
+  ) {
+    return null;
+  }
+
+  const selectedUnits = runtime
+    .readUnits()
+    .filter(
+      (unit) =>
+        unit.owner === runtime.playerId && selectedUnitKeys.has(unit.key)
+    );
+
+  if (selectedUnits.length === 0) {
+    return null;
+  }
+
+  const hit = readPlanetSurfaceHitAtPointer(
+    event,
+    canvas,
+    camera,
+    runtime.readPlanets(),
+    proxies,
+    scratch
+  );
+
+  if (!hit) {
+    return null;
+  }
+
+  const anchorNormal = hit.point.clone().sub(hit.planet.position);
+
+  if (anchorNormal.lengthSq() <= 0.000001) {
+    return null;
+  }
+
+  anchorNormal.normalize();
+
+  const state: OrbitLaneDragState = {
+    planetKey: hit.planet.key,
+    anchorPoint: hit.planet.position
+      .clone()
+      .addScaledVector(anchorNormal, hit.planet.radius),
+    anchorNormal,
+    lane: {
+      radius: hit.planet.radius * 2.7,
+      axis: toVec3Data(hit.planet.orbitAxis),
+      direction: 1,
+    },
+  };
+
+  return updateOrbitLaneDrag(
+    state,
+    event,
+    canvas,
+    camera,
+    runtime,
+    selectedUnitKeys,
+    scratch
+  );
+}
+
+function updateOrbitLaneDrag(
+  state: OrbitLaneDragState | null,
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  scratch: RenderScratch
+): OrbitLaneDragState | null {
+  if (!state) {
+    return null;
+  }
+
+  const planet =
+    runtime.readPlanets().find((entry) => entry.key === state.planetKey) ??
+    null;
+
+  if (!planet) {
+    return null;
+  }
+
+  const lane = createOrbitLaneSpecFromDrag(
+    state,
+    event,
+    canvas,
+    camera,
+    planet,
+    runtime.readUnits().filter(
+      (unit) =>
+        unit.owner === runtime.playerId && selectedUnitKeys.has(unit.key)
+    ),
+    scratch
+  );
+
+  if (lane) {
+    state.lane = lane;
+  }
+
+  return state;
+}
+
+function createOrbitLaneSpecFromDrag(
+  state: OrbitLaneDragState,
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  planet: PlanetViewModel,
+  selectedUnits: readonly UnitViewModel[],
+  scratch: RenderScratch
+): OrbitLaneSpec | null {
+  const planeTarget = readPointerOrbitDragPlaneTarget(
+    event,
+    canvas,
+    camera,
+    state,
+    scratch
+  );
+
+  if (!planeTarget) {
+    return null;
+  }
+
+  const dragVector = scratch.orbitDragVector
+    .copy(planeTarget)
+    .sub(state.anchorPoint);
+  const tangent = scratch.orbitDragTangent
+    .copy(dragVector)
+    .addScaledVector(state.anchorNormal, -dragVector.dot(state.anchorNormal));
+  const heading = writeAverageSelectedHeading(
+    scratch.orbitHeading,
+    selectedUnits
+  );
+  const tangentLength = tangent.length();
+
+  if (tangentLength <= ORBIT_LANE_DRAG_MIN_WORLD_UNITS) {
+    tangent
+      .copy(heading)
+      .addScaledVector(state.anchorNormal, -heading.dot(state.anchorNormal));
+
+    if (tangent.lengthSq() <= 0.000001) {
+      writeFallbackTangent(tangent, state.anchorNormal);
+    }
+  }
+
+  if (tangent.lengthSq() <= 0.000001) {
+    return null;
+  }
+
+  tangent.normalize();
+
+  const axis = scratch.orbitDragAxis
+    .crossVectors(state.anchorNormal, tangent);
+
+  if (axis.lengthSq() <= 0.000001) {
+    return null;
+  }
+
+  axis.normalize();
+
+  const orbitTangent = scratch.orbitDragVector
+    .crossVectors(axis, state.anchorNormal)
+    .normalize();
+  const projectedHeading = heading.addScaledVector(
+    axis,
+    -heading.dot(axis)
+  );
+  const direction: -1 | 1 =
+    projectedHeading.lengthSq() <= 0.000001 ||
+    orbitTangent.dot(projectedHeading) >= 0
+      ? 1
+      : -1;
+  const radius = clamp(
+    planet.radius + Math.max(tangentLength, 0),
+    planet.radius * ORBIT_LANE_MIN_RADIUS_MULTIPLIER,
+    planet.radius * ORBIT_LANE_MAX_RADIUS_MULTIPLIER
+  );
+
+  return {
+    radius,
+    axis: toVec3Data(axis),
+    direction,
+  };
+}
+
+function readPointerOrbitDragPlaneTarget(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  state: OrbitLaneDragState,
+  scratch: RenderScratch
+): THREE.Vector3 | null {
+  writePointerRay(event, canvas, camera, scratch);
+  scratch.tacticalPlane.set(
+    state.anchorNormal,
+    -state.anchorNormal.dot(state.anchorPoint)
+  );
+
+  return scratch.raycaster.ray.intersectPlane(
+    scratch.tacticalPlane,
+    scratch.orbitDragPoint
+  )
+    ? scratch.orbitDragPoint
+    : null;
+}
+
+function readPlanetSurfaceHitAtPointer(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  planets: readonly PlanetViewModel[],
+  proxies: ReadonlyMap<string, PlanetProxy>,
+  scratch: RenderScratch
+): { planet: PlanetViewModel; point: THREE.Vector3 } | null {
+  writePointerRay(event, canvas, camera, scratch);
+
+  let bestPlanet: PlanetViewModel | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  const bestPoint = new THREE.Vector3();
+
+  for (const planet of planets) {
+    scratch.tacticalPlaneNormal.copy(planet.position);
+    const surfaceRadius = planet.radius * PLANET_BODY_BILLBOARD_SCALE * 0.5;
+    const hit = scratch.raycaster.ray.intersectSphere(
+      new THREE.Sphere(scratch.tacticalPlaneNormal, surfaceRadius),
+      scratch.rayTarget
+    );
+
+    if (!hit) {
+      continue;
+    }
+
+    const distance = camera.position.distanceTo(hit);
+
+    if (distance < bestDistance) {
+      bestPlanet = planet;
+      bestDistance = distance;
+      bestPoint.copy(hit);
+    }
+  }
+
+  if (bestPlanet) {
+    return {
+      planet: bestPlanet,
+      point: bestPoint,
+    };
+  }
+
+  const fallbackPlanet = findPlanetAtPointer(
+    event,
+    canvas,
+    camera,
+    planets,
+    proxies,
+    scratch
+  );
+
+  if (!fallbackPlanet) {
+    return null;
+  }
+
+  return {
+    planet: fallbackPlanet,
+    point: bestPoint.copy(fallbackPlanet.position).add(Y_AXIS),
+  };
+}
+
+function writePointerRay(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  scratch: RenderScratch
+): void {
+  const bounds = canvas.getBoundingClientRect();
+  const x = ((event.clientX - bounds.left) / Math.max(bounds.width, 1)) * 2 - 1;
+  const y = -(((event.clientY - bounds.top) / Math.max(bounds.height, 1)) * 2 - 1);
+
+  scratch.pointer.set(x, y);
+  scratch.raycaster.setFromCamera(scratch.pointer, camera);
+}
+
+function writeAverageSelectedHeading(
+  target: THREE.Vector3,
+  selectedUnits: readonly UnitViewModel[]
+): THREE.Vector3 {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+
+  for (const unit of selectedUnits) {
+    const velocityX = unit.position.x - unit.prevPosition.x;
+    const velocityY = unit.position.y - unit.prevPosition.y;
+    const velocityZ = unit.position.z - unit.prevPosition.z;
+
+    if (
+      velocityX * velocityX + velocityY * velocityY + velocityZ * velocityZ >
+      0.000001
+    ) {
+      x += velocityX;
+      y += velocityY;
+      z += velocityZ;
+      continue;
+    }
+
+    x +=
+      2 * (unit.rotation.x * unit.rotation.z + unit.rotation.w * unit.rotation.y);
+    y +=
+      2 * (unit.rotation.y * unit.rotation.z - unit.rotation.w * unit.rotation.x);
+    z +=
+      1 - 2 * (unit.rotation.x * unit.rotation.x + unit.rotation.y * unit.rotation.y);
+  }
+
+  target.set(x, y, z);
+
+  if (target.lengthSq() > 0.000001) {
+    target.normalize();
+  }
+
+  return target;
+}
+
+function writeFallbackTangent(
+  target: THREE.Vector3,
+  normal: THREE.Vector3
+): THREE.Vector3 {
+  const reference = Math.abs(normal.y) < 0.9 ? Y_AXIS : X_AXIS;
+
+  return target.crossVectors(normal, reference).normalize();
 }
 
 function getPointerMoveTarget(
@@ -4873,6 +5442,187 @@ function updateCaptureProgressRings(
   }
 }
 
+function updateOrbitLaneRings(
+  worldGroup: THREE.Group,
+  rings: Map<string, OrbitLaneRing>,
+  selectedUnits: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  selectedLane: SelectedOrbitLane | null,
+  preview: OrbitLaneDragState | null,
+  frameIndex: number,
+  enabled: boolean
+): void {
+  const visuals = enabled
+    ? collectOrbitLaneVisuals(selectedUnits, planets, selectedLane, preview)
+    : [];
+
+  for (const visual of visuals) {
+    let ring = rings.get(visual.key);
+
+    if (!ring) {
+      ring = createOrbitLaneRing();
+      rings.set(visual.key, ring);
+      worldGroup.add(ring.root);
+    }
+
+    ring.lastSeenFrame = frameIndex;
+    ring.root.visible = true;
+    ring.root.position.copy(visual.planet.position);
+    ring.root.scale.setScalar(visual.lane.radius);
+    writeOrbitLaneQuaternion(ring.root.quaternion, visual.lane.axis);
+    ring.line.material.color.setHex(visual.color);
+    ring.line.material.opacity = visual.opacity;
+  }
+
+  for (const [key, ring] of rings) {
+    if (ring.lastSeenFrame === frameIndex) {
+      continue;
+    }
+
+    disposeOrbitLaneRing(worldGroup, ring);
+    rings.delete(key);
+  }
+}
+
+function collectOrbitLaneVisuals(
+  selectedUnits: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  selectedLane: SelectedOrbitLane | null,
+  preview: OrbitLaneDragState | null
+): OrbitLaneVisual[] {
+  const visuals = new Map<string, OrbitLaneVisual>();
+
+  for (const unit of selectedUnits) {
+    const order = unit.moveOrder;
+
+    if (order?.type !== "orbitPlanet" || !order.lane) {
+      continue;
+    }
+
+    const planet =
+      planets.find((entry) => entry.key === handleKey(order.planet)) ?? null;
+
+    if (!planet) {
+      continue;
+    }
+
+    const key = readOrbitLaneVisualKey("active", planet, order.lane);
+    visuals.set(key, {
+      key,
+      planet,
+      lane: order.lane,
+      color: 0x79d7ff,
+      opacity: 0.58,
+    });
+  }
+
+  if (selectedLane) {
+    const planet =
+      planets.find((entry) => entry.key === selectedLane.planetKey) ?? null;
+
+    if (planet) {
+      const key = readOrbitLaneVisualKey("selected", planet, selectedLane.lane);
+      visuals.set(key, {
+        key,
+        planet,
+        lane: selectedLane.lane,
+        color: 0xffd36b,
+        opacity: 0.78,
+      });
+    }
+  }
+
+  if (preview) {
+    const planet =
+      planets.find((entry) => entry.key === preview.planetKey) ?? null;
+
+    if (planet) {
+      visuals.set("preview", {
+        key: "preview",
+        planet,
+        lane: preview.lane,
+        color: TACTICAL_OVERLAY_COLOR_HEX,
+        opacity: 0.92,
+      });
+    }
+  }
+
+  return [...visuals.values()];
+}
+
+function readOrbitLaneVisualKey(
+  prefix: string,
+  planet: PlanetViewModel,
+  lane: OrbitLaneSpec
+): string {
+  return [
+    prefix,
+    planet.key,
+    lane.radius.toFixed(2),
+    lane.axis.x.toFixed(3),
+    lane.axis.y.toFixed(3),
+    lane.axis.z.toFixed(3),
+    lane.direction,
+  ].join(":");
+}
+
+function createOrbitLaneRing(): OrbitLaneRing {
+  const root = new THREE.Group();
+  const material = new THREE.LineBasicMaterial({
+    color: 0x79d7ff,
+    transparent: true,
+    opacity: 0.58,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const line = new THREE.LineLoop(createOrbitLaneGeometry(), material);
+
+  root.name = "ship-orbit-lane-ring";
+  root.visible = false;
+  line.name = "ship orbit lane";
+  line.frustumCulled = false;
+  line.renderOrder = 9.4;
+  root.add(line);
+
+  return {
+    root,
+    line,
+    lastSeenFrame: 0,
+  };
+}
+
+function createOrbitLaneGeometry(): THREE.BufferGeometry {
+  const positions = new Float32Array(ORBIT_LANE_SEGMENTS * 3);
+
+  for (let index = 0; index < ORBIT_LANE_SEGMENTS; index += 1) {
+    const angle = (index / ORBIT_LANE_SEGMENTS) * Math.PI * 2;
+    const positionIndex = index * 3;
+
+    positions[positionIndex] = Math.cos(angle);
+    positions[positionIndex + 1] = 0;
+    positions[positionIndex + 2] = Math.sin(angle);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  return geometry;
+}
+
+function writeOrbitLaneQuaternion(
+  target: THREE.Quaternion,
+  axis: Vec3Data
+): THREE.Quaternion {
+  PLANET_RING_AXIS_SCRATCH.set(axis.x, axis.y, axis.z);
+
+  if (PLANET_RING_AXIS_SCRATCH.lengthSq() <= 0.000001) {
+    PLANET_RING_AXIS_SCRATCH.copy(Y_AXIS);
+  } else {
+    PLANET_RING_AXIS_SCRATCH.normalize();
+  }
+
+  return target.setFromUnitVectors(Y_AXIS, PLANET_RING_AXIS_SCRATCH);
+}
+
 function createCaptureProgressRing(): CaptureProgressRing {
   const root = new THREE.Group();
   const trackMaterial = new THREE.LineBasicMaterial({
@@ -5003,6 +5753,27 @@ function disposeCaptureProgressRing(
   ring.track.material.dispose();
   ring.progress.geometry.dispose();
   ring.progress.material.dispose();
+  ring.root.clear();
+}
+
+function disposeOrbitLaneRings(
+  worldGroup: THREE.Group,
+  rings: Map<string, OrbitLaneRing>
+): void {
+  for (const ring of rings.values()) {
+    disposeOrbitLaneRing(worldGroup, ring);
+  }
+
+  rings.clear();
+}
+
+function disposeOrbitLaneRing(
+  worldGroup: THREE.Group,
+  ring: OrbitLaneRing
+): void {
+  worldGroup.remove(ring.root);
+  ring.line.geometry.dispose();
+  ring.line.material.dispose();
   ring.root.clear();
 }
 

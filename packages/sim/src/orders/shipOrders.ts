@@ -107,7 +107,8 @@ function computeOrderVelocity(
       tick,
       stats,
       targetRadius,
-      tuning.orbit
+      tuning.orbit,
+      order.lane
     );
   }
 

@@ -33,6 +33,7 @@ export type HeadlessMatchMetrics = Readonly<{
   completedTick: number | null;
   matchEndReason: MatchEndReason | null;
   commandCount: number;
+  laneOrderCount: number;
   nonEmptyCommandBatches: number;
   hashesRecorded: number;
   firstPlanetCaptureTick: number | null;
@@ -44,6 +45,7 @@ export type HeadlessMatchMetrics = Readonly<{
 export type HeadlessMatchMetricsDraft = {
   startedTick: number;
   commandCount: number;
+  laneOrderCount: number;
   nonEmptyCommandBatches: number;
   hashesRecorded: number;
   firstPlanetCaptureTick: number | null;
@@ -70,6 +72,7 @@ export function createHeadlessMatchMetricsDraft(
   return {
     startedTick: world.tick,
     commandCount: 0,
+    laneOrderCount: 0,
     nonEmptyCommandBatches: 0,
     hashesRecorded: 0,
     firstPlanetCaptureTick: null,
@@ -98,6 +101,7 @@ export function recordHeadlessMatchStep(
   hash: ReplayHash | null
 ): void {
   draft.commandCount += batch.commands.length;
+  draft.laneOrderCount += countLaneOrders(batch);
 
   if (batch.commands.length > 0) {
     draft.nonEmptyCommandBatches += 1;
@@ -137,6 +141,7 @@ export function finalizeHeadlessMatchMetrics(
     completedTick: world.matchResult?.completedTick ?? null,
     matchEndReason: world.matchResult?.reason ?? null,
     commandCount: draft.commandCount,
+    laneOrderCount: draft.laneOrderCount,
     nonEmptyCommandBatches: draft.nonEmptyCommandBatches,
     hashesRecorded: draft.hashesRecorded,
     firstPlanetCaptureTick: draft.firstPlanetCaptureTick,
@@ -144,6 +149,22 @@ export function finalizeHeadlessMatchMetrics(
     damageDone: cloneDamageMetrics(draft.damageDone),
     finalHash,
   };
+}
+
+function countLaneOrders(batch: CommandBatch): number {
+  let count = 0;
+
+  for (const scheduled of batch.commands) {
+    if (
+      scheduled.command.type === "issueUnitOrder" &&
+      "lane" in scheduled.command.order &&
+      scheduled.command.order.lane
+    ) {
+      count += scheduled.command.unitHandles.length;
+    }
+  }
+
+  return count;
 }
 
 function recordDamageDone(

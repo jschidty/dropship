@@ -89,11 +89,11 @@
       "main-engine-5": 1,
       "main-engine-6": 1,
       "fuel-1": 2,
-      "weapon-1": 4,
-      "weapon-2": 4,
-      "weapon-3": 4,
-      "weapon-4": 4,
-      "weapon-5": 4
+      "weapon-1": 5,
+      "weapon-2": 5,
+      "weapon-3": 5,
+      "weapon-4": 5,
+      "weapon-5": 5
     }
   },
   "initialVelocity": {

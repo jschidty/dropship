@@ -353,10 +353,20 @@ function copyUnitOrderIntent(order: UnitOrderIntent | null): UnitOrderIntent | n
     case "capturePlanet":
     case "guardPlanet":
     case "orbitPlanet":
-      return {
-        type: order.type,
-        planet: { ...order.planet },
-      };
+      return order.lane
+        ? {
+            type: order.type,
+            planet: { ...order.planet },
+            lane: {
+              radius: order.lane.radius,
+              axis: { ...order.lane.axis },
+              direction: order.lane.direction,
+            },
+          }
+        : {
+            type: order.type,
+            planet: { ...order.planet },
+          };
   }
 }
 

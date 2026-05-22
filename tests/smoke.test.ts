@@ -37,6 +37,7 @@ import {
   deterministicCos,
   deterministicSin,
   deterministicSqrt,
+  computeOrbitVelocityAroundPlanet,
   computePlanetGravityVector,
   hashWorld,
   hydrateWorldFromSnapshot,
@@ -84,6 +85,8 @@ testAppendOrderAdvancesAfterCurrentOrderCompletes();
 testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
 testOrbitPlanetOrderFacesAwayFromGravity();
+testOrbitLaneOrderPreservesLaneSpec();
+testOrbitLaneVelocityUsesLanePlaneAndDirection();
 testCaptureDemoConfig();
 testClassHotkeySelectionFiltersSelectedUnits();
 testAttackTargetPriorityRanking();
@@ -122,6 +125,7 @@ testHeadlessRunnerMatchesSmokeReplayHash();
 testHeadlessControllerCommandsUseCommandBatches();
 testHeadlessMetricsTracksBattleshipDamage();
 testHeadlessRunnerRunsAllNpcMatch();
+testNpcOrbitLaneHeuristicsIssueLaneOrders();
 testHeadlessDropShipOnlyMatchCapturesPlanets();
 testSnapshotRoundTrip();
 testSnapshotSizeBudget();
@@ -602,6 +606,12 @@ function testDefaultContentRegistryLoadsRawTemplates(): void {
   const engine = DEFAULT_CONTENT_REGISTRY.getShipComponent(
     SHIP_COMPONENT_IDS.ionEngineSmall
   );
+  const pulseLaser = DEFAULT_CONTENT_REGISTRY.getShipComponent(
+    SHIP_COMPONENT_IDS.pulseLaserSmall
+  );
+  const bombardLaser = DEFAULT_CONTENT_REGISTRY.getShipComponent(
+    SHIP_COMPONENT_IDS.bombardLaserSmall
+  );
 
   assert.equal(validation.ok, true, validation.errors.join("\n"));
   assert.equal(DEFAULT_CONTENT_REGISTRY.contentHash, DEFAULT_CONTENT_HASH);
@@ -609,8 +619,17 @@ function testDefaultContentRegistryLoadsRawTemplates(): void {
   assert.equal(dropShip.slug, "drop-ship");
   assert.equal(battleship.slug, "battleship");
   assert.equal(engine.slug, "ion-engine-small");
+  assert.equal(bombardLaser.slug, "bombard-laser-small");
+  assert.ok(pulseLaser.type === "weapon");
+  assert.ok(bombardLaser.type === "weapon");
+  assert.equal(bombardLaser.damage, pulseLaser.damage);
+  assert.equal(bombardLaser.cooldownTicks, pulseLaser.cooldownTicks);
+  assert.ok(bombardLaser.range > pulseLaser.range);
   assert.equal(dropShip.defaultLoadout.componentsBySlot["main-engine-4"], 1);
-  assert.equal(battleship.defaultLoadout.componentsBySlot["weapon-5"], 4);
+  assert.equal(
+    battleship.defaultLoadout.componentsBySlot["weapon-5"],
+    SHIP_COMPONENT_IDS.bombardLaserSmall
+  );
 }
 
 function testDeterministicMathReferenceValues(): void {
@@ -770,7 +789,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "8f768808");
+  assert.equal(first, "afa03075");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -784,11 +803,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "8f768808");
+  assert.equal(result.finalHash, "afa03075");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "8f768808",
+      hash: "afa03075",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -919,8 +938,62 @@ function testHeadlessRunnerRunsAllNpcMatch(): void {
   assert.equal(result.hashes.length, 3);
   assert.ok(result.commandBatches.length > 0);
   assert.ok(result.metrics.commandCount > 0);
+  assert.ok(result.metrics.laneOrderCount > 0);
+}
+
+function testNpcOrbitLaneHeuristicsIssueLaneOrders(): void {
+  const config = createCaptureDemoConfig({
+    seed: 7331,
+    controllers: [
+      { playerId: 1, type: "npc" },
+      { playerId: 2, type: "npc" },
+    ],
+    rules: {
+      matchEnd: {
+        durationTicks: 2,
+      },
+      npc: {
+        aggroRangeWorldUnits: 1_000,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+  const legacy = createHeadlessMatchRunner({
+    config,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: false }),
+    ],
+    maxTicks: 1,
+    hashIntervalTicks: 0,
+  }).run();
+  const enhanced = createHeadlessMatchRunner({
+    config,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: true }),
+    ],
+    maxTicks: 1,
+    hashIntervalTicks: 0,
+  }).run();
+
+  assert.equal(legacy.metrics.laneOrderCount, 0);
+  assert.ok(enhanced.metrics.laneOrderCount > 0);
   assert.ok(
-    result.world.units.some((unit) => unit.moveOrder?.type === "attackTarget")
+    enhanced.world.units.some(
+      (unit) =>
+        unit.shipClassId === SHIP_CLASS_IDS.dropShip &&
+        unit.moveOrder?.type === "capturePlanet" &&
+        !!unit.moveOrder.lane
+    )
+  );
+  assert.ok(
+    enhanced.world.units.some(
+      (unit) =>
+        unit.shipClassId === SHIP_CLASS_IDS.battleship &&
+        unit.moveOrder?.type === "orbitPlanet" &&
+        !!unit.moveOrder.lane
+    )
   );
 }
 
@@ -1224,6 +1297,137 @@ function testOrbitPlanetOrderFacesAwayFromGravity(): void {
   assert.ok(
     outwardDot > 0.99,
     "Expected orbit command to orient the ship away from planet gravity"
+  );
+}
+
+function testOrbitLaneOrderPreservesLaneSpec(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+  const planet =
+    world.planets.find((entry) => entry.control.capturable) ??
+    world.planets[0];
+
+  assert.ok(unit);
+  assert.ok(planet);
+
+  runBatches(
+    world,
+    [
+      {
+        tick: 0,
+        commands: [
+          {
+            playerId: 1,
+            clientSeq: 44,
+            command: {
+              type: "issueUnitOrder",
+              unitHandles: [unit.handle],
+              order: {
+                type: "orbitPlanet",
+                planet: planet.handle,
+                lane: {
+                  radius: planet.radius * 4.5,
+                  axis: { x: 0, y: 0, z: 1 },
+                  direction: -1,
+                },
+              },
+              queueMode: "replace",
+            },
+          },
+        ],
+      },
+    ],
+    1
+  );
+
+  assert.equal(unit.moveOrder?.type, "orbitPlanet");
+  assert.equal(
+    unit.moveOrder?.type === "orbitPlanet" && unit.moveOrder.lane?.direction,
+    -1
+  );
+  assert.equal(
+    unit.moveOrder?.type === "orbitPlanet" && unit.moveOrder.lane?.axis.z,
+    1
+  );
+
+  const hashWithLane = hashWorld(world);
+  const snapshot = serializeWorld(world);
+  const restored = hydrateWorldFromSnapshot(snapshot, DEFAULT_CONTENT_REGISTRY);
+  const restoredUnit = restored.units.find((entry) =>
+    sameHandle(entry.handle, unit.handle)
+  );
+
+  assert.ok(restoredUnit?.moveOrder?.type === "orbitPlanet");
+  assert.equal(restoredUnit.moveOrder.lane?.radius, planet.radius * 4.5);
+  assert.equal(hashWorld(restored), hashWithLane);
+}
+
+function testOrbitLaneVelocityUsesLanePlaneAndDirection(): void {
+  const world = createWorld({
+    config: createCaptureDemoConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+  const planet =
+    world.planets.find((entry) => entry.control.capturable) ??
+    world.planets[0];
+
+  assert.ok(unit);
+  assert.ok(planet);
+
+  const stats = readUnitShipStats(world, new Map(), unit);
+  const lane = {
+    radius: planet.radius * 4,
+    axis: { x: 0, y: 0, z: 1 },
+    direction: 1 as const,
+  };
+
+  unit.position = {
+    x: planet.position.x + lane.radius * 1.35,
+    y: planet.position.y,
+    z: planet.position.z + planet.radius * 0.4,
+  };
+
+  const forwardVelocity = computeOrbitVelocityAroundPlanet(
+    unit,
+    planet,
+    0,
+    stats,
+    lane.radius,
+    DEFAULT_SIM_TUNING.orbit,
+    lane
+  );
+  const reverseVelocity = computeOrbitVelocityAroundPlanet(
+    unit,
+    planet,
+    0,
+    stats,
+    lane.radius,
+    DEFAULT_SIM_TUNING.orbit,
+    {
+      ...lane,
+      direction: -1,
+    }
+  );
+
+  assert.ok(
+    forwardVelocity.y > 0,
+    "Expected lane direction +1 to move along the lane tangent"
+  );
+  assert.ok(
+    reverseVelocity.y < 0,
+    "Expected lane direction -1 to reverse lane tangent"
+  );
+  assert.ok(
+    forwardVelocity.x < 0,
+    "Expected custom lane to correct excessive orbital radius"
+  );
+  assert.ok(
+    forwardVelocity.z < 0,
+    "Expected custom lane to correct displacement out of its plane"
   );
 }
 
@@ -1941,6 +2145,9 @@ function testNpcDefenderIssuesAttackOrders(): void {
   const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: false }),
+    ],
     maxTicks: 2,
   });
   const result = runner.run();
@@ -2010,6 +2217,9 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
   const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: false }),
+    ],
   });
   const safePlanet = runner.world.planets.find(
     (planet) => planet.name === "Safe"
@@ -2154,6 +2364,9 @@ function testNpcFightersHoldEscortWhenDropShipIsNotThreatened(): void {
   const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: false }),
+    ],
   });
   const dropShip = runner.world.units.find(
     (unit) => unit.owner === 2 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
@@ -2194,6 +2407,9 @@ function testNpcControllersCanOwnEveryPlayer(): void {
   const runner = createHeadlessMatchRunner({
     config,
     content: DEFAULT_CONTENT_REGISTRY,
+    controllers: [
+      createScriptedNpcController({ orbitLaneHeuristics: false }),
+    ],
     maxTicks: 2,
   });
   const result = runner.run();
@@ -2252,7 +2468,9 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
   assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 1_000);
   assert.equal(hydrated.config.rules.npc.dropShipThreatRangeWorldUnits, 300);
 
-  const scriptedNpcController = createScriptedNpcController();
+  const scriptedNpcController = createScriptedNpcController({
+    orbitLaneHeuristics: false,
+  });
   const commands = scriptedNpcController.commandsForTick(hydrated);
 
   assert.ok(commands.length > 0);

@@ -641,10 +641,28 @@ export function copyUnitOrder(order: SimUnitOrder | null): SimUnitOrder | null {
     };
   }
 
-  return {
-    type: order.type,
-    planet: order.planet,
-  };
+  if (
+    order.type === "capturePlanet" ||
+    order.type === "guardPlanet" ||
+    order.type === "orbitPlanet"
+  ) {
+    return order.lane
+      ? {
+          type: order.type,
+          planet: order.planet,
+          lane: {
+            radius: order.lane.radius,
+            axis: copyVec3(order.lane.axis),
+            direction: order.lane.direction,
+          },
+        }
+      : {
+          type: order.type,
+          planet: order.planet,
+        };
+  }
+
+  return order;
 }
 
 export function copyUnitOrders(

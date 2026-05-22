@@ -1205,6 +1205,7 @@ const HOTKEYS: readonly (readonly [string, string])[] = [
   ["D", "Clear selection"],
   ["C", "Capture selected planet"],
   ["G", "Guard selected planet"],
+  ["Z", "Zoom to selection"],
   ["T", "Toggle tactical overlay"],
   ["P", "Pause and show hotkeys"],
   ["Space", "Reselect previous command group"],

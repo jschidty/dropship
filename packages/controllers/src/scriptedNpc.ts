@@ -3,17 +3,22 @@ import {
   handleKey,
   sameHandle,
   type EntityHandle,
+  type OrbitLaneSpec,
   type PlayerId,
   type ScheduledCommand,
   type StableHandleKey,
   type UnitOrderIntent,
+  type Vec3Data,
 } from "@drop-ship/protocol";
 import {
   distanceSquared,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   isPlayerControlledBy,
+  readCaptureRules,
   readNpcRules,
+  readUnitShipStats,
+  readUnitWeaponProfile,
   type SimPlanet,
   type SimUnit,
   type SimWorld,
@@ -29,6 +34,7 @@ export type ScriptedNpcControllerOptions = Readonly<{
   id?: string;
   playerIds?: readonly PlayerId[];
   dedupeOrders?: boolean;
+  orbitLaneHeuristics?: boolean;
 }>;
 
 export function createScriptedNpcController(
@@ -45,6 +51,7 @@ export function createScriptedNpcController(
       return createScriptedNpcCommands(world, {
         playerIds: options.playerIds,
         dedupeOrders: options.dedupeOrders,
+        orbitLaneHeuristics: options.orbitLaneHeuristics,
         nextClientSeq(playerId) {
           const clientSeq = (clientSeqByPlayer.get(playerId) ?? 0) + 1;
           clientSeqByPlayer.set(playerId, clientSeq);
@@ -58,6 +65,7 @@ export function createScriptedNpcController(
 export type CreateScriptedNpcCommandsOptions = Readonly<{
   playerIds?: readonly PlayerId[];
   dedupeOrders?: boolean;
+  orbitLaneHeuristics?: boolean;
   nextClientSeq?: (playerId: PlayerId) => number;
 }>;
 
@@ -71,6 +79,7 @@ export function createScriptedNpcCommands(
 
   const rules = readNpcRules(world);
   const dedupeOrders = options.dedupeOrders ?? true;
+  const orbitLaneHeuristics = options.orbitLaneHeuristics ?? true;
 
   if (world.tick % rules.thinkIntervalTicks !== 0) {
     return [];
@@ -98,6 +107,7 @@ export function createScriptedNpcCommands(
       {
         aggroRangeWorldUnits: rules.aggroRangeWorldUnits,
         dropShipThreatRangeWorldUnits: rules.dropShipThreatRangeWorldUnits,
+        orbitLaneHeuristics,
       },
       plannedDropShipTargets
     );
@@ -154,7 +164,10 @@ function chooseScriptedNpcOrder(
   rules: Pick<
     ReturnType<typeof readNpcRules>,
     "aggroRangeWorldUnits" | "dropShipThreatRangeWorldUnits"
-  >,
+  > &
+    Readonly<{
+      orbitLaneHeuristics: boolean;
+    }>,
   plannedDropShipTargets: ReadonlyMap<StableHandleKey, EntityHandle>
 ): UnitOrderIntent | null {
   const dropShip = findProtectedDropShip(world, unit);
@@ -167,10 +180,16 @@ function chooseScriptedNpcOrder(
     );
 
     return targetPlanet
-      ? {
-          type: "capturePlanet",
-          planet: targetPlanet.handle,
-        }
+      ? withNpcOrbitLane(
+          world,
+          unit,
+          targetPlanet,
+          {
+            type: "capturePlanet",
+            planet: targetPlanet.handle,
+          },
+          rules.orbitLaneHeuristics
+        )
       : null;
   }
 
@@ -178,11 +197,47 @@ function chooseScriptedNpcOrder(
     ? findNearestEnemy(world, dropShip, rules.dropShipThreatRangeWorldUnits)
     : null;
 
+  const guardPlanet = readDropShipTargetPlanet(world, dropShip);
+
+  if (
+    rules.orbitLaneHeuristics &&
+    guardPlanet &&
+    unit.shipClassId === SHIP_CLASS_IDS.battleship
+  ) {
+    return withNpcOrbitLane(
+      world,
+      unit,
+      guardPlanet,
+      {
+        type: "orbitPlanet",
+        planet: guardPlanet.handle,
+      },
+      true
+    );
+  }
+
   if (dropShipThreat) {
     return {
       type: "attackTarget",
       target: dropShipThreat.handle,
     };
+  }
+
+  if (
+    rules.orbitLaneHeuristics &&
+    guardPlanet &&
+    unit.shipClassId === SHIP_CLASS_IDS.fighter
+  ) {
+    return withNpcOrbitLane(
+      world,
+      unit,
+      guardPlanet,
+      {
+        type: "orbitPlanet",
+        planet: guardPlanet.handle,
+      },
+      true
+    );
   }
 
   if (dropShip && unit.shipClassId === SHIP_CLASS_IDS.fighter) {
@@ -201,14 +256,145 @@ function chooseScriptedNpcOrder(
     };
   }
 
-  const guardPlanet = readDropShipTargetPlanet(world, dropShip);
-
   return guardPlanet
-    ? {
-        type: "guardPlanet",
-        planet: guardPlanet.handle,
-      }
+    ? withNpcOrbitLane(
+        world,
+        unit,
+        guardPlanet,
+        {
+          type: "guardPlanet",
+          planet: guardPlanet.handle,
+        },
+        rules.orbitLaneHeuristics
+      )
     : null;
+}
+
+type PlanetUnitOrder = Extract<UnitOrderIntent, { planet: EntityHandle }>;
+
+function withNpcOrbitLane<TOrder extends PlanetUnitOrder>(
+  world: SimWorld,
+  unit: SimUnit,
+  planet: SimPlanet,
+  order: TOrder,
+  enabled: boolean
+): TOrder {
+  if (!enabled) {
+    return order;
+  }
+
+  return {
+    ...order,
+    lane: createNpcOrbitLane(world, unit, planet),
+  };
+}
+
+function createNpcOrbitLane(
+  world: SimWorld,
+  unit: SimUnit,
+  planet: SimPlanet
+): OrbitLaneSpec {
+  const stats = readUnitShipStats(world, new Map(), unit);
+  const weapon = readUnitWeaponProfile(world, new Map(), unit);
+  const axis = createNpcOrbitAxis(unit, planet);
+  const radius = readNpcOrbitRadius(
+    world,
+    unit,
+    planet,
+    stats.maxAcceleration,
+    weapon?.range ?? 0
+  );
+
+  return {
+    radius,
+    axis,
+    direction: readNpcOrbitDirection(unit, planet, axis),
+  };
+}
+
+function readNpcOrbitRadius(
+  world: SimWorld,
+  unit: SimUnit,
+  planet: SimPlanet,
+  maxAcceleration: number,
+  weaponRange: number
+): number {
+  const agility = clamp01((maxAcceleration - 34) / 24);
+
+  if (unit.shipClassId === SHIP_CLASS_IDS.dropShip) {
+    const rules = readCaptureRules(world);
+    const minRadius = planet.radius * rules.orbitMinRadiusMultiplier;
+    const maxRadius = planet.radius * rules.orbitMaxRadiusMultiplier;
+    const radius = planet.radius * (1.28 + (1 - agility) * 0.24);
+
+    return clamp(radius, minRadius * 1.03, maxRadius * 0.72);
+  }
+
+  if (unit.shipClassId === SHIP_CLASS_IDS.fighter) {
+    return clamp(
+      planet.radius + weaponRange * (0.42 + agility * 0.16),
+      planet.radius * 1.75,
+      planet.radius * 3.35
+    );
+  }
+
+  if (unit.shipClassId === SHIP_CLASS_IDS.battleship) {
+    return clamp(
+      planet.radius + weaponRange * (0.78 + (1 - agility) * 0.18),
+      planet.radius * 2.35,
+      planet.radius * 5.6
+    );
+  }
+
+  return planet.radius * 3;
+}
+
+function createNpcOrbitAxis(unit: SimUnit, planet: SimPlanet): Vec3Data {
+  const baseAxis = normalizeOrFallback(planet.orbitAxis, { x: 0, y: 1, z: 0 });
+  const spreadAxis = stablePerpendicular(baseAxis, unit.shipClassId);
+  const side =
+    ((unit.handle.id + unit.owner + unit.shipClassId) & 1) === 0 ? 1 : -1;
+  const tilt =
+    unit.shipClassId === SHIP_CLASS_IDS.dropShip
+      ? 0.08
+      : unit.shipClassId === SHIP_CLASS_IDS.fighter
+        ? 0.34
+        : unit.shipClassId === SHIP_CLASS_IDS.battleship
+          ? 0.58
+          : 0.2;
+
+  return normalizeOrFallback(
+    {
+      x: baseAxis.x + spreadAxis.x * tilt * side,
+      y: baseAxis.y + spreadAxis.y * tilt * side,
+      z: baseAxis.z + spreadAxis.z * tilt * side,
+    },
+    baseAxis
+  );
+}
+
+function readNpcOrbitDirection(
+  unit: SimUnit,
+  planet: SimPlanet,
+  axis: Vec3Data
+): -1 | 1 {
+  const offset = subtract(unit.position, planet.position);
+  const radial = projectOntoPlane(offset, axis);
+  const radialDirection =
+    lengthSquared(radial) > 0.000001
+      ? normalizeOrFallback(radial, stablePerpendicular(axis, unit.shipClassId))
+      : stablePerpendicular(axis, unit.shipClassId);
+  const tangent = cross(axis, radialDirection);
+  const heading =
+    lengthSquared(unit.velocity) > 0.000001
+      ? normalizeOrFallback(unit.velocity, tangent)
+      : yawForward(unit);
+
+  if (lengthSquared(tangent) <= 0.000001 || lengthSquared(heading) <= 0.000001) {
+    return unit.owner === 1 ? 1 : -1;
+  }
+
+  return dot(tangent, heading) >= 0 ? 1 : -1;
 }
 
 function sameUnitOrder(
@@ -242,10 +428,30 @@ function sameUnitOrder(
       right.type === "guardPlanet" ||
       right.type === "orbitPlanet")
   ) {
-    return sameHandle(left.planet, right.planet);
+    return (
+      sameHandle(left.planet, right.planet) &&
+      sameOrbitLane(left.lane, right.lane)
+    );
   }
 
   return false;
+}
+
+function sameOrbitLane(
+  left: OrbitLaneSpec | undefined,
+  right: OrbitLaneSpec | undefined
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return (
+    Math.abs(left.radius - right.radius) < 0.01 &&
+    left.direction === right.direction &&
+    Math.abs(left.axis.x - right.axis.x) < 0.001 &&
+    Math.abs(left.axis.y - right.axis.y) < 0.001 &&
+    Math.abs(left.axis.z - right.axis.z) < 0.001
+  );
 }
 
 function findProtectedDropShip(world: SimWorld, unit: SimUnit): SimUnit | null {
@@ -546,4 +752,108 @@ function findNearestEnemy(
   }
 
   return best;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function clamp01(value: number): number {
+  return clamp(value, 0, 1);
+}
+
+function subtract(left: Vec3Data, right: Vec3Data): Vec3Data {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z,
+  };
+}
+
+function dot(left: Vec3Data, right: Vec3Data): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+function cross(left: Vec3Data, right: Vec3Data): Vec3Data {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x,
+  };
+}
+
+function projectOntoPlane(vector: Vec3Data, normal: Vec3Data): Vec3Data {
+  const planeOffset = dot(vector, normal);
+
+  return {
+    x: vector.x - normal.x * planeOffset,
+    y: vector.y - normal.y * planeOffset,
+    z: vector.z - normal.z * planeOffset,
+  };
+}
+
+function lengthSquared(vector: Vec3Data): number {
+  return vector.x * vector.x + vector.y * vector.y + vector.z * vector.z;
+}
+
+function normalizeOrFallback(vector: Vec3Data, fallback: Vec3Data): Vec3Data {
+  const vectorLengthSquared = lengthSquared(vector);
+
+  if (vectorLengthSquared <= 0.000001) {
+    const fallbackLengthSquared = lengthSquared(fallback);
+
+    return fallbackLengthSquared <= 0.000001
+      ? { x: 0, y: 1, z: 0 }
+      : scale(fallback, 1 / Math.sqrt(fallbackLengthSquared));
+  }
+
+  return scale(vector, 1 / Math.sqrt(vectorLengthSquared));
+}
+
+function scale(vector: Vec3Data, scalar: number): Vec3Data {
+  return {
+    x: vector.x * scalar,
+    y: vector.y * scalar,
+    z: vector.z * scalar,
+  };
+}
+
+function stablePerpendicular(axis: Vec3Data, salt: number): Vec3Data {
+  const references: readonly Vec3Data[] = [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 0, z: 1 },
+    { x: 0, y: 1, z: 0 },
+  ];
+  const primary = references[Math.abs(salt) % references.length];
+  let perpendicular = cross(axis, primary);
+
+  if (lengthSquared(perpendicular) <= 0.000001) {
+    perpendicular = cross(
+      axis,
+      references[(Math.abs(salt) + 1) % references.length]
+    );
+  }
+
+  return normalizeOrFallback(perpendicular, { x: 1, y: 0, z: 0 });
+}
+
+function yawForward(unit: SimUnit): Vec3Data {
+  return normalizeOrFallback(
+    {
+      x:
+        2 *
+        (unit.rotation.x * unit.rotation.z +
+          unit.rotation.w * unit.rotation.y),
+      y:
+        2 *
+        (unit.rotation.y * unit.rotation.z -
+          unit.rotation.w * unit.rotation.x),
+      z:
+        1 -
+        2 *
+          (unit.rotation.x * unit.rotation.x +
+            unit.rotation.y * unit.rotation.y),
+    },
+    { x: unit.owner === 1 ? 1 : -1, y: 0, z: 0 }
+  );
 }

@@ -11,6 +11,12 @@ export type MoveUnitsCommand = Readonly<{
   target: Vec3Data;
 }>;
 
+export type OrbitLaneSpec = Readonly<{
+  radius: number;
+  axis: Vec3Data;
+  direction: -1 | 1;
+}>;
+
 export type UnitOrderIntent =
   | Readonly<{
       type: "moveTo";
@@ -23,14 +29,17 @@ export type UnitOrderIntent =
   | Readonly<{
       type: "capturePlanet";
       planet: EntityHandle;
+      lane?: OrbitLaneSpec;
     }>
   | Readonly<{
       type: "guardPlanet";
       planet: EntityHandle;
+      lane?: OrbitLaneSpec;
     }>
   | Readonly<{
       type: "orbitPlanet";
       planet: EntityHandle;
+      lane?: OrbitLaneSpec;
     }>
   | Readonly<{
       type: "escort";

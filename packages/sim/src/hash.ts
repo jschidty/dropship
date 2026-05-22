@@ -173,6 +173,7 @@ function hashUnitOrder(hasher: FnvHasher, value: unknown): void {
   }
 
   hashKnownObject(hasher, order, [
+    ["lane", hashOrbitLaneSpec],
     ["planet", hashEntityHandle],
     ["type"],
   ]);
@@ -197,6 +198,14 @@ function hashOrbitState(hasher: FnvHasher, value: unknown): void {
     ["isOrbiting"],
     ["orbitTicks"],
     ["planet", hashNullableEntityHandle],
+  ]);
+}
+
+function hashOrbitLaneSpec(hasher: FnvHasher, value: unknown): void {
+  hashKnownObject(hasher, value as Record<string, unknown>, [
+    ["axis", hashQuantizedVec3],
+    ["direction"],
+    ["radius", hashQuantizedNumber],
   ]);
 }
 

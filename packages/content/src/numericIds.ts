@@ -9,6 +9,7 @@ export const SHIP_COMPONENT_IDS = {
   fuelTankSmall: 2,
   cargoBaySmall: 3,
   pulseLaserSmall: 4,
+  bombardLaserSmall: 5,
 } as const;
 
 export const MESH_IDS = {

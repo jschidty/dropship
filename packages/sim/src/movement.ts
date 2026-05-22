@@ -4,6 +4,7 @@ import {
   type SimEscortTuningConfig,
   type SimMovementTuningConfig,
   type SimOrbitTuningConfig,
+  type OrbitLaneSpec,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -106,8 +107,20 @@ export function computeOrbitVelocityAroundPlanet(
   tick: number,
   stats: ShipStats,
   targetRadius: number,
-  orbit: SimOrbitTuningConfig = DEFAULT_SIM_TUNING.orbit
+  orbit: SimOrbitTuningConfig = DEFAULT_SIM_TUNING.orbit,
+  lane?: OrbitLaneSpec
 ): Vec3Data {
+  if (lane) {
+    return computeOrbitLaneVelocityAroundPlanet(
+      unit,
+      planet,
+      tick,
+      stats,
+      lane,
+      orbit
+    );
+  }
+
   const x = unit.position.x - planet.position.x;
   const z = unit.position.z - planet.position.z;
   const radius = Math.max(deterministicSqrt(x * x + z * z), 1);
@@ -140,6 +153,65 @@ export function computeOrbitVelocityAroundPlanet(
     x: -radialZ * orbitSign + radialX * radialCorrection,
     y: verticalCorrection + pulse * orbit.pulseVerticalWeight,
     z: radialX * orbitSign + radialZ * radialCorrection,
+  });
+
+  return scale(direction, stats.cruiseSpeed * (orbit.speedBaseRatio + pulse));
+}
+
+function computeOrbitLaneVelocityAroundPlanet(
+  unit: SimUnit,
+  planet: SimPlanet,
+  tick: number,
+  stats: ShipStats,
+  lane: OrbitLaneSpec,
+  orbit: SimOrbitTuningConfig
+): Vec3Data {
+  const axis = normalizeOrFallback(lane.axis, { x: 0, y: 1, z: 0 });
+  const offset = subtract(unit.position, planet.position);
+  const planeOffset = dot(offset, axis);
+  const planar = {
+    x: offset.x - axis.x * planeOffset,
+    y: offset.y - axis.y * planeOffset,
+    z: offset.z - axis.z * planeOffset,
+  };
+  const planarRadius = length(planar);
+  const radial =
+    planarRadius > SIM_EPSILON
+      ? scale(planar, 1 / planarRadius)
+      : perpendicularToAxis(axis);
+  const targetRadius = Math.max(lane.radius, planet.radius * 1.05, 1);
+  const radialError = planarRadius - targetRadius;
+  const radialCorrection =
+    -clamp(
+      radialError / Math.max(planet.radius, 1),
+      -orbit.radialCorrectionMax,
+      orbit.radialCorrectionMax
+    ) * orbit.radialCorrectionWeight;
+  const planeCorrection = -clamp(
+    planeOffset /
+      Math.max(planet.radius * orbit.verticalCorrectionRangeMultiplier, 1),
+    -orbit.verticalCorrectionMax,
+    orbit.verticalCorrectionMax
+  );
+  const pulse =
+    deterministicSin(
+      tick * orbit.pulseFrequencyPerTick +
+        unitScalar(unit, 0x41c64e6d) * SIM_TAU
+    ) * orbit.pulseAmplitude;
+  const tangent = cross(axis, radial);
+  const direction = normalize({
+    x:
+      tangent.x * lane.direction +
+      radial.x * radialCorrection +
+      axis.x * (planeCorrection + pulse * orbit.pulseVerticalWeight),
+    y:
+      tangent.y * lane.direction +
+      radial.y * radialCorrection +
+      axis.y * (planeCorrection + pulse * orbit.pulseVerticalWeight),
+    z:
+      tangent.z * lane.direction +
+      radial.z * radialCorrection +
+      axis.z * (planeCorrection + pulse * orbit.pulseVerticalWeight),
   });
 
   return scale(direction, stats.cruiseSpeed * (orbit.speedBaseRatio + pulse));
@@ -257,6 +329,33 @@ export function normalize(vector: Vec3Data): Vec3Data {
   }
 
   return scale(vector, 1 / vectorLength);
+}
+
+function normalizeOrFallback(vector: Vec3Data, fallback: Vec3Data): Vec3Data {
+  const normalized = normalize(vector);
+
+  return lengthSquared(normalized) > SIM_EPSILON
+    ? normalized
+    : normalize(fallback);
+}
+
+function dot(a: Vec3Data, b: Vec3Data): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function cross(a: Vec3Data, b: Vec3Data): Vec3Data {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+function perpendicularToAxis(axis: Vec3Data): Vec3Data {
+  const reference =
+    Math.abs(axis.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+
+  return normalize(cross(axis, reference));
 }
 
 export function limitLength(vector: Vec3Data, maxLength: number): Vec3Data {

@@ -18,7 +18,7 @@ export type CameraControls = {
   panOffset: THREE.Vector3;
   viewHeights: Record<CameraMode, number>;
   isDragging: boolean;
-  dragMode: "camera" | "pan" | "select" | null;
+  dragMode: "camera" | "pan" | "select" | "orbitLane" | null;
   pointerId: number | null;
   startPointerX: number;
   startPointerY: number;

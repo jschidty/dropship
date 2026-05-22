@@ -2,7 +2,7 @@ import type { PlayerId } from "./handles";
 import type { UnitOrderIntent } from "./commands";
 
 export const PROTOCOL_VERSION = 1;
-export const CONTENT_VERSION = 1;
+export const CONTENT_VERSION = 2;
 export const DEFAULT_COMMAND_LEAD_TICKS = 4;
 export const PHASE_ONE_SIM_HZ = 30;
 

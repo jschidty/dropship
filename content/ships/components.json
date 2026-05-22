@@ -42,5 +42,17 @@
     "damage": 8,
     "cooldownTicks": 12,
     "range": 90
+  },
+  {
+    "id": 5,
+    "slug": "bombard-laser-small",
+    "displayName": "Small Bombard Laser",
+    "type": "weapon",
+    "size": "small",
+    "mass": 0,
+    "powerDraw": 2,
+    "damage": 8,
+    "cooldownTicks": 12,
+    "range": 150
   }
 ]

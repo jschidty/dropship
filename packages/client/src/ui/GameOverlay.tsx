@@ -71,11 +71,20 @@ export type SelectedPlanetStatsSnapshot = Readonly<{
   captureProgress: number | null;
 }>;
 
+export type SelectedUnitObjectiveSnapshot = Readonly<{
+  orderLabel: string;
+  targetLabel: string;
+  distanceLabel: string;
+  detailLabel: string;
+  state: "idle" | "move" | "attack" | "planet" | "escort";
+}>;
+
 export type GameOverlaySnapshot = Readonly<{
   activeCameraPreset: CameraPreset | null;
   tacticalOverlayEnabled: boolean;
   renderMode: RenderQualityMode;
   selectedUnits: readonly UnitViewModel[];
+  selectedUnitObjective: SelectedUnitObjectiveSnapshot | null;
   selectedPlanet: SelectedPlanetStatsSnapshot | null;
   commandMenuLeaderKey: string | null;
   pendingCommand: PendingCommandMenuCommand;
@@ -113,6 +122,7 @@ export function createInitialOverlaySnapshot(
     tacticalOverlayEnabled: true,
     renderMode,
     selectedUnits: [],
+    selectedUnitObjective: null,
     selectedPlanet: null,
     commandMenuLeaderKey: null,
     pendingCommand: null,
@@ -395,6 +405,7 @@ function SelectedObjectStatsPanel({
       <ShipStatsPanel
         unit={selectedUnit}
         selectedUnits={snapshot.selectedUnits}
+        objective={snapshot.selectedUnitObjective}
       />
     );
   }
@@ -480,9 +491,11 @@ function PlanetStatsPanel({
 function ShipStatsPanel({
   unit,
   selectedUnits,
+  objective,
 }: {
   unit: UnitViewModel;
   selectedUnits: readonly UnitViewModel[];
+  objective: SelectedUnitObjectiveSnapshot | null;
 }) {
   const totalHealth = selectedUnits.reduce(
     (sum, selectedUnit) => sum + selectedUnit.health.current,
@@ -521,48 +534,41 @@ function ShipStatsPanel({
           </div>
         </div>
       </div>
+      <ShipObjectiveSummary objective={objective} />
       <ShipLoadoutGraph unit={unit} />
-      <dl className="selected-object-stat-list selected-object-stat-list-bars">
+      <dl className="selected-object-stat-list selected-object-stat-list-ship">
         <SelectedObjectStat
           label={selectedUnits.length > 1 ? "Group HP" : "Hull"}
           value={`${formatScalar(totalHealth)} / ${formatScalar(totalMaxHealth)}`}
-          fill={readRatio(totalHealth, totalMaxHealth)}
         />
         <SelectedObjectStat
           label="Mass"
           value={formatScalar(unit.stats.dryMass)}
-          fill={readRatio(unit.stats.dryMass, 120)}
         />
         <SelectedObjectStat
           label="Power"
           value={`${formatScalar(unit.stats.powerAvailable)} spare`}
-          fill={readRatio(unit.stats.powerDraw, unit.stats.basePower)}
           state={unit.stats.powerAvailable < 0 ? "warn" : "ok"}
         />
         <SelectedObjectStat
           label="Speed"
           value={formatScalar(unit.stats.maxSpeed)}
-          fill={readRatio(unit.stats.maxSpeed, 36)}
         />
         <SelectedObjectStat
           label="Accel"
           value={formatScalar(unit.stats.maxAcceleration)}
-          fill={readRatio(unit.stats.maxAcceleration, 64)}
         />
         <SelectedObjectStat
           label="Weapons"
           value={unit.stats.weaponCount.toString()}
-          fill={readRatio(unit.stats.weaponCount, 6)}
         />
         <SelectedObjectStat
           label="Fuel"
           value={formatScalar(unit.stats.fuelCapacity)}
-          fill={readRatio(unit.stats.fuelCapacity, 120)}
         />
         <SelectedObjectStat
           label="Cargo"
           value={formatScalar(unit.stats.cargoCapacity)}
-          fill={readRatio(unit.stats.cargoCapacity, 32)}
         />
       </dl>
       <div
@@ -572,6 +578,45 @@ function ShipStatsPanel({
         Selected {selectedUnits.length} ships / focused #{unit.handle.id}
       </div>
     </aside>
+  );
+}
+
+function ShipObjectiveSummary({
+  objective,
+}: {
+  objective: SelectedUnitObjectiveSnapshot | null;
+}) {
+  const resolved = objective ?? {
+    orderLabel: "Idle",
+    targetLabel: "No active objective",
+    distanceLabel: "Ready",
+    detailLabel: "",
+    state: "idle" as const,
+  };
+
+  return (
+    <section
+      className="selected-object-objective"
+      data-state={resolved.state}
+      aria-label="Current order"
+    >
+      <div className="selected-object-objective-kicker">Current order</div>
+      <div className="selected-object-objective-title">
+        {resolved.orderLabel}
+      </div>
+      <div className="selected-object-objective-distance">
+        {resolved.distanceLabel}
+      </div>
+      <div className="selected-object-objective-target">
+        {resolved.targetLabel}
+      </div>
+      <div
+        className="selected-object-objective-detail"
+        hidden={!resolved.detailLabel}
+      >
+        {resolved.detailLabel}
+      </div>
+    </section>
   );
 }
 
@@ -640,27 +685,14 @@ function LoadoutSlotNode({
 function SelectedObjectStat({
   label,
   value,
-  fill,
   state = "neutral",
 }: {
   label: string;
   value: string;
-  fill?: number;
   state?: "neutral" | "ok" | "warn";
 }) {
   return (
-    <div
-      className="selected-object-stat"
-      data-state={state}
-      style={
-        fill === undefined
-          ? undefined
-          : ({ "--stat-fill": `${clamp01(fill) * 100}%` } as Record<
-              string,
-              string
-            >)
-      }
-    >
+    <div className="selected-object-stat" data-state={state}>
       <dt>{label}</dt>
       <dd>{value}</dd>
     </div>
@@ -1106,10 +1138,6 @@ function readLoadoutSlotColor(
   }
 }
 
-function readRatio(value: number, max: number): number {
-  return max > 0 ? clamp01(value / max) : 0;
-}
-
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
@@ -1171,16 +1199,17 @@ const COMMAND_UNIT_GROUPS: readonly CommandUnitGroupDefinition[] = [
 
 const HOTKEYS: readonly (readonly [string, string])[] = [
   ["1", "Select all owned units"],
-  ["8", "Select fighters"],
-  ["9", "Select battleships"],
-  ["0", "Select drop ships"],
+  ["8", "Filter/select fighters"],
+  ["9", "Filter/select battleships"],
+  ["0", "Filter/select drop ships"],
   ["D", "Clear selection"],
   ["C", "Capture selected planet"],
   ["G", "Guard selected planet"],
   ["T", "Toggle tactical overlay"],
   ["P", "Pause and show hotkeys"],
   ["Space", "Reselect previous command group"],
-  ["Tab", "Toggle tactical/strategic camera"],
+  ["Tab", "Cycle nearby enemy target"],
+  ["Shift+Tab", "Cycle previous enemy target"],
 ];
 
 function createUnitGroups(

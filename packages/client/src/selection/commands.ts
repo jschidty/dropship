@@ -21,3 +21,22 @@ export function selectMoveOrderUnits(
 
   return leader ? [leader] : selectedUnits;
 }
+
+export function selectClassHotkeyUnitKeys(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  selectedUnitKeys: ReadonlySet<string>,
+  shipClassId: number
+): readonly string[] {
+  const ownedClassUnitKeys = units
+    .filter(
+      (unit) => unit.owner === playerId && unit.shipClassId === shipClassId
+    )
+    .map((unit) => unit.key);
+
+  if (selectedUnitKeys.size === 0) {
+    return ownedClassUnitKeys;
+  }
+
+  return ownedClassUnitKeys.filter((unitKey) => selectedUnitKeys.has(unitKey));
+}

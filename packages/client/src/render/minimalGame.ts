@@ -4,6 +4,7 @@ import gasGiantNoiseTextureUrl from "../../../../content/images/red-gas-giant/no
 import {
   PHASE_ONE_SIM_HZ,
   SHIP_CLASS_IDS,
+  handleKey,
   type CaptureRulesConfig,
   type MatchConfig,
   type PlanetClass,
@@ -81,6 +82,7 @@ import {
   type CommandHistoryEntry,
   type PendingCommandMenuCommand,
   type SelectedPlanetStatsSnapshot,
+  type SelectedUnitObjectiveSnapshot,
 } from "../ui/GameOverlay";
 import {
   createMatchEndDialogSnapshot,
@@ -89,7 +91,21 @@ import {
 import { createUiStore } from "../ui/store";
 import { createMinimalLocalGame } from "../runtime/localGame";
 import { DEFAULT_LOCAL_PLAYER_ID } from "../runtime/matchConfig";
-import { selectMoveOrderUnits } from "../selection/commands";
+import {
+  selectClassHotkeyUnitKeys,
+  selectMoveOrderUnits,
+} from "../selection/commands";
+import {
+  selectPrimarySceneSelectionCandidate,
+  toSceneSelectionTarget,
+  type SceneSelectionCandidate,
+  type SceneSelectionTarget,
+} from "../selection/interactions";
+import {
+  rankAttackTargetCandidates,
+  selectNextAttackTargetKey,
+  type AttackTargetCandidate,
+} from "../selection/targeting";
 import type {
   LocalGameRuntime,
   MountedGame,
@@ -120,11 +136,6 @@ type TacticalGrid = Readonly<{
   intersection: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
 }>;
 
-type PlanetHoverRing = Readonly<{
-  root: THREE.Group;
-  ring: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-}>;
-
 type CommandHistoryRecord = CommandHistoryEntry &
   Readonly<{
     unitKeys: readonly string[];
@@ -133,6 +144,11 @@ type CommandHistoryRecord = CommandHistoryEntry &
 type IssuedUnitCommand = Readonly<{
   label: string;
   units: readonly UnitViewModel[];
+  attackTargetKey?: string;
+}>;
+
+type CompleteIssuedCommandOptions = Readonly<{
+  preserveSelection?: boolean;
 }>;
 
 type CaptureProgressRing = {
@@ -175,6 +191,58 @@ type SelectedLeaderArrow = {
   visible: boolean;
   transform: string;
 };
+
+type AttackTargetMarkerState = "hover" | "cycle" | "locked";
+
+type AttackTargetMarker = {
+  element: HTMLElement;
+  label: HTMLElement;
+  visible: boolean;
+  transform: string;
+  labelText: string;
+  state: AttackTargetMarkerState;
+  sizePx: number;
+};
+
+type PlanetSelectionMarkerState = "selected" | "hover";
+
+type PlanetScreenRing = {
+  element: HTMLElement;
+  visible: boolean;
+  transform: string;
+  sizePx: number;
+  accentColor: string;
+  state: PlanetSelectionMarkerState;
+};
+
+type PlanetSelectionMarker = {
+  element: HTMLElement;
+  title: HTMLElement;
+  detail: HTMLElement;
+  visible: boolean;
+  transform: string;
+  titleText: string;
+  detailText: string;
+  accentColor: string;
+  state: PlanetSelectionMarkerState;
+};
+
+type ScreenAttackTargetCandidate = AttackTargetCandidate &
+  Readonly<{
+    unit: UnitViewModel;
+  }>;
+
+type ScreenSceneSelectionCandidate = SceneSelectionCandidate &
+  (
+    | Readonly<{
+        kind: "friendlyUnit" | "enemyUnit";
+        unit: UnitViewModel;
+      }>
+    | Readonly<{
+        kind: "planet";
+        planet: PlanetViewModel;
+      }>
+  );
 
 type SkyDome = Readonly<{
   scene: THREE.Scene;
@@ -247,6 +315,13 @@ const COMMAND_HISTORY_LIMIT = 10;
 const PLANET_SELECTION_MIN_RADIUS_PX = 28;
 const PLANET_SELECTION_RADIUS_MULTIPLIER = 2.16;
 const PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER = 2.28;
+const PLANET_SELECTION_LABEL_GAP_PX = 10;
+const ATTACK_TARGET_PICK_MIN_RADIUS_PX = 18;
+const ATTACK_TARGET_HOVER_RADIUS_MULTIPLIER = 0.78;
+const ATTACK_TARGET_TAB_RADIUS_PX = 142;
+const ATTACK_TARGET_TAB_FALLBACK_RADIUS_PX = 220;
+const FRIENDLY_UNIT_PICK_MIN_RADIUS_PX = 8;
+const FRIENDLY_UNIT_HOVER_RADIUS_MULTIPLIER = 0.8;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const CAMERA_ZOOM_TWEEN_MS = 560;
 const CAMERA_ZOOM_TO_FIT_PADDING = 1.18;
@@ -370,17 +445,19 @@ export function mountMinimalGame(
   const planetRingMaterial = createPlanetRingMaterial();
   const gravityOverlay = createGravityOverlay();
   worldGroup.add(gravityOverlay.root);
-  const planetSelectionRing = createPlanetSelectionRing();
-  worldGroup.add(planetSelectionRing.root);
-  const planetHoverRing = createPlanetHoverRing();
-  worldGroup.add(planetHoverRing.root);
+  const selectedPlanetRing = createPlanetScreenRing(container, "selected");
+  const hoveredPlanetRing = createPlanetScreenRing(container, "hover");
+  const selectedPlanetMarker = createPlanetSelectionMarker(container, "selected");
+  const hoveredPlanetMarker = createPlanetSelectionMarker(container, "hover");
   const captureProgressRings = new Map<string, CaptureProgressRing>();
   const selectedUnitKeys = new Set<string>();
   const previousCommandSelectionKeys = new Set<string>();
   let selectedPlanetKey: string | null = null;
   let commandMenuLeaderKey: string | null = null;
   let previousCommandLeaderKey: string | null = null;
-  let hoveredPlanetKey: string | null = null;
+  let hoveredSelectionTarget: SceneSelectionTarget | null = null;
+  let cycledAttackTargetKey: string | null = null;
+  let lockedAttackTargetKey: string | null = null;
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = true;
   let singlePlayerPaused =
@@ -398,6 +475,9 @@ export function mountMinimalGame(
   const commandHistory: CommandHistoryRecord[] = [];
   const selectionBox = createSelectionBox(container);
   const leaderArrow = createSelectedLeaderArrow(container);
+  const hoveredAttackTargetMarker = createAttackTargetMarker(container, "hover");
+  const cycledAttackTargetMarker = createAttackTargetMarker(container, "cycle");
+  const lockedAttackTargetMarker = createAttackTargetMarker(container, "locked");
   const overlayStore = createUiStore(
     createInitialOverlaySnapshot(
       renderQuality.mode,
@@ -435,7 +515,7 @@ export function mountMinimalGame(
 
       if (selectedUnitKeys.size === 0) {
         pendingCommand = null;
-        hoveredPlanetKey = null;
+        clearHoveredSelectionTarget();
       }
       publishOverlaySnapshot();
     },
@@ -513,6 +593,8 @@ export function mountMinimalGame(
   let activeSelectionMode: SelectionMode = "replace";
   let selectionDragStarted = false;
   let previousCameraFocusContextKey: string | null = null;
+  let lastPointerClientX: number | null = null;
+  let lastPointerClientY: number | null = null;
   const cameraZoomTween: CameraZoomTween = {
     active: false,
     mode: cameraControls.mode,
@@ -528,6 +610,10 @@ export function mountMinimalGame(
     syncMatchEndDialog();
     syncNetworkStartMenu(connectionStatus);
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+    const selectedStatsUnit = readSelectedStatsUnit(
+      selectedUnits,
+      commandMenuLeaderKey
+    );
     const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
 
     overlayStore.setSnapshot({
@@ -535,6 +621,9 @@ export function mountMinimalGame(
       tacticalOverlayEnabled,
       renderMode: renderQuality.mode,
       selectedUnits,
+      selectedUnitObjective: selectedStatsUnit
+        ? createSelectedUnitObjectiveSnapshot(selectedStatsUnit, units, planets)
+        : null,
       selectedPlanet: selectedPlanet
         ? createSelectedPlanetStatsSnapshot(
             selectedPlanet,
@@ -731,10 +820,11 @@ export function mountMinimalGame(
     selectedPlanetKey = null;
     commandMenuLeaderKey = null;
     previousCommandLeaderKey = null;
-    hoveredPlanetKey = null;
+    clearHoveredSelectionTarget();
     pendingCommand = null;
     commandHistory.length = 0;
     nextCommandHistoryId = 1;
+    clearAttackTargeting();
     twoPlayerShareState = "idle";
     twoPlayerShareMessage = "";
     clearZoomToFitFocus();
@@ -762,6 +852,33 @@ export function mountMinimalGame(
           : "Could not create a two player game.";
       publishOverlaySnapshot();
     }
+  }
+
+  function clearAttackTargeting(): void {
+    cycledAttackTargetKey = null;
+    lockedAttackTargetKey = null;
+  }
+
+  function clearHoveredSelectionTarget(): void {
+    hoveredSelectionTarget = null;
+  }
+
+  function readHoveredFriendlyUnitKey(): string | null {
+    return hoveredSelectionTarget?.kind === "friendlyUnit"
+      ? hoveredSelectionTarget.key
+      : null;
+  }
+
+  function readHoveredAttackTargetKey(): string | null {
+    return hoveredSelectionTarget?.kind === "enemyUnit"
+      ? hoveredSelectionTarget.key
+      : null;
+  }
+
+  function readHoveredPlanetKey(): string | null {
+    return hoveredSelectionTarget?.kind === "planet"
+      ? hoveredSelectionTarget.key
+      : null;
   }
 
   function recordCommandHistory(command: IssuedUnitCommand): void {
@@ -806,17 +923,30 @@ export function mountMinimalGame(
       selectedUnitKeys
     );
     pendingCommand = null;
-    hoveredPlanetKey = null;
+    clearHoveredSelectionTarget();
+    clearAttackTargeting();
     publishOverlaySnapshot();
   }
 
-  function completeIssuedCommand(command: IssuedUnitCommand): void {
+  function completeIssuedCommand(
+    command: IssuedUnitCommand,
+    options: CompleteIssuedCommandOptions = {}
+  ): void {
     rememberCurrentCommandSelection();
     recordCommandHistory(command);
-    selectedUnitKeys.clear();
-    commandMenuLeaderKey = null;
+    if (options.preserveSelection) {
+      commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+        commandMenuLeaderKey,
+        selectedUnitKeys
+      );
+    } else {
+      selectedUnitKeys.clear();
+      commandMenuLeaderKey = null;
+    }
     pendingCommand = null;
-    hoveredPlanetKey = null;
+    clearHoveredSelectionTarget();
+    cycledAttackTargetKey = command.attackTargetKey ?? null;
+    lockedAttackTargetKey = command.attackTargetKey ?? null;
     publishOverlaySnapshot();
   }
 
@@ -849,7 +979,8 @@ export function mountMinimalGame(
     );
     selectedPlanetKey = null;
     pendingCommand = null;
-    hoveredPlanetKey = null;
+    clearHoveredSelectionTarget();
+    clearAttackTargeting();
     publishOverlaySnapshot();
   }
 
@@ -893,6 +1024,65 @@ export function mountMinimalGame(
   function clearZoomToFitFocus(): void {
     zoomToFitFocusEnabled = false;
   }
+
+  function cycleAttackTargetFromKeyboard(direction: 1 | -1): boolean {
+    if (!canControlUnits() || selectedUnitKeys.size === 0) {
+      return false;
+    }
+
+    const screenPoint = readLastPointerScreenPoint(
+      renderer.domElement,
+      lastPointerClientX,
+      lastPointerClientY
+    );
+    let candidates = collectAttackTargetCandidates(
+      runtime.readUnits(),
+      runtime.playerId,
+      camera,
+      renderer.domElement,
+      screenPoint.clientX,
+      screenPoint.clientY,
+      scratch,
+      ATTACK_TARGET_TAB_RADIUS_PX
+    );
+
+    if (candidates.length === 0 && screenPoint.source === "pointer") {
+      const bounds = renderer.domElement.getBoundingClientRect();
+
+      candidates = collectAttackTargetCandidates(
+        runtime.readUnits(),
+        runtime.playerId,
+        camera,
+        renderer.domElement,
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+        scratch,
+        ATTACK_TARGET_TAB_FALLBACK_RADIUS_PX
+      );
+    }
+
+    const nextKey = selectNextAttackTargetKey(
+      candidates,
+      cycledAttackTargetKey ??
+        readHoveredAttackTargetKey() ??
+        lockedAttackTargetKey,
+      direction
+    );
+
+    if (!nextKey) {
+      return false;
+    }
+
+    clearZoomToFitFocus();
+    cameraZoomTween.active = false;
+    selectedPlanetKey = null;
+    pendingCommand = null;
+    cycledAttackTargetKey = nextKey;
+    clearHoveredSelectionTarget();
+    publishOverlaySnapshot();
+    return true;
+  }
+
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.repeat) {
       return;
@@ -918,7 +1108,8 @@ export function mountMinimalGame(
 
     if (key === "escape") {
       pendingCommand = null;
-      hoveredPlanetKey = null;
+      clearHoveredSelectionTarget();
+      clearAttackTargeting();
       publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
@@ -954,7 +1145,8 @@ export function mountMinimalGame(
         selectedUnitKeys
       );
       pendingCommand = null;
-      hoveredPlanetKey = null;
+      clearHoveredSelectionTarget();
+      clearAttackTargeting();
       publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
@@ -963,14 +1155,18 @@ export function mountMinimalGame(
 
     if (canControlUnits() && (key === "8" || key === "9" || key === "0")) {
       clearZoomToFitFocus();
-      replaceSelectionWithOwnedUnits(
+      replaceSelectionWithUnitKeys(
         selectedUnitKeys,
-        runtime,
-        key === "8"
-          ? SHIP_CLASS_IDS.fighter
-          : key === "9"
-            ? SHIP_CLASS_IDS.battleship
-            : SHIP_CLASS_IDS.dropShip
+        selectClassHotkeyUnitKeys(
+          runtime.readUnits(),
+          runtime.playerId,
+          selectedUnitKeys,
+          key === "8"
+            ? SHIP_CLASS_IDS.fighter
+            : key === "9"
+              ? SHIP_CLASS_IDS.battleship
+              : SHIP_CLASS_IDS.dropShip
+        )
       );
       selectedPlanetKey = null;
       commandMenuLeaderKey = pruneCommandMenuLeaderKey(
@@ -978,7 +1174,8 @@ export function mountMinimalGame(
         selectedUnitKeys
       );
       pendingCommand = null;
-      hoveredPlanetKey = null;
+      clearHoveredSelectionTarget();
+      clearAttackTargeting();
       publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
@@ -991,7 +1188,8 @@ export function mountMinimalGame(
       selectedPlanetKey = null;
       commandMenuLeaderKey = null;
       pendingCommand = null;
-      hoveredPlanetKey = null;
+      clearHoveredSelectionTarget();
+      clearAttackTargeting();
       publishOverlaySnapshot();
       event.preventDefault();
       event.stopPropagation();
@@ -1007,7 +1205,7 @@ export function mountMinimalGame(
       );
 
       if (issuedCommand) {
-        completeIssuedCommand(issuedCommand);
+        completeIssuedCommand(issuedCommand, { preserveSelection: true });
         event.preventDefault();
       }
       return;
@@ -1022,6 +1220,12 @@ export function mountMinimalGame(
     }
 
     if (key === "tab") {
+      if (cycleAttackTargetFromKeyboard(event.shiftKey ? -1 : 1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       event.preventDefault();
       clearZoomToFitFocus();
       cameraZoomTween.active = false;
@@ -1037,7 +1241,15 @@ export function mountMinimalGame(
       return;
     }
 
+    lastPointerClientX = event.clientX;
+    lastPointerClientY = event.clientY;
+
     event.preventDefault();
+
+    if (event.button === 2 && canControlUnits()) {
+      clearAttackTargeting();
+    }
+
     cameraControls.isDragging = true;
     cameraControls.dragMode = readPointerDragMode(event, canControlUnits());
     cameraControls.pointerId = event.pointerId;
@@ -1050,28 +1262,27 @@ export function mountMinimalGame(
     selectionDragStarted = false;
     clearZoomToFitFocus();
     if (cameraControls.dragMode === "pan") {
-      previousCameraFocusContextKey = readCameraFocusContextKey(
-        selectedPlanetKey,
-        selectedUnitKeys
-      );
+      previousCameraFocusContextKey =
+        readCameraFocusContextKey(selectedUnitKeys);
     }
     hideSelectionBox(selectionBox);
     renderer.domElement.setPointerCapture(event.pointerId);
   };
   const handlePointerMove = (event: PointerEvent) => {
-    if (selectedUnitKeys.size > 0) {
-      hoveredPlanetKey =
-        findPlanetAtPointer(
-          event,
-          renderer.domElement,
-          camera,
-          runtime.readPlanets(),
-          planetProxies,
-          scratch
-        )?.key ?? null;
-    } else {
-      hoveredPlanetKey = null;
-    }
+    lastPointerClientX = event.clientX;
+    lastPointerClientY = event.clientY;
+
+    hoveredSelectionTarget = readPointerSceneSelectionTarget(
+      event,
+      renderer.domElement,
+      camera,
+      runtime.readUnits(),
+      runtime.playerId,
+      runtime.readPlanets(),
+      planetProxies,
+      canControlUnits(),
+      scratch
+    );
 
     if (!cameraControls.isDragging || cameraControls.pointerId !== event.pointerId) {
       return;
@@ -1118,7 +1329,8 @@ export function mountMinimalGame(
           selectedUnitKeys.clear();
           commandMenuLeaderKey = null;
           pendingCommand = null;
-          hoveredPlanetKey = null;
+          clearHoveredSelectionTarget();
+          clearAttackTargeting();
           publishOverlaySnapshot();
         }
       }
@@ -1153,6 +1365,9 @@ export function mountMinimalGame(
       return;
     }
 
+    lastPointerClientX = event.clientX;
+    lastPointerClientY = event.clientY;
+
     if (dragMode === "select" && !wasClick) {
       selectOwnedUnitsInBox(
         selectedUnitKeys,
@@ -1174,30 +1389,40 @@ export function mountMinimalGame(
 
       if (selectedUnitKeys.size === 0) {
         pendingCommand = null;
-        hoveredPlanetKey = null;
+        clearHoveredSelectionTarget();
+        cycledAttackTargetKey = null;
       }
       publishOverlaySnapshot();
       return;
     }
 
     if (dragMode === "select" && wasClick) {
-      const selectedUnit = findOwnedUnitAtPointer(
+      const pointerTarget = readPointerSceneSelectionTarget(
         event,
         renderer.domElement,
         camera,
         runtime.readUnits(),
         runtime.playerId,
+        runtime.readPlanets(),
+        planetProxies,
+        true,
         scratch
       );
 
-      if (selectedUnit) {
+      hoveredSelectionTarget = pointerTarget
+        ? toSceneSelectionTarget(pointerTarget)
+        : null;
+
+      if (pointerTarget?.kind === "friendlyUnit") {
         if (activeSelectionMode === "remove") {
-          selectedUnitKeys.delete(selectedUnit.key);
+          selectedUnitKeys.delete(pointerTarget.key);
         } else if (activeSelectionMode === "replace") {
           selectedUnitKeys.clear();
-          selectedUnitKeys.add(selectedUnit.key);
+          selectedUnitKeys.add(pointerTarget.key);
+          selectedPlanetKey = null;
+          clearAttackTargeting();
         } else {
-          selectedUnitKeys.add(selectedUnit.key);
+          selectedUnitKeys.add(pointerTarget.key);
         }
 
         commandMenuLeaderKey = pruneCommandMenuLeaderKey(
@@ -1207,23 +1432,39 @@ export function mountMinimalGame(
 
         if (selectedUnitKeys.size === 0) {
           pendingCommand = null;
-          hoveredPlanetKey = null;
+          clearHoveredSelectionTarget();
+          cycledAttackTargetKey = null;
         }
 
         publishOverlaySnapshot();
         return;
       }
 
-      const selectedPlanet = findPlanetAtPointer(
-        event,
-        renderer.domElement,
-        camera,
-        runtime.readPlanets(),
-        planetProxies,
-        scratch
-      );
+      if (pointerTarget?.kind === "enemyUnit") {
+        const attackTarget = pointerTarget.unit;
+        selectedPlanetKey = null;
+        pendingCommand = null;
+        cycledAttackTargetKey = attackTarget.key;
 
-      if (selectedPlanet) {
+        if (selectedUnitKeys.size > 0) {
+          const issuedCommand = issueAttackOrderFromSelection(
+            runtime,
+            selectedUnitKeys,
+            attackTarget.key
+          );
+
+          if (issuedCommand) {
+            completeIssuedCommand(issuedCommand);
+            return;
+          }
+        }
+
+        publishOverlaySnapshot();
+        return;
+      }
+
+      if (pointerTarget?.kind === "planet") {
+        const { planet: selectedPlanet } = pointerTarget;
         if (selectedUnitKeys.size > 0) {
           selectedPlanetKey = selectedPlanet.key;
           const issuedCommand = issuePlanetOrderFromSelection(
@@ -1234,7 +1475,7 @@ export function mountMinimalGame(
           );
 
           if (issuedCommand) {
-            completeIssuedCommand(issuedCommand);
+            completeIssuedCommand(issuedCommand, { preserveSelection: true });
             return;
           }
         } else {
@@ -1245,8 +1486,31 @@ export function mountMinimalGame(
         }
 
         pendingCommand = null;
-        hoveredPlanetKey =
-          selectedUnitKeys.size > 0 ? selectedPlanet.key : null;
+        publishOverlaySnapshot();
+        return;
+      }
+
+      const cycledAttackTarget = readAttackTargetByKey(
+        runtime.readUnits(),
+        runtime.playerId,
+        cycledAttackTargetKey
+      );
+
+      if (cycledAttackTarget && canControlUnits() && selectedUnitKeys.size > 0) {
+        selectedPlanetKey = null;
+        pendingCommand = null;
+
+        const issuedCommand = issueAttackOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          cycledAttackTarget.key
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand);
+          return;
+        }
+
         publishOverlaySnapshot();
         return;
       }
@@ -1271,7 +1535,9 @@ export function mountMinimalGame(
     event.preventDefault();
   };
   const handlePointerLeave = () => {
-    hoveredPlanetKey = null;
+    clearHoveredSelectionTarget();
+    lastPointerClientX = null;
+    lastPointerClientY = null;
   };
   const handleWheel = (event: WheelEvent) => {
     event.preventDefault();
@@ -1314,8 +1580,6 @@ export function mountMinimalGame(
           cameraFocusTween,
           scratch.focus,
           runtime.readUnits(),
-          runtime.readPlanets(),
-          selectedPlanetKey,
           selectedUnitKeys
         ),
         cameraControls
@@ -1451,27 +1715,36 @@ export function mountMinimalGame(
       commandMenuLeaderKey,
       selectedUnitKeys
     );
-    hoveredPlanetKey = pruneSelectedPlanetKey(hoveredPlanetKey, planets);
+    hoveredSelectionTarget = pruneSceneSelectionTarget(
+      hoveredSelectionTarget,
+      units,
+      planets,
+      runtime.playerId
+    );
+    cycledAttackTargetKey = pruneAttackTargetKey(
+      cycledAttackTargetKey,
+      units,
+      runtime.playerId
+    );
+    lockedAttackTargetKey = pruneAttackTargetKey(
+      lockedAttackTargetKey,
+      units,
+      runtime.playerId
+    );
 
     if (selectedUnitKeys.size === 0) {
       pendingCommand = null;
-      hoveredPlanetKey = null;
     }
 
+    const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
     const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
-    const hoveredPlanet = getSelectedPlanet(planets, hoveredPlanetKey);
+    const hoveredPlanet = getSelectedPlanet(planets, readHoveredPlanetKey());
     const focus = zoomToFitFocusEnabled
       ? scratch.focus.copy(zoomToFitFocus)
-      : writeCameraFocusPosition(
-          scratch.focus,
-          units,
-          planets,
-          selectedPlanetKey,
-          selectedUnitKeys
-        );
+      : writeCameraFocusPosition(scratch.focus, units, selectedUnitKeys);
     const cameraFocusContextKey = zoomToFitFocusEnabled
       ? `fit:${zoomToFitContextId}`
-      : readCameraFocusContextKey(selectedPlanetKey, selectedUnitKeys);
+      : readCameraFocusContextKey(selectedUnitKeys);
 
     if (cameraFocusContextKey !== previousCameraFocusContextKey) {
       cameraControls.panOffset.set(0, 0, 0);
@@ -1524,11 +1797,25 @@ export function mountMinimalGame(
       hideSelectedLeaderArrow(leaderArrow);
     }
 
+    updateAttackTargetMarkers(
+      hoveredAttackTargetMarker,
+      cycledAttackTargetMarker,
+      lockedAttackTargetMarker,
+      units,
+      readHoveredAttackTargetKey(),
+      cycledAttackTargetKey,
+      lockedAttackTargetKey,
+      camera,
+      viewport,
+      scratch
+    );
+
     updateLighting(lighting, sunDirection, sunColor);
     updateUnitBatches(
       unitBatches,
       units,
       selectedUnitKeys,
+      readHoveredFriendlyUnitKey(),
       planets,
       camera,
       worldUnitsPerPixel,
@@ -1563,17 +1850,27 @@ export function mountMinimalGame(
       false,
       cameraControls.preset
     );
-    updatePlanetSelectionRing(
-      planetSelectionRing,
-      selectedPlanet,
-      cameraControls.mode === "tactical",
-      cameraControls.preset
+    updatePlanetScreenRings(
+      selectedPlanetRing,
+      hoveredPlanetRing,
+      cameraControls.mode === "tactical" ? selectedPlanet : null,
+      tacticalOverlayEnabled ? hoveredPlanet : null,
+      runtime.world.config.players,
+      camera,
+      viewport,
+      scratch
     );
-    updatePlanetHoverRing(
-      planetHoverRing,
+    updatePlanetSelectionMarkers(
+      selectedPlanetMarker,
+      hoveredPlanetMarker,
+      selectedPlanet,
       hoveredPlanet,
-      tacticalOverlayEnabled && selectedUnitKeys.size > 0,
-      cameraControls.preset
+      selectedUnits,
+      runtime.world.config.players,
+      readCaptureRules(runtime.world),
+      camera,
+      viewport,
+      scratch
     );
     updateGravityOverlay(
       gravityOverlay,
@@ -1606,7 +1903,7 @@ export function mountMinimalGame(
 
     if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
       container.dataset.cameraMode = cameraControls.mode;
-      container.dataset.cameraFocus = selectedPlanet?.label ?? "units";
+      container.dataset.cameraFocus = cameraFocusContextKey;
       container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
       container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
       container.dataset.cameraViewHeight =
@@ -1701,8 +1998,6 @@ export function mountMinimalGame(
         cameraFocusTween,
         scratch.focus,
         runtime.readUnits(),
-        runtime.readPlanets(),
-        selectedPlanetKey,
         selectedUnitKeys
       ),
       cameraControls
@@ -1747,11 +2042,11 @@ export function mountMinimalGame(
       renderer.domElement.removeEventListener("contextmenu", handleContextMenu);
       renderer.domElement.removeEventListener("wheel", handleWheel);
       overlay.dispose();
+      disposePlanetScreenRing(selectedPlanetRing);
+      disposePlanetScreenRing(hoveredPlanetRing);
       disposeUnitBatchRenderer(unitBatches);
       disposeProjectileParticleRenderer(projectileParticles);
       disposeGravityOverlay(gravityOverlay);
-      disposePlanetHoverRing(planetSelectionRing);
-      disposePlanetHoverRing(planetHoverRing);
       disposeCaptureProgressRings(worldGroup, captureProgressRings);
       disposeTacticalGrid(tacticalGrid);
       disposePlanetProxies(worldGroup, planetProxies);
@@ -1957,6 +2252,561 @@ function updateSelectedLeaderArrow(
   }
 }
 
+function createAttackTargetMarker(
+  container: HTMLElement,
+  state: AttackTargetMarkerState
+): AttackTargetMarker {
+  const marker = document.createElement("div");
+  marker.className = "attack-target-marker";
+  marker.dataset.state = state;
+  marker.hidden = true;
+
+  const label = document.createElement("div");
+  label.className = "attack-target-marker-label";
+  marker.appendChild(label);
+  container.appendChild(marker);
+
+  return {
+    element: marker,
+    label,
+    visible: false,
+    transform: "",
+    labelText: "",
+    state,
+    sizePx: 0,
+  };
+}
+
+function hideAttackTargetMarker(marker: AttackTargetMarker): void {
+  if (!marker.visible) {
+    return;
+  }
+
+  marker.element.hidden = true;
+  marker.visible = false;
+  marker.transform = "";
+  marker.labelText = "";
+  marker.label.textContent = "";
+  marker.sizePx = 0;
+}
+
+function updateAttackTargetMarkers(
+  hoverMarker: AttackTargetMarker,
+  cycleMarker: AttackTargetMarker,
+  lockedMarker: AttackTargetMarker,
+  units: readonly UnitViewModel[],
+  hoveredKey: string | null,
+  cycledKey: string | null,
+  lockedKey: string | null,
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  scratch: RenderScratch
+): void {
+  const lockedTarget = lockedKey
+    ? units.find((unit) => unit.key === lockedKey) ?? null
+    : null;
+  const cycledTarget =
+    cycledKey && cycledKey !== lockedKey
+      ? units.find((unit) => unit.key === cycledKey) ?? null
+      : null;
+  const hoveredTarget =
+    hoveredKey && hoveredKey !== lockedKey && hoveredKey !== cycledKey
+      ? units.find((unit) => unit.key === hoveredKey) ?? null
+      : null;
+
+  updateAttackTargetMarker(
+    lockedMarker,
+    lockedTarget,
+    camera,
+    viewport,
+    scratch
+  );
+  updateAttackTargetMarker(
+    cycleMarker,
+    cycledTarget,
+    camera,
+    viewport,
+    scratch
+  );
+  updateAttackTargetMarker(
+    hoverMarker,
+    hoveredTarget,
+    camera,
+    viewport,
+    scratch
+  );
+}
+
+function updateAttackTargetMarker(
+  marker: AttackTargetMarker,
+  target: UnitViewModel | null,
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  scratch: RenderScratch
+): void {
+  if (!target) {
+    hideAttackTargetMarker(marker);
+    return;
+  }
+
+  const projected = scratch.projected.copy(target.position).project(camera);
+
+  if (projected.z < -1 || projected.z > 1) {
+    hideAttackTargetMarker(marker);
+    return;
+  }
+
+  const x = (projected.x * 0.5 + 0.5) * viewport.width;
+  const y = (-projected.y * 0.5 + 0.5) * viewport.height;
+  const sizePx = Math.round(
+    Math.max(42, UNIT_SYMBOL_SIZE_PX * readUnitSymbolScale(target) * 1.65)
+  );
+  const transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+  const labelText = formatAttackTargetMarkerLabel(marker.state, target);
+
+  if (!marker.visible) {
+    marker.element.hidden = false;
+    marker.visible = true;
+  }
+
+  if (marker.transform !== transform) {
+    marker.element.style.transform = transform;
+    marker.transform = transform;
+  }
+
+  if (marker.sizePx !== sizePx) {
+    marker.element.style.setProperty("--target-size", `${sizePx}px`);
+    marker.sizePx = sizePx;
+  }
+
+  if (marker.labelText !== labelText) {
+    marker.label.textContent = labelText;
+    marker.labelText = labelText;
+  }
+}
+
+function formatAttackTargetMarkerLabel(
+  state: AttackTargetMarkerState,
+  target: UnitViewModel
+): string {
+  const status =
+    state === "locked" ? "ATTACK" : state === "cycle" ? "TARGET" : "SCAN";
+  const healthPercent = Math.max(
+    0,
+    Math.round((target.health.current / Math.max(target.health.max, 1)) * 100)
+  );
+
+  return `${status} ${formatShipClassLabel(target.shipClassId)} ${healthPercent}%`;
+}
+
+function formatShipClassLabel(shipClassId: number): string {
+  if (shipClassId === SHIP_CLASS_IDS.dropShip) {
+    return "Drop ship";
+  }
+
+  if (shipClassId === SHIP_CLASS_IDS.battleship) {
+    return "Battleship";
+  }
+
+  if (shipClassId === SHIP_CLASS_IDS.fighter) {
+    return "Scout";
+  }
+
+  return "Ship";
+}
+
+function createPlanetScreenRing(
+  container: HTMLElement,
+  state: PlanetSelectionMarkerState
+): PlanetScreenRing {
+  const ring = document.createElement("div");
+  ring.className = "planet-screen-ring";
+  ring.dataset.state = state;
+  ring.hidden = true;
+  container.appendChild(ring);
+
+  return {
+    element: ring,
+    visible: false,
+    transform: "",
+    sizePx: 0,
+    accentColor: "",
+    state,
+  };
+}
+
+function updatePlanetScreenRings(
+  selectedRing: PlanetScreenRing,
+  hoverRing: PlanetScreenRing,
+  selectedPlanet: PlanetViewModel | null,
+  hoveredPlanet: PlanetViewModel | null,
+  players: readonly PlayerConfig[],
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  scratch: RenderScratch
+): void {
+  updatePlanetScreenRing(
+    hoverRing,
+    hoveredPlanet,
+    players,
+    camera,
+    viewport,
+    PLANET_SELECTION_RADIUS_MULTIPLIER,
+    scratch
+  );
+  updatePlanetScreenRing(
+    selectedRing,
+    selectedPlanet && selectedPlanet.key !== hoveredPlanet?.key
+      ? selectedPlanet
+      : null,
+    players,
+    camera,
+    viewport,
+    PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER,
+    scratch
+  );
+}
+
+function updatePlanetScreenRing(
+  ring: PlanetScreenRing,
+  planet: PlanetViewModel | null,
+  players: readonly PlayerConfig[],
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  radiusMultiplier: number,
+  scratch: RenderScratch
+): void {
+  if (!planet) {
+    hidePlanetScreenRing(ring);
+    return;
+  }
+
+  const projected = scratch.projected.copy(planet.position).project(camera);
+
+  if (projected.z < -1 || projected.z > 1) {
+    hidePlanetScreenRing(ring);
+    return;
+  }
+
+  const radiusPx = readPlanetSelectionRingRadiusPx(
+    planet,
+    camera,
+    viewport,
+    radiusMultiplier
+  );
+  const sizePx = Math.round(radiusPx * 2);
+  const x = (projected.x * 0.5 + 0.5) * viewport.width;
+  const y = (-projected.y * 0.5 + 0.5) * viewport.height;
+  const transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+  const accentColor = readPlanetStatusColor(planet, players);
+
+  if (!ring.visible) {
+    ring.element.hidden = false;
+    ring.visible = true;
+  }
+
+  if (ring.transform !== transform) {
+    ring.element.style.transform = transform;
+    ring.transform = transform;
+  }
+
+  if (ring.sizePx !== sizePx) {
+    ring.element.style.setProperty("--planet-ring-size", `${sizePx}px`);
+    ring.sizePx = sizePx;
+  }
+
+  if (ring.accentColor !== accentColor) {
+    ring.element.style.setProperty("--planet-color", accentColor);
+    ring.accentColor = accentColor;
+  }
+}
+
+function hidePlanetScreenRing(ring: PlanetScreenRing): void {
+  if (!ring.visible) {
+    return;
+  }
+
+  ring.element.hidden = true;
+  ring.visible = false;
+  ring.transform = "";
+  ring.sizePx = 0;
+  ring.accentColor = "";
+}
+
+function disposePlanetScreenRing(ring: PlanetScreenRing): void {
+  ring.element.remove();
+}
+
+function createPlanetSelectionMarker(
+  container: HTMLElement,
+  state: PlanetSelectionMarkerState
+): PlanetSelectionMarker {
+  const marker = document.createElement("div");
+  marker.className = "planet-selection-marker";
+  marker.dataset.state = state;
+  marker.hidden = true;
+
+  const title = document.createElement("div");
+  title.className = "planet-selection-marker-title";
+  const detail = document.createElement("div");
+  detail.className = "planet-selection-marker-detail";
+  marker.append(title, detail);
+  container.appendChild(marker);
+
+  return {
+    element: marker,
+    title,
+    detail,
+    visible: false,
+    transform: "",
+    titleText: "",
+    detailText: "",
+    accentColor: "",
+    state,
+  };
+}
+
+function updatePlanetSelectionMarkers(
+  selectedMarker: PlanetSelectionMarker,
+  hoverMarker: PlanetSelectionMarker,
+  selectedPlanet: PlanetViewModel | null,
+  hoveredPlanet: PlanetViewModel | null,
+  selectedUnits: readonly UnitViewModel[],
+  players: readonly PlayerConfig[],
+  rules: CaptureRulesConfig,
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  scratch: RenderScratch
+): void {
+  updatePlanetSelectionMarker(
+    hoverMarker,
+    hoveredPlanet,
+    selectedUnits,
+    players,
+    rules,
+    camera,
+    viewport,
+    PLANET_SELECTION_RADIUS_MULTIPLIER,
+    scratch
+  );
+  updatePlanetSelectionMarker(
+    selectedMarker,
+    selectedPlanet && selectedPlanet.key !== hoveredPlanet?.key
+      ? selectedPlanet
+      : null,
+    selectedUnits,
+    players,
+    rules,
+    camera,
+    viewport,
+    PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER,
+    scratch
+  );
+}
+
+function updatePlanetSelectionMarker(
+  marker: PlanetSelectionMarker,
+  planet: PlanetViewModel | null,
+  selectedUnits: readonly UnitViewModel[],
+  players: readonly PlayerConfig[],
+  rules: CaptureRulesConfig,
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  radiusMultiplier: number,
+  scratch: RenderScratch
+): void {
+  if (!planet) {
+    hidePlanetSelectionMarker(marker);
+    return;
+  }
+
+  const projected = scratch.projected.copy(planet.position).project(camera);
+
+  if (projected.z < -1 || projected.z > 1) {
+    hidePlanetSelectionMarker(marker);
+    return;
+  }
+
+  const ringRadiusPx = readPlanetSelectionRingRadiusPx(
+    planet,
+    camera,
+    viewport,
+    radiusMultiplier
+  );
+  const x = (projected.x * 0.5 + 0.5) * viewport.width;
+  const y =
+    (-projected.y * 0.5 + 0.5) * viewport.height -
+    ringRadiusPx -
+    PLANET_SELECTION_LABEL_GAP_PX;
+  const transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+  const titleText = planet.label;
+  const detailText = formatPlanetSelectionMarkerDetail(
+    planet,
+    selectedUnits,
+    players,
+    rules
+  );
+  const accentColor = readPlanetStatusColor(planet, players);
+
+  if (!marker.visible) {
+    marker.element.hidden = false;
+    marker.visible = true;
+  }
+
+  if (marker.transform !== transform) {
+    marker.element.style.transform = transform;
+    marker.transform = transform;
+  }
+
+  if (marker.titleText !== titleText) {
+    marker.title.textContent = titleText;
+    marker.titleText = titleText;
+  }
+
+  if (marker.detailText !== detailText) {
+    marker.detail.textContent = detailText;
+    marker.detailText = detailText;
+  }
+
+  if (marker.accentColor !== accentColor) {
+    marker.element.style.setProperty("--planet-color", accentColor);
+    marker.accentColor = accentColor;
+  }
+}
+
+function hidePlanetSelectionMarker(marker: PlanetSelectionMarker): void {
+  if (!marker.visible) {
+    return;
+  }
+
+  marker.element.hidden = true;
+  marker.visible = false;
+  marker.transform = "";
+  marker.titleText = "";
+  marker.detailText = "";
+  marker.accentColor = "";
+  marker.title.textContent = "";
+  marker.detail.textContent = "";
+}
+
+function readPlanetSelectionRingRadiusPx(
+  planet: PlanetViewModel,
+  camera: THREE.Camera,
+  viewport: ViewportMetrics,
+  radiusMultiplier: number
+): number {
+  if (camera instanceof THREE.OrthographicCamera) {
+    const viewHeight = Math.max(camera.top - camera.bottom, 1);
+
+    return Math.max(
+      (planet.radius * radiusMultiplier * viewport.height) / viewHeight,
+      PLANET_SELECTION_MIN_RADIUS_PX
+    );
+  }
+
+  return PLANET_SELECTION_MIN_RADIUS_PX;
+}
+
+function formatPlanetSelectionMarkerDetail(
+  planet: PlanetViewModel,
+  selectedUnits: readonly UnitViewModel[],
+  players: readonly PlayerConfig[],
+  rules: CaptureRulesConfig
+): string {
+  const parts = [formatPlanetControlMarkerLabel(planet, players)];
+  const captureLabel = formatPlanetCaptureProgressMarkerLabel(
+    planet,
+    rules
+  );
+  const distanceLabel = formatPlanetSelectedShipDistance(planet, selectedUnits);
+
+  if (captureLabel) {
+    parts.push(captureLabel);
+  }
+
+  if (distanceLabel) {
+    parts.push(distanceLabel);
+  }
+
+  return parts.join(" / ");
+}
+
+function formatPlanetControlMarkerLabel(
+  planet: PlanetViewModel,
+  players: readonly PlayerConfig[]
+): string {
+  if (!planet.control.capturable) {
+    return "Unclaimable";
+  }
+
+  if (planet.control.owner === 0) {
+    return "Neutral";
+  }
+
+  return `${formatPlayerName(
+    readPlayerConfig(players, planet.control.owner),
+    planet.control.owner
+  )} control`;
+}
+
+function formatPlanetCaptureProgressMarkerLabel(
+  planet: PlanetViewModel,
+  rules: CaptureRulesConfig
+): string | null {
+  if (planet.control.capturingPlayer === 0) {
+    return null;
+  }
+
+  const requiredTicks = rules.planetCaptureSeconds * PHASE_ONE_SIM_HZ;
+  const capturePercent = Math.round(
+    clamp(planet.control.captureTicks / Math.max(requiredTicks, 1), 0, 1) * 100
+  );
+  const action = planet.control.contested ? "stalled" : "capture";
+
+  return `P${planet.control.capturingPlayer} ${action} ${capturePercent}%`;
+}
+
+function formatPlanetSelectedShipDistance(
+  planet: PlanetViewModel,
+  selectedUnits: readonly UnitViewModel[]
+): string | null {
+  if (selectedUnits.length === 0) {
+    return null;
+  }
+
+  let minDistance = Number.POSITIVE_INFINITY;
+  let maxDistance = 0;
+
+  for (const unit of selectedUnits) {
+    const distance = Math.max(
+      0,
+      unit.position.distanceTo(planet.position) - planet.radius
+    );
+    minDistance = Math.min(minDistance, distance);
+    maxDistance = Math.max(maxDistance, distance);
+  }
+
+  if (!Number.isFinite(minDistance)) {
+    return null;
+  }
+
+  if (maxDistance - minDistance < 5) {
+    return `Distance ${formatWorldDistance(minDistance)}`;
+  }
+
+  return `Distance ${formatWorldDistance(minDistance)}-${formatWorldDistance(
+    maxDistance
+  )}`;
+}
+
+function formatWorldDistance(distance: number): string {
+  if (distance >= 1_000) {
+    return `${(distance / 1_000).toFixed(1)}ku`;
+  }
+
+  return `${Math.round(distance)}u`;
+}
+
 function updateRenderModeQuery(renderMode: RenderQualityMode): void {
   const url = new URL(window.location.href);
   url.searchParams.set("render", renderMode);
@@ -2095,21 +2945,13 @@ function writeResizeCameraFocus(
   tween: CameraFocusTween,
   target: THREE.Vector3,
   units: readonly UnitViewModel[],
-  planets: readonly PlanetViewModel[],
-  selectedPlanetKey: string | null,
   selectedUnitKeys: ReadonlySet<string>
 ): THREE.Vector3 {
   if (tween.initialized) {
     return target.copy(tween.current);
   }
 
-  return writeCameraFocusPosition(
-    target,
-    units,
-    planets,
-    selectedPlanetKey,
-    selectedUnitKeys
-  );
+  return writeCameraFocusPosition(target, units, selectedUnitKeys);
 }
 
 function updateCameraFocusTween(
@@ -2318,16 +3160,8 @@ function writeZoomToFitFocusPosition(
 function writeCameraFocusPosition(
   target: THREE.Vector3,
   units: readonly UnitViewModel[],
-  planets: readonly PlanetViewModel[],
-  selectedPlanetKey: string | null,
   selectedUnitKeys: ReadonlySet<string>
 ): THREE.Vector3 {
-  const planet = getSelectedPlanet(planets, selectedPlanetKey);
-
-  if (planet) {
-    return target.copy(planet.position);
-  }
-
   const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
 
   return writeUnitCentroidFocus(
@@ -2356,6 +3190,198 @@ function getSelectedPlanet(
   return selectedPlanetKey
     ? planets.find((planet) => planet.key === selectedPlanetKey) ?? null
     : null;
+}
+
+function readSelectedStatsUnit(
+  selectedUnits: readonly UnitViewModel[],
+  leaderKey: string | null
+): UnitViewModel | null {
+  if (selectedUnits.length === 0) {
+    return null;
+  }
+
+  return (
+    selectedUnits.find((unit) => unit.key === leaderKey) ??
+    selectedUnits
+      .slice()
+      .sort((first, second) => first.handle.id - second.handle.id)[0] ??
+    null
+  );
+}
+
+function createSelectedUnitObjectiveSnapshot(
+  unit: UnitViewModel,
+  units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[]
+): SelectedUnitObjectiveSnapshot {
+  const queuedDetail = formatSelectedUnitQueuedOrders(unit);
+  const order = unit.moveOrder;
+
+  if (!order) {
+    if (unit.orbit.isOrbiting && unit.orbit.planet) {
+      const planet =
+        planets.find((entry) => entry.key === handleKey(unit.orbit.planet!)) ??
+        null;
+
+      return {
+        orderLabel: "Holding orbit",
+        targetLabel: planet?.label ?? "Current orbit",
+        distanceLabel: "In orbit",
+        detailLabel: queuedDetail,
+        state: "idle",
+      };
+    }
+
+    return {
+      orderLabel: "Idle",
+      targetLabel: "No active objective",
+      distanceLabel: "Ready",
+      detailLabel: queuedDetail,
+      state: "idle",
+    };
+  }
+
+  switch (order.type) {
+    case "moveTo":
+      return {
+        orderLabel: "Move",
+        targetLabel: "Waypoint",
+        distanceLabel: formatWorldDistance(
+          readDistanceToVec3Data(unit.position, order.target)
+        ),
+        detailLabel: queuedDetail,
+        state: "move",
+      };
+    case "attackTarget":
+      return createSelectedUnitTargetObjectiveSnapshot(
+        unit,
+        units.find((entry) => entry.key === handleKey(order.target)) ?? null,
+        "Attack",
+        "Target unavailable",
+        "Target no longer available",
+        queuedDetail,
+        "attack"
+      );
+    case "escort":
+      return createSelectedUnitTargetObjectiveSnapshot(
+        unit,
+        units.find((entry) => entry.key === handleKey(order.target)) ?? null,
+        "Escort",
+        "Escort target unavailable",
+        "Escort target no longer available",
+        queuedDetail,
+        "escort"
+      );
+    case "capturePlanet":
+      return createSelectedUnitPlanetObjectiveSnapshot(
+        unit,
+        planets.find((planet) => planet.key === handleKey(order.planet)) ?? null,
+        "Capture",
+        "Capture planet unavailable",
+        "Planet no longer available",
+        queuedDetail
+      );
+    case "guardPlanet":
+      return createSelectedUnitPlanetObjectiveSnapshot(
+        unit,
+        planets.find((planet) => planet.key === handleKey(order.planet)) ?? null,
+        "Guard",
+        "Guard planet unavailable",
+        "Planet no longer available",
+        queuedDetail
+      );
+    case "orbitPlanet":
+      return createSelectedUnitPlanetObjectiveSnapshot(
+        unit,
+        planets.find((planet) => planet.key === handleKey(order.planet)) ?? null,
+        "Orbit",
+        "Orbit planet unavailable",
+        "Planet no longer available",
+        queuedDetail
+      );
+  }
+}
+
+function createSelectedUnitTargetObjectiveSnapshot(
+  unit: UnitViewModel,
+  target: UnitViewModel | null,
+  orderLabel: string,
+  missingTargetLabel: string,
+  missingDetail: string,
+  queuedDetail: string,
+  state: "attack" | "escort"
+): SelectedUnitObjectiveSnapshot {
+  if (!target) {
+    return {
+      orderLabel,
+      targetLabel: missingTargetLabel,
+      distanceLabel: "Unknown",
+      detailLabel: joinSelectedUnitObjectiveDetails(missingDetail, queuedDetail),
+      state,
+    };
+  }
+
+  return {
+    orderLabel,
+    targetLabel: `${target.label} #${target.handle.id}`,
+    distanceLabel: formatWorldDistance(unit.position.distanceTo(target.position)),
+    detailLabel: queuedDetail,
+    state,
+  };
+}
+
+function createSelectedUnitPlanetObjectiveSnapshot(
+  unit: UnitViewModel,
+  planet: PlanetViewModel | null,
+  orderLabel: string,
+  missingTargetLabel: string,
+  missingDetail: string,
+  queuedDetail: string
+): SelectedUnitObjectiveSnapshot {
+  if (!planet) {
+    return {
+      orderLabel,
+      targetLabel: missingTargetLabel,
+      distanceLabel: "Unknown",
+      detailLabel: joinSelectedUnitObjectiveDetails(missingDetail, queuedDetail),
+      state: "planet",
+    };
+  }
+
+  return {
+    orderLabel,
+    targetLabel: planet.label,
+    distanceLabel: formatWorldDistance(
+      Math.max(0, unit.position.distanceTo(planet.position) - planet.radius)
+    ),
+    detailLabel: queuedDetail,
+    state: "planet",
+  };
+}
+
+function formatSelectedUnitQueuedOrders(unit: UnitViewModel): string {
+  if (unit.queuedOrderCount <= 0) {
+    return "";
+  }
+
+  return `${unit.queuedOrderCount} queued order${
+    unit.queuedOrderCount === 1 ? "" : "s"
+  }`;
+}
+
+function joinSelectedUnitObjectiveDetails(
+  first: string,
+  second: string
+): string {
+  return [first, second].filter((part) => part.length > 0).join(" / ");
+}
+
+function readDistanceToVec3Data(position: THREE.Vector3, target: Vec3Data): number {
+  return Math.hypot(
+    position.x - target.x,
+    position.y - target.y,
+    position.z - target.z
+  );
 }
 
 function createSelectedPlanetStatsSnapshot(
@@ -2432,13 +3458,8 @@ function readPlayerConfig(
 }
 
 function readCameraFocusContextKey(
-  selectedPlanetKey: string | null,
   selectedUnitKeys: ReadonlySet<string>
 ): string {
-  if (selectedPlanetKey) {
-    return `planet:${selectedPlanetKey}`;
-  }
-
   return selectedUnitKeys.size > 0
     ? `units:${[...selectedUnitKeys].sort().join(",")}`
     : "units:all";
@@ -2545,6 +3566,52 @@ function issuePlanetOrderFromSelection(
   return {
     label: `${formatPlanetOrderLabel(orderType)} ${planet.label}`,
     units: selectedUnits,
+  };
+}
+
+function issueAttackOrderFromSelection(
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  targetKey: string
+): IssuedUnitCommand | null {
+  if (selectedUnitKeys.size === 0) {
+    return null;
+  }
+
+  const units = runtime.readUnits();
+  const target = units.find(
+    (unit) =>
+      unit.key === targetKey &&
+      unit.owner !== runtime.playerId &&
+      unit.health.current > 0
+  );
+
+  if (!target) {
+    return null;
+  }
+
+  const selectedUnits = units.filter(
+    (unit) =>
+      unit.owner === runtime.playerId &&
+      selectedUnitKeys.has(unit.key) &&
+      unit.health.current > 0
+  );
+
+  if (selectedUnits.length === 0) {
+    return null;
+  }
+
+  runtime.enqueueUnitOrder(
+    selectedUnits.map((unit) => unit.handle),
+    {
+      type: "attackTarget",
+      target: target.handle,
+    }
+  );
+  return {
+    label: `Attack ${target.label} #${target.handle.id}`,
+    units: selectedUnits,
+    attackTargetKey: target.key,
   };
 }
 
@@ -2733,22 +3800,109 @@ function findPlanetAtPointer(
   return closestVisualHit ?? bestPlanet;
 }
 
-function findOwnedUnitAtPointer(
+function readPointerSceneSelectionTarget(
   event: PointerEvent,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   units: readonly UnitViewModel[],
   playerId: PlayerId,
+  planets: readonly PlanetViewModel[],
+  proxies: ReadonlyMap<string, PlanetProxy>,
+  includeUnits: boolean,
   scratch: RenderScratch
-): UnitViewModel | null {
+): ScreenSceneSelectionCandidate | null {
+  return selectPrimarySceneSelectionCandidate(
+    collectPointerSceneSelectionCandidates(
+      event,
+      canvas,
+      camera,
+      units,
+      playerId,
+      planets,
+      proxies,
+      includeUnits,
+      scratch
+    )
+  );
+}
+
+function collectPointerSceneSelectionCandidates(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  planets: readonly PlanetViewModel[],
+  proxies: ReadonlyMap<string, PlanetProxy>,
+  includeUnits: boolean,
+  scratch: RenderScratch
+): readonly ScreenSceneSelectionCandidate[] {
+  const candidates: ScreenSceneSelectionCandidate[] = [];
+
+  if (includeUnits) {
+    candidates.push(
+      ...collectUnitSceneSelectionCandidates(
+        "friendlyUnit",
+        units,
+        (unit) => unit.owner === playerId,
+        camera,
+        canvas,
+        event.clientX,
+        event.clientY,
+        scratch,
+        FRIENDLY_UNIT_HOVER_RADIUS_MULTIPLIER,
+        FRIENDLY_UNIT_PICK_MIN_RADIUS_PX
+      ),
+      ...collectUnitSceneSelectionCandidates(
+        "enemyUnit",
+        units,
+        (unit) => unit.owner !== playerId && unit.health.current > 0,
+        camera,
+        canvas,
+        event.clientX,
+        event.clientY,
+        scratch,
+        ATTACK_TARGET_HOVER_RADIUS_MULTIPLIER,
+        ATTACK_TARGET_PICK_MIN_RADIUS_PX
+      )
+    );
+  }
+
+  const planetCandidate = readPlanetSceneSelectionCandidate(
+    event,
+    canvas,
+    camera,
+    planets,
+    proxies,
+    scratch
+  );
+
+  if (planetCandidate) {
+    candidates.push(planetCandidate);
+  }
+
+  return candidates;
+}
+
+function collectUnitSceneSelectionCandidates(
+  kind: "friendlyUnit" | "enemyUnit",
+  units: readonly UnitViewModel[],
+  includeUnit: (unit: UnitViewModel) => boolean,
+  camera: THREE.Camera,
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  scratch: RenderScratch,
+  radiusMultiplier: number,
+  minRadiusPx: number
+): readonly ScreenSceneSelectionCandidate[] {
   const bounds = canvas.getBoundingClientRect();
-  const pointerX = event.clientX - bounds.left;
-  const pointerY = event.clientY - bounds.top;
-  let bestUnit: UnitViewModel | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
+  const pointerX = clientX - bounds.left;
+  const pointerY = clientY - bounds.top;
+  const candidates: ScreenSceneSelectionCandidate[] = [];
 
   for (const unit of units) {
-    if (unit.owner !== playerId) {
+    if (!includeUnit(unit)) {
       continue;
     }
 
@@ -2761,8 +3915,8 @@ function findOwnedUnitAtPointer(
     const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
     const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
     const screenRadius = Math.max(
-      UNIT_SYMBOL_SIZE_PX * readUnitSymbolScale(unit) * 0.8,
-      8
+      UNIT_SYMBOL_SIZE_PX * readUnitSymbolScale(unit) * radiusMultiplier,
+      minRadiusPx
     );
     const screenDistance = Math.hypot(pointerX - screenX, pointerY - screenY);
 
@@ -2770,15 +3924,185 @@ function findOwnedUnitAtPointer(
       continue;
     }
 
-    const score = screenDistance / screenRadius;
-
-    if (score < bestScore) {
-      bestUnit = unit;
-      bestScore = score;
-    }
+    candidates.push({
+      kind,
+      key: unit.key,
+      screenDistancePx: screenDistance,
+      screenScore: screenDistance / screenRadius,
+      handleId: unit.handle.id,
+      unit,
+    });
   }
 
-  return bestUnit;
+  return candidates;
+}
+
+function readPlanetSceneSelectionCandidate(
+  event: PointerEvent,
+  canvas: HTMLCanvasElement,
+  camera: THREE.Camera,
+  planets: readonly PlanetViewModel[],
+  proxies: ReadonlyMap<string, PlanetProxy>,
+  scratch: RenderScratch
+): ScreenSceneSelectionCandidate | null {
+  const planet = findPlanetAtPointer(
+    event,
+    canvas,
+    camera,
+    planets,
+    proxies,
+    scratch
+  );
+
+  if (!planet) {
+    return null;
+  }
+
+  if (!(camera instanceof THREE.OrthographicCamera)) {
+    return null;
+  }
+
+  const bounds = canvas.getBoundingClientRect();
+  const projected = scratch.projected.copy(planet.position).project(camera);
+
+  if (projected.z < -1 || projected.z > 1) {
+    return null;
+  }
+
+  const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
+  const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
+  const screenRadius = Math.max(
+    (planet.radius * PLANET_SELECTION_RADIUS_MULTIPLIER * bounds.height) /
+      viewHeight,
+    PLANET_SELECTION_MIN_RADIUS_PX
+  );
+  const screenDistance = Math.hypot(
+    event.clientX - bounds.left - screenX,
+    event.clientY - bounds.top - screenY
+  );
+
+  return {
+    kind: "planet",
+    key: planet.key,
+    screenDistancePx: screenDistance,
+    screenScore: screenDistance / screenRadius,
+    planet,
+  };
+}
+
+function readAttackTargetByKey(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  targetKey: string | null
+): UnitViewModel | null {
+  return targetKey
+    ? units.find(
+        (unit) =>
+          unit.key === targetKey &&
+          unit.owner !== playerId &&
+          unit.health.current > 0
+      ) ?? null
+    : null;
+}
+
+function collectAttackTargetCandidates(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  camera: THREE.Camera,
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  scratch: RenderScratch,
+  maxScreenDistancePx: number
+): readonly ScreenAttackTargetCandidate[] {
+  const bounds = canvas.getBoundingClientRect();
+  const pointerX = clientX - bounds.left;
+  const pointerY = clientY - bounds.top;
+  const candidates: ScreenAttackTargetCandidate[] = [];
+
+  for (const unit of units) {
+    if (unit.owner === playerId || unit.health.current <= 0) {
+      continue;
+    }
+
+    const projected = scratch.projected.copy(unit.position).project(camera);
+
+    if (projected.z < -1 || projected.z > 1) {
+      continue;
+    }
+
+    const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
+    const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
+    const screenDistance = Math.hypot(pointerX - screenX, pointerY - screenY);
+    const unitPickRadius = Math.max(
+      UNIT_SYMBOL_SIZE_PX *
+        readUnitSymbolScale(unit) *
+        ATTACK_TARGET_HOVER_RADIUS_MULTIPLIER,
+      ATTACK_TARGET_PICK_MIN_RADIUS_PX
+    );
+    const allowedDistance = Math.max(maxScreenDistancePx, unitPickRadius);
+
+    if (screenDistance > allowedDistance) {
+      continue;
+    }
+
+    candidates.push({
+      key: unit.key,
+      shipClassId: unit.shipClassId,
+      screenDistancePx: screenDistance,
+      worldDistance: unit.position.distanceTo(camera.position),
+      handleId: unit.handle.id,
+      unit,
+    });
+  }
+
+  return rankAttackTargetCandidates(candidates) as readonly ScreenAttackTargetCandidate[];
+}
+
+function readLastPointerScreenPoint(
+  canvas: HTMLCanvasElement,
+  clientX: number | null,
+  clientY: number | null
+): { clientX: number; clientY: number; source: "pointer" | "center" } {
+  const bounds = canvas.getBoundingClientRect();
+
+  if (
+    clientX !== null &&
+    clientY !== null &&
+    clientX >= bounds.left &&
+    clientX <= bounds.right &&
+    clientY >= bounds.top &&
+    clientY <= bounds.bottom
+  ) {
+    return {
+      clientX,
+      clientY,
+      source: "pointer",
+    };
+  }
+
+  return {
+    clientX: bounds.left + bounds.width / 2,
+    clientY: bounds.top + bounds.height / 2,
+    source: "center",
+  };
+}
+
+function pruneAttackTargetKey(
+  targetKey: string | null,
+  units: readonly UnitViewModel[],
+  playerId: PlayerId
+): string | null {
+  return targetKey &&
+    units.some(
+      (unit) =>
+        unit.key === targetKey &&
+        unit.owner !== playerId &&
+        unit.health.current > 0
+    )
+    ? targetKey
+    : null;
 }
 
 function selectOwnedUnitsInBox(
@@ -2850,6 +4174,17 @@ function replaceSelectionWithOwnedUnits(
   }
 }
 
+function replaceSelectionWithUnitKeys(
+  selectedUnitKeys: Set<string>,
+  unitKeys: readonly string[]
+): void {
+  selectedUnitKeys.clear();
+
+  for (const unitKey of unitKeys) {
+    selectedUnitKeys.add(unitKey);
+  }
+}
+
 function isSelectionRemoveModifier(event: PointerEvent): boolean {
   return event.ctrlKey;
 }
@@ -2882,6 +4217,33 @@ function pruneSelectedPlanetKey(
   return selectedPlanetKey &&
     planets.some((planet) => planet.key === selectedPlanetKey)
     ? selectedPlanetKey
+    : null;
+}
+
+function pruneSceneSelectionTarget(
+  target: SceneSelectionTarget | null,
+  units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  playerId: PlayerId
+): SceneSelectionTarget | null {
+  if (!target) {
+    return null;
+  }
+
+  if (target.kind === "planet") {
+    return pruneSelectedPlanetKey(target.key, planets)
+      ? target
+      : null;
+  }
+
+  return units.some(
+    (unit) =>
+      unit.key === target.key &&
+      (target.kind === "friendlyUnit"
+        ? unit.owner === playerId
+        : unit.owner !== playerId && unit.health.current > 0)
+  )
+    ? target
     : null;
 }
 
@@ -3455,100 +4817,6 @@ function updateTacticalGrid(
   );
   writeTacticalPlaneQuaternion(tacticalGrid.root.quaternion, cameraPreset);
   tacticalGrid.root.scale.setScalar(context.radius);
-}
-
-function createPlanetSelectionRing(): PlanetHoverRing {
-  const root = new THREE.Group();
-  const geometry = createTacticalIntersectionGeometry();
-  const material = new THREE.LineBasicMaterial({
-    color: TACTICAL_OVERLAY_COLOR_HEX,
-    transparent: true,
-    opacity: 0.94,
-    depthTest: false,
-    depthWrite: false,
-  });
-  const ring = new THREE.LineLoop(geometry, material);
-
-  root.name = "selected-planet-tactical-ring";
-  root.visible = false;
-  ring.name = "selected planet tactical selection ring";
-  ring.frustumCulled = false;
-  ring.renderOrder = 9.05;
-  root.add(ring);
-
-  return {
-    root,
-    ring,
-  };
-}
-
-function updatePlanetSelectionRing(
-  selectionRing: PlanetHoverRing,
-  planet: PlanetViewModel | null,
-  enabled: boolean,
-  cameraPreset: CameraPreset | null
-): void {
-  selectionRing.root.visible = enabled && !!planet;
-
-  if (!selectionRing.root.visible || !planet) {
-    return;
-  }
-
-  selectionRing.root.position.copy(planet.position);
-  writeTacticalPlaneQuaternion(selectionRing.root.quaternion, cameraPreset);
-  selectionRing.root.scale.setScalar(
-    planet.radius * PLANET_SELECTION_INDICATOR_RADIUS_MULTIPLIER
-  );
-}
-
-function createPlanetHoverRing(): PlanetHoverRing {
-  const root = new THREE.Group();
-  const geometry = createTacticalIntersectionGeometry();
-  const material = new THREE.LineBasicMaterial({
-    color: TACTICAL_OVERLAY_COLOR_HEX,
-    transparent: true,
-    opacity: 0.98,
-    depthTest: false,
-    depthWrite: false,
-  });
-  const ring = new THREE.LineLoop(geometry, material);
-
-  root.name = "hovered-planet-command-ring";
-  root.visible = false;
-  ring.name = "hovered planet command selection ring";
-  ring.frustumCulled = false;
-  ring.renderOrder = 9;
-  root.add(ring);
-
-  return {
-    root,
-    ring,
-  };
-}
-
-function updatePlanetHoverRing(
-  hoverRing: PlanetHoverRing,
-  planet: PlanetViewModel | null,
-  enabled: boolean,
-  cameraPreset: CameraPreset | null
-): void {
-  hoverRing.root.visible = enabled && !!planet;
-
-  if (!hoverRing.root.visible || !planet) {
-    return;
-  }
-
-  hoverRing.root.position.copy(planet.position);
-  writeTacticalPlaneQuaternion(hoverRing.root.quaternion, cameraPreset);
-  hoverRing.root.scale.setScalar(
-    planet.radius * PLANET_SELECTION_RADIUS_MULTIPLIER
-  );
-}
-
-function disposePlanetHoverRing(hoverRing: PlanetHoverRing): void {
-  hoverRing.ring.geometry.dispose();
-  hoverRing.ring.material.dispose();
-  hoverRing.root.clear();
 }
 
 function updateCaptureProgressRings(

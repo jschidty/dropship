@@ -50,7 +50,18 @@ import {
   type HeadlessMatchController,
 } from "../packages/tools/src/index";
 import { createMinimalLocalGame } from "../packages/client/src/runtime/localGame";
-import { selectMoveOrderUnits } from "../packages/client/src/selection/commands";
+import {
+  selectClassHotkeyUnitKeys,
+  selectMoveOrderUnits,
+} from "../packages/client/src/selection/commands";
+import {
+  selectPrimarySceneSelectionCandidate,
+  type SceneSelectionCandidate,
+} from "../packages/client/src/selection/interactions";
+import {
+  rankAttackTargetCandidates,
+  selectNextAttackTargetKey,
+} from "../packages/client/src/selection/targeting";
 import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
@@ -74,6 +85,9 @@ testMoveOrderTargetsEscortLeader();
 testEscortOrderCommand();
 testOrbitPlanetOrderFacesAwayFromGravity();
 testCaptureDemoConfig();
+testClassHotkeySelectionFiltersSelectedUnits();
+testAttackTargetPriorityRanking();
+testSceneSelectionCandidateRanking();
 testShipsSpawnOutsidePlanets();
 testPlanetCollisionKeepsShipsOutside();
 testOrbitTrackingState();
@@ -88,6 +102,7 @@ testTimerUnitCountWinner();
 testLocalRuntimeStopsAfterMatchEnd();
 testLocalRuntimeReplayStartsFreshSeed();
 testLocalRuntimeKeepsFiniteViewModels();
+testLocalRuntimeViewModelsExposeOrders();
 testLocalRuntimeUsesScriptedNpcController();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
@@ -1239,6 +1254,138 @@ function testMoveOrderTargetsEscortLeader(): void {
   );
 }
 
+function testClassHotkeySelectionFiltersSelectedUnits(): void {
+  const units = [
+    createTestUnitView("fighter-a", 1, 1, SHIP_CLASS_IDS.fighter),
+    createTestUnitView("fighter-b", 1, 2, SHIP_CLASS_IDS.fighter),
+    createTestUnitView("battleship-a", 1, 3, SHIP_CLASS_IDS.battleship),
+    createTestUnitView("drop-ship-a", 1, 4, SHIP_CLASS_IDS.dropShip),
+    createTestUnitView("enemy-fighter", 2, 5, SHIP_CLASS_IDS.fighter),
+  ];
+  const selectedUnitKeys = new Set(["fighter-a", "battleship-a"]);
+
+  assert.deepEqual(
+    selectClassHotkeyUnitKeys(
+      units,
+      1,
+      selectedUnitKeys,
+      SHIP_CLASS_IDS.fighter
+    ),
+    ["fighter-a"]
+  );
+  assert.deepEqual(
+    selectClassHotkeyUnitKeys(
+      units,
+      1,
+      selectedUnitKeys,
+      SHIP_CLASS_IDS.battleship
+    ),
+    ["battleship-a"]
+  );
+  assert.deepEqual(
+    selectClassHotkeyUnitKeys(
+      units,
+      1,
+      selectedUnitKeys,
+      SHIP_CLASS_IDS.dropShip
+    ),
+    []
+  );
+  assert.deepEqual(
+    selectClassHotkeyUnitKeys(units, 1, new Set(), SHIP_CLASS_IDS.fighter),
+    ["fighter-a", "fighter-b"]
+  );
+}
+
+function testAttackTargetPriorityRanking(): void {
+  const candidates = [
+    {
+      key: "fighter-close",
+      shipClassId: SHIP_CLASS_IDS.fighter,
+      screenDistancePx: 8,
+      worldDistance: 90,
+      handleId: 4,
+    },
+    {
+      key: "battleship-mid",
+      shipClassId: SHIP_CLASS_IDS.battleship,
+      screenDistancePx: 42,
+      worldDistance: 120,
+      handleId: 3,
+    },
+    {
+      key: "drop-ship-far",
+      shipClassId: SHIP_CLASS_IDS.dropShip,
+      screenDistancePx: 64,
+      worldDistance: 140,
+      handleId: 2,
+    },
+    {
+      key: "drop-ship-near",
+      shipClassId: SHIP_CLASS_IDS.dropShip,
+      screenDistancePx: 24,
+      worldDistance: 160,
+      handleId: 1,
+    },
+  ];
+
+  assert.deepEqual(
+    rankAttackTargetCandidates(candidates).map((candidate) => candidate.key),
+    ["drop-ship-near", "drop-ship-far", "battleship-mid", "fighter-close"]
+  );
+  assert.equal(
+    selectNextAttackTargetKey(candidates, "drop-ship-near", 1),
+    "drop-ship-far"
+  );
+  assert.equal(
+    selectNextAttackTargetKey(candidates, "drop-ship-near", -1),
+    "fighter-close"
+  );
+}
+
+function testSceneSelectionCandidateRanking(): void {
+  const candidates: SceneSelectionCandidate[] = [
+    {
+      kind: "planet",
+      key: "planet-under-pointer",
+      screenDistancePx: 0,
+      screenScore: 0,
+    },
+    {
+      kind: "enemyUnit",
+      key: "enemy-close",
+      screenDistancePx: 2,
+      screenScore: 0.08,
+      handleId: 9,
+    },
+    {
+      kind: "friendlyUnit",
+      key: "friendly-offset",
+      screenDistancePx: 9,
+      screenScore: 0.5,
+      handleId: 3,
+    },
+    {
+      kind: "friendlyUnit",
+      key: "friendly-center",
+      screenDistancePx: 3,
+      screenScore: 0.1,
+      handleId: 4,
+    },
+  ];
+
+  assert.equal(
+    selectPrimarySceneSelectionCandidate(candidates)?.key,
+    "friendly-center"
+  );
+  assert.equal(
+    selectPrimarySceneSelectionCandidate(
+      candidates.filter((candidate) => candidate.kind !== "friendlyUnit")
+    )?.key,
+    "enemy-close"
+  );
+}
+
 function testCaptureDemoConfig(): void {
   const config = createCaptureDemoConfig({ seed: 1337 });
   const world = createWorld({
@@ -1706,6 +1853,44 @@ function testLocalRuntimeKeepsFiniteViewModels(): void {
         );
       }
     }
+  } finally {
+    runtime.dispose();
+  }
+}
+
+function testLocalRuntimeViewModelsExposeOrders(): void {
+  const runtime = createMinimalLocalGame(1, { seed: 2024 });
+
+  try {
+    const unit = runtime.readUnits().find((entry) => entry.owner === runtime.playerId);
+
+    assert.ok(unit);
+
+    const target = {
+      x: unit.position.x + 160,
+      y: unit.position.y,
+      z: unit.position.z - 90,
+    };
+
+    runtime.enqueueUnitOrder([unit.handle], {
+      type: "moveTo",
+      target,
+    });
+    runtime.stepTick();
+
+    const orderedUnit = runtime
+      .readUnits()
+      .find((entry) => sameHandle(entry.handle, unit.handle));
+
+    assert.ok(orderedUnit);
+    assert.equal(orderedUnit.moveOrder?.type, "moveTo");
+    assert.deepEqual(
+      orderedUnit.moveOrder?.type === "moveTo"
+        ? orderedUnit.moveOrder.target
+        : null,
+      target
+    );
+    assert.equal(orderedUnit.queuedOrderCount, 0);
   } finally {
     runtime.dispose();
   }
@@ -2573,7 +2758,8 @@ function createStaticTestPlanet(
 function createTestUnitView(
   key: string,
   owner: PlayerId,
-  id: number
+  id: number,
+  shipClassId = SHIP_CLASS_IDS.fighter
 ): UnitViewModel {
   return {
     handle: {
@@ -2582,6 +2768,7 @@ function createTestUnitView(
     },
     key,
     owner,
+    shipClassId,
   } as UnitViewModel;
 }
 

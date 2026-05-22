@@ -43,6 +43,8 @@ export type UnitViewModel = Readonly<{
     planet: EntityHandle | null;
     orbitTicks: number;
   }>;
+  moveOrder: UnitOrderIntent | null;
+  queuedOrderCount: number;
   health: Readonly<{
     current: number;
     max: number;

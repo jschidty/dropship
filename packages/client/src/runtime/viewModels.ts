@@ -8,6 +8,7 @@ import {
   type EntityHandle,
   type PlanetAppearanceConfig,
   type PlayerId,
+  type UnitOrderIntent,
 } from "@drop-ship/protocol";
 import { hashWorld, readUnitShipStats, type SimWorld } from "@drop-ship/sim";
 import type {
@@ -33,6 +34,8 @@ type MutableUnitViewModel = {
     planet: EntityHandle | null;
     orbitTicks: number;
   };
+  moveOrder: UnitOrderIntent | null;
+  queuedOrderCount: number;
   health: {
     current: number;
     max: number;
@@ -149,6 +152,8 @@ function syncUnitViewModels(
           planet: unit.orbit.planet ? { ...unit.orbit.planet } : null,
           orbitTicks: unit.orbit.orbitTicks,
         },
+        moveOrder: copyUnitOrderIntent(unit.moveOrder),
+        queuedOrderCount: unit.orderQueue.length,
         health: {
           current: unit.health.current,
           max: unit.health.max,
@@ -181,6 +186,8 @@ function syncUnitViewModels(
     view.orbit.isOrbiting = unit.orbit.isOrbiting;
     view.orbit.planet = unit.orbit.planet ? { ...unit.orbit.planet } : null;
     view.orbit.orbitTicks = unit.orbit.orbitTicks;
+    view.moveOrder = copyUnitOrderIntent(unit.moveOrder);
+    view.queuedOrderCount = unit.orderQueue.length;
     view.health.current = unit.health.current;
     view.health.max = unit.health.max;
     view.stats = stats;
@@ -309,6 +316,8 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
         planet: unit.orbit.planet ? { ...unit.orbit.planet } : null,
         orbitTicks: unit.orbit.orbitTicks,
       },
+      moveOrder: copyUnitOrderIntent(unit.moveOrder),
+      queuedOrderCount: unit.orderQueue.length,
       health: {
         current: unit.health.current,
         max: unit.health.max,
@@ -322,6 +331,33 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
       ),
     };
   });
+}
+
+function copyUnitOrderIntent(order: UnitOrderIntent | null): UnitOrderIntent | null {
+  if (!order) {
+    return null;
+  }
+
+  switch (order.type) {
+    case "moveTo":
+      return {
+        type: order.type,
+        target: { ...order.target },
+      };
+    case "attackTarget":
+    case "escort":
+      return {
+        type: order.type,
+        target: { ...order.target },
+      };
+    case "capturePlanet":
+    case "guardPlanet":
+    case "orbitPlanet":
+      return {
+        type: order.type,
+        planet: { ...order.planet },
+      };
+  }
 }
 
 function readUnitLoadoutViewModel(

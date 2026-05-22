@@ -77,6 +77,7 @@ export function updateUnitBatches(
   batches: UnitBatchRenderer,
   units: readonly UnitViewModel[],
   selectedUnitKeys: ReadonlySet<string>,
+  hoveredUnitKey: string | null,
   planets: readonly PlanetViewModel[],
   camera: THREE.Camera,
   worldUnitsPerPixel: number,
@@ -118,7 +119,10 @@ export function updateUnitBatches(
     }
   }
 
-  ensureSelectionMeshCapacity(batches, selectedUnitKeys.size);
+  const selectionRingCount =
+    selectedUnitKeys.size +
+    (hoveredUnitKey && !selectedUnitKeys.has(hoveredUnitKey) ? 1 : 0);
+  ensureSelectionMeshCapacity(batches, selectionRingCount);
   batches.billboardQuaternion.copy(camera.quaternion);
   const symbolScale = UNIT_SYMBOL_SIZE_PX * worldUnitsPerPixel;
   const selectionScale = SELECTION_RING_SIZE_PX * worldUnitsPerPixel;
@@ -155,7 +159,10 @@ export function updateUnitBatches(
       batches.symbolCounts.set(key, symbolIndex + 1);
     }
 
-    if (selectedUnitKeys.has(unit.key) && batches.selectionMesh) {
+    if (
+      (selectedUnitKeys.has(unit.key) || unit.key === hoveredUnitKey) &&
+      batches.selectionMesh
+    ) {
       writeUnitInstanceMatrix(batches, position, selectionScale, 0);
       batches.selectionMesh.setMatrixAt(selectedCount, batches.matrix);
       selectedCount += 1;

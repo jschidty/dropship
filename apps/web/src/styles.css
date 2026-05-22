@@ -1091,7 +1091,8 @@ canvas {
       1px no-repeat,
     linear-gradient(var(--target-color), var(--target-color)) right bottom / 1px
       15px no-repeat;
-  filter: drop-shadow(0 0 6px rgb(116 217 255 / 36%));
+  filter:
+    drop-shadow(0 0 6px color-mix(in srgb, var(--target-color), transparent 64%));
   pointer-events: none;
   will-change: transform;
 }
@@ -1116,13 +1117,13 @@ canvas {
 }
 
 .attack-target-marker[data-state="cycle"] {
-  --target-color: rgb(255 214 107 / 94%);
-  filter: drop-shadow(0 0 8px rgb(255 214 107 / 48%));
+  filter:
+    drop-shadow(0 0 8px color-mix(in srgb, var(--target-color), transparent 52%));
 }
 
 .attack-target-marker[data-state="locked"] {
-  --target-color: rgb(252 61 33 / 100%);
-  filter: drop-shadow(0 0 9px rgb(252 61 33 / 58%));
+  filter:
+    drop-shadow(0 0 9px color-mix(in srgb, var(--target-color), transparent 42%));
 }
 
 .attack-target-marker[hidden] {

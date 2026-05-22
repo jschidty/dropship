@@ -745,20 +745,6 @@ function CommandMenu({
                 ? `Escort ${selectedLeader.label} #${selectedLeader.handle.id}`
                 : "Escort leader"}
             </button>
-            <button
-              type="button"
-              className="command-menu-command"
-              disabled={snapshot.selectedUnits.length === 0}
-              aria-pressed={snapshot.pendingCommand === "orbitPlanet"}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                actions.toggleOrbitPlanetCommand();
-                event.currentTarget.blur();
-              }}
-            >
-              Orbit planet
-            </button>
           </div>
         </details>
         <div
@@ -1209,8 +1195,8 @@ const HOTKEYS: readonly (readonly [string, string])[] = [
   ["T", "Toggle tactical overlay"],
   ["P", "Pause and show hotkeys"],
   ["Space", "Reselect previous command group"],
-  ["Tab", "Cycle nearby enemy target"],
-  ["Shift+Tab", "Cycle previous enemy target"],
+  ["Tab", "Cycle nearby target"],
+  ["Shift+Tab", "Cycle previous target"],
 ];
 
 function createUnitGroups(

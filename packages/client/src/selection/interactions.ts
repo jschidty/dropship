@@ -46,6 +46,39 @@ export function selectPrimarySceneSelectionCandidate<
   return candidates.slice().sort(compareSceneSelectionCandidates)[0] ?? null;
 }
 
+export function rankSceneSelectionCandidates<
+  Candidate extends SceneSelectionCandidate,
+>(candidates: readonly Candidate[]): readonly Candidate[] {
+  return candidates.slice().sort(compareSceneSelectionCandidates);
+}
+
+export function selectNextSceneSelectionTarget(
+  candidates: readonly SceneSelectionCandidate[],
+  currentTarget: SceneSelectionTarget | null,
+  direction: 1 | -1
+): SceneSelectionTarget | null {
+  const ranked = rankSceneSelectionCandidates(candidates);
+
+  if (ranked.length === 0) {
+    return null;
+  }
+
+  const currentIndex = currentTarget
+    ? ranked.findIndex((candidate) =>
+        areSceneSelectionTargetsEqual(candidate, currentTarget)
+      )
+    : -1;
+
+  const nextCandidate =
+    currentIndex < 0
+      ? direction > 0
+        ? ranked[0]
+        : ranked[ranked.length - 1]
+      : ranked[(currentIndex + direction + ranked.length) % ranked.length];
+
+  return toSceneSelectionTarget(nextCandidate);
+}
+
 export function toSceneSelectionTarget(
   candidate: SceneSelectionCandidate
 ): SceneSelectionTarget {

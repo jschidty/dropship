@@ -97,16 +97,12 @@ import {
   selectMoveOrderUnits,
 } from "../selection/commands";
 import {
+  selectNextSceneSelectionTarget,
   selectPrimarySceneSelectionCandidate,
   toSceneSelectionTarget,
   type SceneSelectionCandidate,
   type SceneSelectionTarget,
 } from "../selection/interactions";
-import {
-  rankAttackTargetCandidates,
-  selectNextAttackTargetKey,
-  type AttackTargetCandidate,
-} from "../selection/targeting";
 import type {
   LocalGameRuntime,
   MountedGame,
@@ -189,6 +185,24 @@ type SelectedOrbitLane = Readonly<{
 
 type SelectionMode = "add" | "remove" | "replace";
 
+type PointerScreenPoint = Pick<PointerEvent, "clientX" | "clientY">;
+
+type SceneTargetActionKind =
+  | "selectUnit"
+  | "targetUnit"
+  | "escort"
+  | "attack"
+  | "selectPlanet"
+  | "capture"
+  | "guard";
+
+type SceneTargetAction = Readonly<{
+  kind: SceneTargetActionKind;
+  label: string;
+}>;
+
+type SceneTargetMachineContext = "empty" | "unitsSelected";
+
 type CameraZoomTween = {
   active: boolean;
   mode: CameraControls["mode"];
@@ -228,9 +242,15 @@ type AttackTargetMarker = {
   visible: boolean;
   transform: string;
   labelText: string;
+  accentColor: string;
   state: AttackTargetMarkerState;
   sizePx: number;
 };
+
+type UnitTargetMarkerVisual = Readonly<{
+  action: SceneTargetAction;
+  unit: UnitViewModel;
+}>;
 
 type PlanetSelectionMarkerState = "selected" | "hover";
 
@@ -254,11 +274,6 @@ type PlanetSelectionMarker = {
   accentColor: string;
   state: PlanetSelectionMarkerState;
 };
-
-type ScreenAttackTargetCandidate = AttackTargetCandidate &
-  Readonly<{
-    unit: UnitViewModel;
-  }>;
 
 type ScreenSceneSelectionCandidate = SceneSelectionCandidate &
   (
@@ -494,6 +509,7 @@ export function mountMinimalGame(
   let commandMenuLeaderKey: string | null = null;
   let previousCommandLeaderKey: string | null = null;
   let hoveredSelectionTarget: SceneSelectionTarget | null = null;
+  let cycledSelectionTarget: SceneSelectionTarget | null = null;
   let cycledAttackTargetKey: string | null = null;
   let lockedAttackTargetKey: string | null = null;
   let selectedOrbitLane: SelectedOrbitLane | null = null;
@@ -897,30 +913,22 @@ export function mountMinimalGame(
   }
 
   function clearAttackTargeting(): void {
+    cycledSelectionTarget = null;
     cycledAttackTargetKey = null;
     lockedAttackTargetKey = null;
+  }
+
+  function clearCycledSelectionTarget(): void {
+    cycledSelectionTarget = null;
+    cycledAttackTargetKey = lockedAttackTargetKey;
   }
 
   function clearHoveredSelectionTarget(): void {
     hoveredSelectionTarget = null;
   }
 
-  function readHoveredFriendlyUnitKey(): string | null {
-    return hoveredSelectionTarget?.kind === "friendlyUnit"
-      ? hoveredSelectionTarget.key
-      : null;
-  }
-
-  function readHoveredAttackTargetKey(): string | null {
-    return hoveredSelectionTarget?.kind === "enemyUnit"
-      ? hoveredSelectionTarget.key
-      : null;
-  }
-
-  function readHoveredPlanetKey(): string | null {
-    return hoveredSelectionTarget?.kind === "planet"
-      ? hoveredSelectionTarget.key
-      : null;
+  function readActiveSelectionTarget(): SceneSelectionTarget | null {
+    return cycledSelectionTarget ?? hoveredSelectionTarget;
   }
 
   function recordCommandHistory(command: IssuedUnitCommand): void {
@@ -987,6 +995,7 @@ export function mountMinimalGame(
     }
     pendingCommand = null;
     clearHoveredSelectionTarget();
+    cycledSelectionTarget = null;
     cycledAttackTargetKey = command.attackTargetKey ?? null;
     lockedAttackTargetKey = command.attackTargetKey ?? null;
     selectedOrbitLane = command.orbitLaneSelection ?? selectedOrbitLane;
@@ -1106,8 +1115,8 @@ export function mountMinimalGame(
     zoomToFitFocusEnabled = false;
   }
 
-  function cycleAttackTargetFromKeyboard(direction: 1 | -1): boolean {
-    if (!canControlUnits() || selectedUnitKeys.size === 0) {
+  function cycleSceneSelectionTargetFromKeyboard(direction: 1 | -1): boolean {
+    if (!canControlUnits()) {
       return false;
     }
 
@@ -1116,13 +1125,15 @@ export function mountMinimalGame(
       lastPointerClientX,
       lastPointerClientY
     );
-    let candidates = collectAttackTargetCandidates(
+    let candidates = collectPointerSceneSelectionCandidates(
+      screenPoint,
+      renderer.domElement,
+      camera,
       runtime.readUnits(),
       runtime.playerId,
-      camera,
-      renderer.domElement,
-      screenPoint.clientX,
-      screenPoint.clientY,
+      runtime.readPlanets(),
+      planetProxies,
+      true,
       scratch,
       ATTACK_TARGET_TAB_RADIUS_PX
     );
@@ -1130,38 +1141,212 @@ export function mountMinimalGame(
     if (candidates.length === 0 && screenPoint.source === "pointer") {
       const bounds = renderer.domElement.getBoundingClientRect();
 
-      candidates = collectAttackTargetCandidates(
+      candidates = collectPointerSceneSelectionCandidates(
+        {
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+        },
+        renderer.domElement,
+        camera,
         runtime.readUnits(),
         runtime.playerId,
-        camera,
-        renderer.domElement,
-        bounds.left + bounds.width / 2,
-        bounds.top + bounds.height / 2,
+        runtime.readPlanets(),
+        planetProxies,
+        true,
         scratch,
         ATTACK_TARGET_TAB_FALLBACK_RADIUS_PX
       );
     }
 
-    const nextKey = selectNextAttackTargetKey(
+    const nextTarget = selectNextSceneSelectionTarget(
       candidates,
-      cycledAttackTargetKey ??
-        readHoveredAttackTargetKey() ??
-        lockedAttackTargetKey,
+      cycledSelectionTarget ??
+        hoveredSelectionTarget ??
+        (lockedAttackTargetKey
+          ? { kind: "enemyUnit", key: lockedAttackTargetKey }
+          : null),
       direction
     );
 
-    if (!nextKey) {
+    if (!nextTarget) {
       return false;
     }
 
     clearZoomToFitFocus();
     cameraZoomTween.active = false;
-    selectedPlanetKey = null;
     pendingCommand = null;
-    cycledAttackTargetKey = nextKey;
-    clearHoveredSelectionTarget();
+    cycledSelectionTarget = nextTarget;
+    cycledAttackTargetKey =
+      nextTarget.kind === "enemyUnit" ? nextTarget.key : null;
     publishOverlaySnapshot();
     return true;
+  }
+
+  function readPointerClickTarget(
+    event: PointerEvent
+  ): ScreenSceneSelectionCandidate | null {
+    const units = runtime.readUnits();
+    const planets = runtime.readPlanets();
+
+    return (
+      readSceneSelectionCandidateByTarget(
+        cycledSelectionTarget,
+        units,
+        runtime.playerId,
+        planets
+      ) ??
+      readPointerSceneSelectionTarget(
+        event,
+        renderer.domElement,
+        camera,
+        units,
+        runtime.playerId,
+        planets,
+        planetProxies,
+        true,
+        scratch
+      )
+    );
+  }
+
+  function applySceneTargetClick(
+    target: ScreenSceneSelectionCandidate,
+    selectionMode: SelectionMode
+  ): boolean {
+    hoveredSelectionTarget = toSceneSelectionTarget(target);
+    cycledSelectionTarget = null;
+
+    const action =
+      target.kind === "friendlyUnit" && selectionMode !== "replace"
+        ? createSceneTargetAction("selectUnit")
+        : resolveSceneTargetAction(
+            target,
+            runtime.readUnits(),
+            runtime.readPlanets(),
+            runtime.playerId,
+            selectedUnitKeys
+          );
+
+    switch (action.kind) {
+      case "selectUnit":
+        if (target.kind !== "friendlyUnit") {
+          return false;
+        }
+
+        applyFriendlyUnitSelection(target, selectionMode);
+        return true;
+      case "targetUnit":
+        selectedPlanetKey = null;
+        pendingCommand = null;
+        cycledAttackTargetKey = target.kind === "enemyUnit" ? target.key : null;
+        publishOverlaySnapshot();
+        return true;
+      case "escort": {
+        if (target.kind !== "friendlyUnit") {
+          return false;
+        }
+
+        selectedPlanetKey = null;
+        pendingCommand = null;
+        const issuedCommand = issueEscortOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          target.key
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand);
+          return true;
+        }
+
+        applyFriendlyUnitSelection(target, selectionMode);
+        return true;
+      }
+      case "attack": {
+        if (target.kind !== "enemyUnit") {
+          return false;
+        }
+
+        selectedPlanetKey = null;
+        pendingCommand = null;
+        cycledAttackTargetKey = target.key;
+        const issuedCommand = issueAttackOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          target.key
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand);
+          return true;
+        }
+
+        publishOverlaySnapshot();
+        return true;
+      }
+      case "selectPlanet":
+        if (target.kind !== "planet") {
+          return false;
+        }
+
+        selectedPlanetKey =
+          target.key === selectedPlanetKey ? null : target.key;
+        pendingCommand = null;
+        publishOverlaySnapshot();
+        return true;
+      case "capture":
+      case "guard": {
+        if (target.kind !== "planet") {
+          return false;
+        }
+
+        selectedPlanetKey = target.key;
+        pendingCommand = null;
+        const issuedCommand = issuePlanetOrderFromSelection(
+          runtime,
+          selectedUnitKeys,
+          target.key,
+          action.kind === "capture" ? "capturePlanet" : "guardPlanet"
+        );
+
+        if (issuedCommand) {
+          completeIssuedCommand(issuedCommand, { preserveSelection: true });
+          return true;
+        }
+
+        publishOverlaySnapshot();
+        return true;
+      }
+    }
+  }
+
+  function applyFriendlyUnitSelection(
+    target: Extract<ScreenSceneSelectionCandidate, { kind: "friendlyUnit" }>,
+    selectionMode: SelectionMode
+  ): void {
+    if (selectionMode === "remove") {
+      selectedUnitKeys.delete(target.key);
+    } else if (selectionMode === "replace") {
+      selectedUnitKeys.clear();
+      selectedUnitKeys.add(target.key);
+      selectedPlanetKey = null;
+      clearAttackTargeting();
+    } else {
+      selectedUnitKeys.add(target.key);
+    }
+
+    commandMenuLeaderKey = pruneCommandMenuLeaderKey(
+      commandMenuLeaderKey,
+      selectedUnitKeys
+    );
+
+    if (selectedUnitKeys.size === 0) {
+      pendingCommand = null;
+      clearHoveredSelectionTarget();
+      cycledAttackTargetKey = null;
+    }
+
+    publishOverlaySnapshot();
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1311,7 +1496,7 @@ export function mountMinimalGame(
     }
 
     if (key === "tab") {
-      if (cycleAttackTargetFromKeyboard(event.shiftKey ? -1 : 1)) {
+      if (cycleSceneSelectionTargetFromKeyboard(event.shiftKey ? -1 : 1)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -1341,15 +1526,18 @@ export function mountMinimalGame(
       clearAttackTargeting();
     }
 
-    orbitLaneDragState = beginOrbitLaneDrag(
-      event,
-      renderer.domElement,
-      camera,
-      runtime,
-      selectedUnitKeys,
-      planetProxies,
-      scratch
-    );
+    orbitLaneDragState =
+      cycledSelectionTarget && cycledSelectionTarget.kind !== "planet"
+        ? null
+        : beginOrbitLaneDrag(
+            event,
+            renderer.domElement,
+            camera,
+            runtime,
+            selectedUnitKeys,
+            planetProxies,
+            scratch
+          );
 
     cameraControls.isDragging = true;
     cameraControls.dragMode = orbitLaneDragState
@@ -1380,6 +1568,7 @@ export function mountMinimalGame(
   const handlePointerMove = (event: PointerEvent) => {
     lastPointerClientX = event.clientX;
     lastPointerClientY = event.clientY;
+    clearCycledSelectionTarget();
 
     hoveredSelectionTarget = readPointerSceneSelectionTarget(
       event,
@@ -1510,23 +1699,10 @@ export function mountMinimalGame(
         return;
       }
 
-      if (completedOrbitLaneDrag) {
-        const lane =
-          selectedOrbitLane?.planetKey === completedOrbitLaneDrag.planetKey
-            ? selectedOrbitLane.lane
-            : undefined;
-        const issuedCommand = issuePlanetOrderFromSelection(
-          runtime,
-          selectedUnitKeys,
-          completedOrbitLaneDrag.planetKey,
-          "orbitPlanet",
-          lane
-        );
+      const pointerTarget = readPointerClickTarget(event);
 
-        if (issuedCommand) {
-          completeIssuedCommand(issuedCommand, { preserveSelection: true });
-          return;
-        }
+      if (pointerTarget && applySceneTargetClick(pointerTarget, activeSelectionMode)) {
+        return;
       }
 
       publishOverlaySnapshot();
@@ -1547,6 +1723,7 @@ export function mountMinimalGame(
         scratch,
         activeSelectionMode
       );
+      clearCycledSelectionTarget();
       commandMenuLeaderKey = pruneCommandMenuLeaderKey(
         commandMenuLeaderKey,
         selectedUnitKeys
@@ -1555,103 +1732,15 @@ export function mountMinimalGame(
       if (selectedUnitKeys.size === 0) {
         pendingCommand = null;
         clearHoveredSelectionTarget();
-        cycledAttackTargetKey = null;
       }
       publishOverlaySnapshot();
       return;
     }
 
     if (dragMode === "select" && wasClick) {
-      const pointerTarget = readPointerSceneSelectionTarget(
-        event,
-        renderer.domElement,
-        camera,
-        runtime.readUnits(),
-        runtime.playerId,
-        runtime.readPlanets(),
-        planetProxies,
-        true,
-        scratch
-      );
+      const pointerTarget = readPointerClickTarget(event);
 
-      hoveredSelectionTarget = pointerTarget
-        ? toSceneSelectionTarget(pointerTarget)
-        : null;
-
-      if (pointerTarget?.kind === "friendlyUnit") {
-        if (activeSelectionMode === "remove") {
-          selectedUnitKeys.delete(pointerTarget.key);
-        } else if (activeSelectionMode === "replace") {
-          selectedUnitKeys.clear();
-          selectedUnitKeys.add(pointerTarget.key);
-          selectedPlanetKey = null;
-          clearAttackTargeting();
-        } else {
-          selectedUnitKeys.add(pointerTarget.key);
-        }
-
-        commandMenuLeaderKey = pruneCommandMenuLeaderKey(
-          commandMenuLeaderKey,
-          selectedUnitKeys
-        );
-
-        if (selectedUnitKeys.size === 0) {
-          pendingCommand = null;
-          clearHoveredSelectionTarget();
-          cycledAttackTargetKey = null;
-        }
-
-        publishOverlaySnapshot();
-        return;
-      }
-
-      if (pointerTarget?.kind === "enemyUnit") {
-        const attackTarget = pointerTarget.unit;
-        selectedPlanetKey = null;
-        pendingCommand = null;
-        cycledAttackTargetKey = attackTarget.key;
-
-        if (selectedUnitKeys.size > 0) {
-          const issuedCommand = issueAttackOrderFromSelection(
-            runtime,
-            selectedUnitKeys,
-            attackTarget.key
-          );
-
-          if (issuedCommand) {
-            completeIssuedCommand(issuedCommand);
-            return;
-          }
-        }
-
-        publishOverlaySnapshot();
-        return;
-      }
-
-      if (pointerTarget?.kind === "planet") {
-        const { planet: selectedPlanet } = pointerTarget;
-        if (selectedUnitKeys.size > 0) {
-          selectedPlanetKey = selectedPlanet.key;
-          const issuedCommand = issuePlanetOrderFromSelection(
-            runtime,
-            selectedUnitKeys,
-            selectedPlanet.key,
-            "orbitPlanet"
-          );
-
-          if (issuedCommand) {
-            completeIssuedCommand(issuedCommand, { preserveSelection: true });
-            return;
-          }
-        } else {
-          selectedPlanetKey =
-            selectedPlanet.key === selectedPlanetKey
-              ? null
-              : selectedPlanet.key;
-        }
-
-        pendingCommand = null;
-        publishOverlaySnapshot();
+      if (pointerTarget && applySceneTargetClick(pointerTarget, activeSelectionMode)) {
         return;
       }
 
@@ -1701,6 +1790,7 @@ export function mountMinimalGame(
   };
   const handlePointerLeave = () => {
     clearHoveredSelectionTarget();
+    clearCycledSelectionTarget();
     lastPointerClientX = null;
     lastPointerClientY = null;
   };
@@ -1886,6 +1976,12 @@ export function mountMinimalGame(
       planets,
       runtime.playerId
     );
+    cycledSelectionTarget = pruneSceneSelectionTarget(
+      cycledSelectionTarget,
+      units,
+      planets,
+      runtime.playerId
+    );
     cycledAttackTargetKey = pruneAttackTargetKey(
       cycledAttackTargetKey,
       units,
@@ -1904,8 +2000,35 @@ export function mountMinimalGame(
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
     selectedOrbitLane =
       readSelectedOrbitLane(selectedUnits, planets) ?? selectedOrbitLane;
+    const activeSelectionTarget = readActiveSelectionTarget();
+    const activePlanetKey =
+      activeSelectionTarget?.kind === "planet"
+        ? activeSelectionTarget.key
+        : null;
+    const hoverUnitTargetVisual = readUnitTargetMarkerVisual(
+      cycledSelectionTarget ? null : activeSelectionTarget,
+      units,
+      planets,
+      runtime.playerId,
+      selectedUnitKeys
+    );
+    const cycledUnitTargetVisual = readUnitTargetMarkerVisual(
+      cycledSelectionTarget,
+      units,
+      planets,
+      runtime.playerId,
+      selectedUnitKeys
+    );
+    const lockedAttackTargetVisual =
+      activeSelectionTarget || !lockedAttackTargetKey
+        ? null
+        : readLockedAttackTargetMarkerVisual(
+            units,
+            runtime.playerId,
+            lockedAttackTargetKey
+          );
     const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
-    const hoveredPlanet = getSelectedPlanet(planets, readHoveredPlanetKey());
+    const hoveredPlanet = getSelectedPlanet(planets, activePlanetKey);
     const focus = zoomToFitFocusEnabled
       ? scratch.focus.copy(zoomToFitFocus)
       : writeCameraFocusPosition(scratch.focus, units, selectedUnitKeys);
@@ -1914,6 +2037,10 @@ export function mountMinimalGame(
       : readCameraFocusContextKey(selectedUnitKeys);
 
     if (cameraFocusContextKey !== previousCameraFocusContextKey) {
+      preservePannedCameraFocusForContextChange(
+        cameraFocusTween,
+        cameraControls
+      );
       cameraControls.panOffset.set(0, 0, 0);
       previousCameraFocusContextKey = cameraFocusContextKey;
     }
@@ -1964,14 +2091,13 @@ export function mountMinimalGame(
       hideSelectedLeaderArrow(leaderArrow);
     }
 
-    updateAttackTargetMarkers(
+    updateUnitTargetMarkers(
       hoveredAttackTargetMarker,
       cycledAttackTargetMarker,
       lockedAttackTargetMarker,
-      units,
-      readHoveredAttackTargetKey(),
-      cycledAttackTargetKey,
-      lockedAttackTargetKey,
+      hoverUnitTargetVisual,
+      cycledUnitTargetVisual,
+      lockedAttackTargetVisual,
       camera,
       viewport,
       scratch
@@ -1982,7 +2108,7 @@ export function mountMinimalGame(
       unitBatches,
       units,
       selectedUnitKeys,
-      readHoveredFriendlyUnitKey(),
+      null,
       planets,
       camera,
       worldUnitsPerPixel,
@@ -2450,6 +2576,7 @@ function createAttackTargetMarker(
     visible: false,
     transform: "",
     labelText: "",
+    accentColor: "",
     state,
     sizePx: 0,
   };
@@ -2464,69 +2591,59 @@ function hideAttackTargetMarker(marker: AttackTargetMarker): void {
   marker.visible = false;
   marker.transform = "";
   marker.labelText = "";
+  marker.accentColor = "";
   marker.label.textContent = "";
+  marker.element.style.removeProperty("--target-color");
   marker.sizePx = 0;
 }
 
-function updateAttackTargetMarkers(
+function updateUnitTargetMarkers(
   hoverMarker: AttackTargetMarker,
   cycleMarker: AttackTargetMarker,
   lockedMarker: AttackTargetMarker,
-  units: readonly UnitViewModel[],
-  hoveredKey: string | null,
-  cycledKey: string | null,
-  lockedKey: string | null,
+  hoverVisual: UnitTargetMarkerVisual | null,
+  cycleVisual: UnitTargetMarkerVisual | null,
+  lockedVisual: UnitTargetMarkerVisual | null,
   camera: THREE.Camera,
   viewport: ViewportMetrics,
   scratch: RenderScratch
 ): void {
-  const lockedTarget = lockedKey
-    ? units.find((unit) => unit.key === lockedKey) ?? null
-    : null;
-  const cycledTarget =
-    cycledKey && cycledKey !== lockedKey
-      ? units.find((unit) => unit.key === cycledKey) ?? null
-      : null;
-  const hoveredTarget =
-    hoveredKey && hoveredKey !== lockedKey && hoveredKey !== cycledKey
-      ? units.find((unit) => unit.key === hoveredKey) ?? null
-      : null;
-
-  updateAttackTargetMarker(
+  updateUnitTargetMarker(
     lockedMarker,
-    lockedTarget,
+    lockedVisual,
     camera,
     viewport,
     scratch
   );
-  updateAttackTargetMarker(
+  updateUnitTargetMarker(
     cycleMarker,
-    cycledTarget,
+    cycleVisual,
     camera,
     viewport,
     scratch
   );
-  updateAttackTargetMarker(
+  updateUnitTargetMarker(
     hoverMarker,
-    hoveredTarget,
+    hoverVisual,
     camera,
     viewport,
     scratch
   );
 }
 
-function updateAttackTargetMarker(
+function updateUnitTargetMarker(
   marker: AttackTargetMarker,
-  target: UnitViewModel | null,
+  visual: UnitTargetMarkerVisual | null,
   camera: THREE.Camera,
   viewport: ViewportMetrics,
   scratch: RenderScratch
 ): void {
-  if (!target) {
+  if (!visual) {
     hideAttackTargetMarker(marker);
     return;
   }
 
+  const { action, unit: target } = visual;
   const projected = scratch.projected.copy(target.position).project(camera);
 
   if (projected.z < -1 || projected.z > 1) {
@@ -2540,7 +2657,8 @@ function updateAttackTargetMarker(
     Math.max(42, UNIT_SYMBOL_SIZE_PX * readUnitSymbolScale(target) * 1.65)
   );
   const transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-  const labelText = formatAttackTargetMarkerLabel(marker.state, target);
+  const labelText = formatUnitTargetMarkerLabel(action, target);
+  const accentColor = target.color;
 
   if (!marker.visible) {
     marker.element.hidden = false;
@@ -2557,24 +2675,29 @@ function updateAttackTargetMarker(
     marker.sizePx = sizePx;
   }
 
+  if (marker.accentColor !== accentColor) {
+    marker.element.style.setProperty("--target-color", accentColor);
+    marker.accentColor = accentColor;
+  }
+
   if (marker.labelText !== labelText) {
     marker.label.textContent = labelText;
     marker.labelText = labelText;
   }
 }
 
-function formatAttackTargetMarkerLabel(
-  state: AttackTargetMarkerState,
+function formatUnitTargetMarkerLabel(
+  action: SceneTargetAction,
   target: UnitViewModel
 ): string {
-  const status =
-    state === "locked" ? "ATTACK" : state === "cycle" ? "TARGET" : "SCAN";
   const healthPercent = Math.max(
     0,
     Math.round((target.health.current / Math.max(target.health.max, 1)) * 100)
   );
 
-  return `${status} ${formatShipClassLabel(target.shipClassId)} ${healthPercent}%`;
+  return `${action.label} ${formatShipClassLabel(
+    target.shipClassId
+  )} ${healthPercent}%`;
 }
 
 function formatShipClassLabel(shipClassId: number): string {
@@ -3179,6 +3302,17 @@ function writePannedCameraFocus(
   return target.copy(focus).add(cameraControls.panOffset);
 }
 
+function preservePannedCameraFocusForContextChange(
+  tween: CameraFocusTween,
+  cameraControls: CameraControls
+): void {
+  if (!tween.initialized || cameraControls.panOffset.lengthSq() <= 0.000001) {
+    return;
+  }
+
+  tween.current.add(cameraControls.panOffset);
+}
+
 function panCameraByScreenDelta(
   cameraControls: CameraControls,
   camera: THREE.OrthographicCamera,
@@ -3373,6 +3507,101 @@ function getSelectedPlanet(
   return selectedPlanetKey
     ? planets.find((planet) => planet.key === selectedPlanetKey) ?? null
     : null;
+}
+
+function resolveSceneTargetAction(
+  target: SceneSelectionTarget,
+  units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
+  playerId: PlayerId,
+  selectedUnitKeys: ReadonlySet<string>
+): SceneTargetAction {
+  const context = readSceneTargetMachineContext(
+    units,
+    playerId,
+    selectedUnitKeys
+  );
+
+  switch (target.kind) {
+    case "friendlyUnit":
+      return context === "unitsSelected" &&
+        hasEscortCommandUnits(units, playerId, selectedUnitKeys, target.key)
+        ? createSceneTargetAction("escort")
+        : createSceneTargetAction("selectUnit");
+    case "enemyUnit":
+      return context === "unitsSelected"
+        ? createSceneTargetAction("attack")
+        : createSceneTargetAction("targetUnit");
+    case "planet": {
+      if (context === "empty") {
+        return createSceneTargetAction("selectPlanet");
+      }
+
+      const planet = planets.find((entry) => entry.key === target.key) ?? null;
+
+      return planet?.control.owner === playerId
+        ? createSceneTargetAction("guard")
+        : createSceneTargetAction("capture");
+    }
+  }
+}
+
+function createSceneTargetAction(
+  kind: SceneTargetActionKind
+): SceneTargetAction {
+  switch (kind) {
+    case "selectUnit":
+    case "selectPlanet":
+      return { kind, label: "SELECT" };
+    case "targetUnit":
+      return { kind, label: "TARGET" };
+    case "escort":
+      return { kind, label: "ESCORT" };
+    case "attack":
+      return { kind, label: "ATTACK" };
+    case "capture":
+      return { kind, label: "CAPTURE" };
+    case "guard":
+      return { kind, label: "GUARD" };
+  }
+}
+
+function readSceneTargetMachineContext(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  selectedUnitKeys: ReadonlySet<string>
+): SceneTargetMachineContext {
+  return hasCommandableSelectedUnits(units, playerId, selectedUnitKeys)
+    ? "unitsSelected"
+    : "empty";
+}
+
+function hasCommandableSelectedUnits(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  selectedUnitKeys: ReadonlySet<string>
+): boolean {
+  return units.some(
+    (unit) =>
+      unit.owner === playerId &&
+      selectedUnitKeys.has(unit.key) &&
+      unit.health.current > 0
+  );
+}
+
+function hasEscortCommandUnits(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  selectedUnitKeys: ReadonlySet<string>,
+  targetKey: string
+): boolean {
+  return units.some(
+    (unit) =>
+      unit.owner === playerId &&
+      unit.key !== targetKey &&
+      selectedUnitKeys.has(unit.key) &&
+      unit.health.current > 0
+  );
 }
 
 function readSelectedOrbitLane(
@@ -3839,6 +4068,52 @@ function issueAttackOrderFromSelection(
   };
 }
 
+function issueEscortOrderFromSelection(
+  runtime: LocalGameRuntime,
+  selectedUnitKeys: ReadonlySet<string>,
+  targetKey: string
+): IssuedUnitCommand | null {
+  if (selectedUnitKeys.size === 0) {
+    return null;
+  }
+
+  const units = runtime.readUnits();
+  const target = units.find(
+    (unit) =>
+      unit.key === targetKey &&
+      unit.owner === runtime.playerId &&
+      unit.health.current > 0
+  );
+
+  if (!target) {
+    return null;
+  }
+
+  const escortUnits = units.filter(
+    (unit) =>
+      unit.owner === runtime.playerId &&
+      selectedUnitKeys.has(unit.key) &&
+      unit.key !== target.key &&
+      unit.health.current > 0
+  );
+
+  if (escortUnits.length === 0) {
+    return null;
+  }
+
+  runtime.enqueueUnitOrder(
+    escortUnits.map((unit) => unit.handle),
+    {
+      type: "escort",
+      target: target.handle,
+    }
+  );
+  return {
+    label: `Escort ${target.label} #${target.handle.id}`,
+    units: escortUnits,
+  };
+}
+
 function issueEscortLeaderOrder(
   runtime: LocalGameRuntime,
   selectedUnitKeys: ReadonlySet<string>,
@@ -3949,6 +4224,22 @@ function beginOrbitLaneDrag(
     );
 
   if (selectedUnits.length === 0) {
+    return null;
+  }
+
+  const primaryTarget = readPointerSceneSelectionTarget(
+    event,
+    canvas,
+    camera,
+    runtime.readUnits(),
+    runtime.playerId,
+    runtime.readPlanets(),
+    proxies,
+    true,
+    scratch
+  );
+
+  if (primaryTarget?.kind !== "planet") {
     return null;
   }
 
@@ -4291,7 +4582,7 @@ function getPointerMoveTarget(
 }
 
 function findPlanetAtPointer(
-  event: PointerEvent,
+  event: PointerScreenPoint,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   planets: readonly PlanetViewModel[],
@@ -4370,7 +4661,7 @@ function findPlanetAtPointer(
 }
 
 function readPointerSceneSelectionTarget(
-  event: PointerEvent,
+  event: PointerScreenPoint,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   units: readonly UnitViewModel[],
@@ -4395,8 +4686,54 @@ function readPointerSceneSelectionTarget(
   );
 }
 
+function readSceneSelectionCandidateByTarget(
+  target: SceneSelectionTarget | null,
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  planets: readonly PlanetViewModel[]
+): ScreenSceneSelectionCandidate | null {
+  if (!target) {
+    return null;
+  }
+
+  if (target.kind === "planet") {
+    const planet = planets.find((entry) => entry.key === target.key) ?? null;
+
+    return planet
+      ? {
+          kind: "planet",
+          key: planet.key,
+          screenDistancePx: 0,
+          screenScore: 0,
+          handleId: planet.handle.id,
+          planet,
+        }
+      : null;
+  }
+
+  const unit =
+    units.find(
+      (entry) =>
+        entry.key === target.key &&
+        (target.kind === "friendlyUnit"
+          ? entry.owner === playerId
+          : entry.owner !== playerId && entry.health.current > 0)
+    ) ?? null;
+
+  return unit
+    ? {
+        kind: target.kind,
+        key: unit.key,
+        screenDistancePx: 0,
+        screenScore: 0,
+        handleId: unit.handle.id,
+        unit,
+      }
+    : null;
+}
+
 function collectPointerSceneSelectionCandidates(
-  event: PointerEvent,
+  event: PointerScreenPoint,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   units: readonly UnitViewModel[],
@@ -4404,7 +4741,8 @@ function collectPointerSceneSelectionCandidates(
   planets: readonly PlanetViewModel[],
   proxies: ReadonlyMap<string, PlanetProxy>,
   includeUnits: boolean,
-  scratch: RenderScratch
+  scratch: RenderScratch,
+  unitMaxScreenDistancePx = 0
 ): readonly ScreenSceneSelectionCandidate[] {
   const candidates: ScreenSceneSelectionCandidate[] = [];
 
@@ -4420,7 +4758,8 @@ function collectPointerSceneSelectionCandidates(
         event.clientY,
         scratch,
         FRIENDLY_UNIT_HOVER_RADIUS_MULTIPLIER,
-        FRIENDLY_UNIT_PICK_MIN_RADIUS_PX
+        FRIENDLY_UNIT_PICK_MIN_RADIUS_PX,
+        unitMaxScreenDistancePx
       ),
       ...collectUnitSceneSelectionCandidates(
         "enemyUnit",
@@ -4432,7 +4771,8 @@ function collectPointerSceneSelectionCandidates(
         event.clientY,
         scratch,
         ATTACK_TARGET_HOVER_RADIUS_MULTIPLIER,
-        ATTACK_TARGET_PICK_MIN_RADIUS_PX
+        ATTACK_TARGET_PICK_MIN_RADIUS_PX,
+        unitMaxScreenDistancePx
       )
     );
   }
@@ -4463,7 +4803,8 @@ function collectUnitSceneSelectionCandidates(
   clientY: number,
   scratch: RenderScratch,
   radiusMultiplier: number,
-  minRadiusPx: number
+  minRadiusPx: number,
+  maxScreenDistancePx = 0
 ): readonly ScreenSceneSelectionCandidate[] {
   const bounds = canvas.getBoundingClientRect();
   const pointerX = clientX - bounds.left;
@@ -4488,8 +4829,9 @@ function collectUnitSceneSelectionCandidates(
       minRadiusPx
     );
     const screenDistance = Math.hypot(pointerX - screenX, pointerY - screenY);
+    const allowedDistance = Math.max(screenRadius, maxScreenDistancePx);
 
-    if (screenDistance > screenRadius) {
+    if (screenDistance > allowedDistance) {
       continue;
     }
 
@@ -4507,7 +4849,7 @@ function collectUnitSceneSelectionCandidates(
 }
 
 function readPlanetSceneSelectionCandidate(
-  event: PointerEvent,
+  event: PointerScreenPoint,
   canvas: HTMLCanvasElement,
   camera: THREE.Camera,
   planets: readonly PlanetViewModel[],
@@ -4575,58 +4917,53 @@ function readAttackTargetByKey(
     : null;
 }
 
-function collectAttackTargetCandidates(
+function readUnitTargetMarkerVisual(
+  target: SceneSelectionTarget | null,
   units: readonly UnitViewModel[],
+  planets: readonly PlanetViewModel[],
   playerId: PlayerId,
-  camera: THREE.Camera,
-  canvas: HTMLCanvasElement,
-  clientX: number,
-  clientY: number,
-  scratch: RenderScratch,
-  maxScreenDistancePx: number
-): readonly ScreenAttackTargetCandidate[] {
-  const bounds = canvas.getBoundingClientRect();
-  const pointerX = clientX - bounds.left;
-  const pointerY = clientY - bounds.top;
-  const candidates: ScreenAttackTargetCandidate[] = [];
-
-  for (const unit of units) {
-    if (unit.owner === playerId || unit.health.current <= 0) {
-      continue;
-    }
-
-    const projected = scratch.projected.copy(unit.position).project(camera);
-
-    if (projected.z < -1 || projected.z > 1) {
-      continue;
-    }
-
-    const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
-    const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
-    const screenDistance = Math.hypot(pointerX - screenX, pointerY - screenY);
-    const unitPickRadius = Math.max(
-      UNIT_SYMBOL_SIZE_PX *
-        readUnitSymbolScale(unit) *
-        ATTACK_TARGET_HOVER_RADIUS_MULTIPLIER,
-      ATTACK_TARGET_PICK_MIN_RADIUS_PX
-    );
-    const allowedDistance = Math.max(maxScreenDistancePx, unitPickRadius);
-
-    if (screenDistance > allowedDistance) {
-      continue;
-    }
-
-    candidates.push({
-      key: unit.key,
-      shipClassId: unit.shipClassId,
-      screenDistancePx: screenDistance,
-      worldDistance: unit.position.distanceTo(camera.position),
-      handleId: unit.handle.id,
-      unit,
-    });
+  selectedUnitKeys: ReadonlySet<string>
+): UnitTargetMarkerVisual | null {
+  if (!target || target.kind === "planet") {
+    return null;
   }
 
-  return rankAttackTargetCandidates(candidates) as readonly ScreenAttackTargetCandidate[];
+  const unit =
+    units.find(
+      (entry) =>
+        entry.key === target.key &&
+        (target.kind === "friendlyUnit"
+          ? entry.owner === playerId
+          : entry.owner !== playerId && entry.health.current > 0)
+    ) ?? null;
+
+  return unit
+    ? {
+        unit,
+        action: resolveSceneTargetAction(
+          target,
+          units,
+          planets,
+          playerId,
+          selectedUnitKeys
+        ),
+      }
+    : null;
+}
+
+function readLockedAttackTargetMarkerVisual(
+  units: readonly UnitViewModel[],
+  playerId: PlayerId,
+  targetKey: string
+): UnitTargetMarkerVisual | null {
+  const unit = readAttackTargetByKey(units, playerId, targetKey);
+
+  return unit
+    ? {
+        unit,
+        action: createSceneTargetAction("attack"),
+      }
+    : null;
 }
 
 function readLastPointerScreenPoint(

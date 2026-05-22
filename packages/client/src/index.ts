@@ -18,7 +18,9 @@ export {
 export {
   areSceneSelectionTargetsEqual,
   compareSceneSelectionCandidates,
+  rankSceneSelectionCandidates,
   readSceneSelectionKindPriority,
+  selectNextSceneSelectionTarget,
   selectPrimarySceneSelectionCandidate,
   toSceneSelectionTarget,
   type SceneSelectionCandidate,

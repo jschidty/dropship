@@ -188,10 +188,12 @@ uniform vec2 uResolution;
 uniform vec2 uSunPosition;
 uniform vec3 uSunColor;
 uniform float uVisibility;
+uniform float uSunIntensity;
+uniform float uSunAngularSize;
 uniform float uTime;
 
-float getSun(vec2 uv) {
-  return smoothstep(0.014, 0.0, length(uv));
+float getSun(vec2 uv, float angularSize) {
+  return smoothstep(0.014 * angularSize, 0.0, length(uv));
 }
 
 vec3 lensflares(vec2 uv, vec2 pos, out vec3 sunflare, out vec3 lensflare) {
@@ -230,6 +232,11 @@ vec3 anamorphicFlare(vec2 uv, float intensity, float stretch, float brightness) 
   return vec3(smoothstep(0.009, 0.0, length(uv))) * brightness;
 }
 
+vec3 colorCorrectFlare(vec3 color, float factor, float factor2) {
+  float weight = color.r + color.g + color.b;
+  return mix(color, vec3(weight) * factor, clamp(weight * factor2, 0.0, 1.0));
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy / uResolution.xy - 0.5;
   vec2 sun = uSunPosition - 0.5;
@@ -239,10 +246,20 @@ void main() {
 
   vec3 sunflare = vec3(0.0);
   vec3 lensflare = vec3(0.0);
-  vec3 flare = lensflares(uv * 1.5, sun * 1.5, sunflare, lensflare);
+  float angularSize = clamp(uSunAngularSize, 0.62, 1.42);
+  float intensity = clamp(uSunIntensity, 0.7, 1.7);
+  lensflares(uv * 1.5, sun * 1.5, sunflare, lensflare);
   vec3 anflare = pow(anamorphicFlare(uv - sun, 0.5, 400.0, 0.09), vec3(4.0));
-  vec3 core = vec3(getSun(uv - sun));
-  vec3 color = core * 1.55 + (flare + anflare) * uSunColor * 1.85;
+  vec3 core = vec3(getSun(uv - sun, angularSize));
+  vec3 glassTint = mix(vec3(1.4, 1.2, 1.0), uSunColor, 0.42);
+  vec2 lensUv = uv * length(uv);
+  vec3 glassGhosts = max(lensflare * 1.22 - vec3(length(lensUv) * 0.045), vec3(0.0));
+  glassGhosts = colorCorrectFlare(glassGhosts, 0.5, 0.1) * glassTint;
+  vec3 cameraFlare = sunflare * uSunColor + glassGhosts + anflare * uSunColor;
+  vec3 color =
+    core * (1.38 + angularSize * 0.17) +
+    cameraFlare * 1.85;
+  color *= intensity;
   color *= smoothstep(0.0, 0.2, uVisibility);
   color = 1.0 - exp(-color * 1.15);
   color = pow(color, vec3(1.0 / 2.2));

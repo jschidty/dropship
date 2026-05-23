@@ -427,6 +427,8 @@ const GAS_GIANT_BASE_COLOR_SCRATCH = new THREE.Color();
 const GAS_GIANT_PALETTE_COLOR_SCRATCH = new THREE.Color();
 const DEFAULT_SUN_DIRECTION = new THREE.Vector3(-0.252, -0.827, -0.502).normalize();
 const DEFAULT_SUN_COLOR = new THREE.Color().setRGB(0.643, 0.494, 0.867);
+const DEFAULT_SUN_INTENSITY = 1;
+const BASE_SUN_FLARE_RADIUS = 1200;
 
 export function mountMinimalGame(
   container: HTMLElement,
@@ -723,7 +725,8 @@ export function mountMinimalGame(
 
   const lighting = createLighting(
     writeSunPosition(scratch.sunPosition, runtime.world.config),
-    writeSunColor(scratch.sunColor, runtime.world.config)
+    writeSunColor(scratch.sunColor, runtime.world.config),
+    readSunIntensity(runtime.world.config)
   );
   scene.add(lighting.group);
   const tacticalGrid = createTacticalPlane();
@@ -2322,7 +2325,12 @@ export function mountMinimalGame(
       scratch
     );
 
-    updateLighting(lighting, sunPosition, sunColor);
+    updateLighting(
+      lighting,
+      sunPosition,
+      sunColor,
+      readSunIntensity(runtime.world.config)
+    );
     updateUnitBatches(
       unitBatches,
       units,
@@ -2414,6 +2422,8 @@ export function mountMinimalGame(
       sunFlarePass,
       camera,
       planets,
+      runtime.world.config,
+      sunPosition,
       renderResolution,
       elapsedSeconds,
       scratch
@@ -5890,13 +5900,18 @@ function writeSunColor(target: THREE.Color, config: MatchConfig): THREE.Color {
   return target.set(config.environment.sun.color);
 }
 
+function readSunIntensity(config: MatchConfig): number {
+  return config.environment.sun.intensity ?? DEFAULT_SUN_INTENSITY;
+}
+
 function createLighting(
   sunPosition: THREE.Vector3,
-  sunColor: THREE.Color
+  sunColor: THREE.Color,
+  sunIntensity: number
 ): LightingRig {
   const group = new THREE.Group();
 
-  const sunLight = new THREE.PointLight(sunColor, 2.1, 0, 0);
+  const sunLight = new THREE.PointLight(sunColor, 2.1 * sunIntensity, 0, 0);
   sunLight.position.copy(sunPosition);
   group.add(sunLight);
   group.add(new THREE.AmbientLight(0xdbe7ff, 0.42));
@@ -5910,9 +5925,11 @@ function createLighting(
 function updateLighting(
   lighting: LightingRig,
   sunPosition: THREE.Vector3,
-  sunColor: THREE.Color
+  sunColor: THREE.Color,
+  sunIntensity: number
 ): void {
   lighting.sunLight.color.copy(sunColor);
+  lighting.sunLight.intensity = 2.1 * sunIntensity;
   lighting.sunLight.position.copy(sunPosition);
 }
 
@@ -6793,6 +6810,8 @@ function createSunFlarePass(): FullscreenPass {
       uSunPosition: { value: new THREE.Vector2(0.5, 0.5) },
       uSunColor: { value: DEFAULT_SUN_COLOR.clone() },
       uVisibility: { value: 1 },
+      uSunIntensity: { value: DEFAULT_SUN_INTENSITY },
+      uSunAngularSize: { value: 1 },
       uTime: { value: 0 },
     },
     vertexShader: FULLSCREEN_VERTEX_SHADER,
@@ -6939,6 +6958,8 @@ function updateSunFlarePass(
   pass: FullscreenPass,
   camera: THREE.Camera,
   planets: readonly PlanetViewModel[],
+  config: MatchConfig,
+  sunPosition: THREE.Vector3,
   resolution: THREE.Vector2,
   elapsedSeconds: number,
   scratch: RenderScratch
@@ -6951,7 +6972,11 @@ function updateSunFlarePass(
     return scratch.sunScreenPosition.set(0.5, 0.5, 0, 0);
   }
 
-  const projectedSun = scratch.projected.copy(sunPlanet.position).project(camera);
+  const projectedSun = writeCameraRelativeSunFlarePoint(
+    scratch.projected,
+    camera,
+    sunPosition
+  ).project(camera);
   const visibility =
     projectedSun.z >= -1 && projectedSun.z <= 1 ? 1 : 0;
   const screenPosition = scratch.screenPosition.set(
@@ -6975,6 +7000,12 @@ function updateSunFlarePass(
   pass.material.uniforms.uSunPosition.value.copy(screenPosition);
   pass.material.uniforms.uSunColor.value.set(sunPlanet.color);
   pass.material.uniforms.uVisibility.value = visibleSun;
+  pass.material.uniforms.uSunIntensity.value = readSunIntensity(config);
+  pass.material.uniforms.uSunAngularSize.value = clamp(
+    sunPlanet.radius / BASE_SUN_FLARE_RADIUS,
+    0.62,
+    1.42
+  );
   pass.material.uniforms.uTime.value = elapsedSeconds;
 
   return scratch.sunScreenPosition.set(
@@ -6983,6 +7014,31 @@ function updateSunFlarePass(
     visibleSun,
     occlusion
   );
+}
+
+function writeCameraRelativeSunFlarePoint(
+  target: THREE.Vector3,
+  camera: THREE.Camera,
+  sunPosition: THREE.Vector3
+): THREE.Vector3 {
+  target.copy(sunPosition).sub(camera.position);
+
+  if (target.lengthSq() <= 0.000001) {
+    target.copy(DEFAULT_SUN_DIRECTION);
+  }
+
+  return target
+    .normalize()
+    .multiplyScalar(readSunFlareProjectionDistance(camera))
+    .add(camera.position);
+}
+
+function readSunFlareProjectionDistance(camera: THREE.Camera): number {
+  if (camera instanceof THREE.OrthographicCamera) {
+    return Math.max(camera.top - camera.bottom, camera.right - camera.left, 1);
+  }
+
+  return Math.min(Math.max(camera.far * 0.45, camera.near + 1), 10_000);
 }
 
 function computeSunPlanetOcclusion(

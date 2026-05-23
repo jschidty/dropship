@@ -724,11 +724,24 @@ function testSeededMatchGeneration(): void {
   const baseParentOrbitAxis = primaryPlanets[0]?.orbitAxis;
   const planetClasses = new Set<string>();
   const generatedSunColors = new Set<string>();
+  const generatedSunRadii = new Set<number>();
+  const generatedSunMasses = new Set<number>();
+  const generatedSunIntensities = new Set<number>();
+  const sampledSuns: {
+    seed: number;
+    color: string;
+    radius: number;
+    mass: number;
+    intensity: number;
+  }[] = [];
 
   assert.deepEqual(first.initialPlanets, second.initialPlanets);
   assert.deepEqual(first.environment, second.environment);
   assert.equal(sunPlanets.length, 1);
   assert.equal(sunPlanets[0]?.color, first.environment.sun.color);
+  assert.equal(sunPlanets[0]?.radius, first.environment.sun.radius);
+  assert.equal(sunPlanets[0]?.mass, first.environment.sun.mass);
+  assert.ok(Number.isFinite(first.environment.sun.intensity));
   assert.deepEqual(
     first.environment.sun.position,
     first.environment.sun.orbitCenter
@@ -769,8 +782,14 @@ function testSeededMatchGeneration(): void {
       assert.equal(planet.position.y, first.environment.sun.position.y);
       assert.equal(planet.position.z, first.environment.sun.position.z);
       assert.equal(planet.color, first.environment.sun.color);
-      assert.ok(planet.mass > 100_000_000_000_000);
-      assert.ok(planet.radius >= 1000);
+      assert.equal(planet.radius, first.environment.sun.radius);
+      assert.equal(planet.mass, first.environment.sun.mass);
+      assert.ok(planet.mass >= 580_000_000_000_000);
+      assert.ok(planet.mass <= 1_220_000_000_000_000);
+      assert.ok(planet.radius >= 760);
+      assert.ok(planet.radius <= 1580);
+      assert.ok(first.environment.sun.intensity >= 0.92);
+      assert.ok(first.environment.sun.intensity <= 1.48);
     } else if (planet.parentPlanetIndex !== null) {
       assert.equal(planet.hasAtmosphere, false);
       assert.notEqual(planet.appearance.planetClass, "gas-giant");
@@ -816,11 +835,29 @@ function testSeededMatchGeneration(): void {
     );
 
     assert.equal(config.initialPlanets.filter(isSunPlanet).length, 1);
-    assert.equal(
-      config.initialPlanets.find(isSunPlanet)?.color,
-      config.environment.sun.color
-    );
+    const generatedSun = config.initialPlanets.find(isSunPlanet);
+
+    assert.ok(generatedSun);
+    assert.equal(generatedSun.color, config.environment.sun.color);
+    assert.equal(generatedSun.radius, config.environment.sun.radius);
+    assert.equal(generatedSun.mass, config.environment.sun.mass);
+    assert.ok(generatedSun.radius >= 760);
+    assert.ok(generatedSun.radius <= 1580);
+    assert.ok(generatedSun.mass >= 580_000_000_000_000);
+    assert.ok(generatedSun.mass <= 1_220_000_000_000_000);
+    assert.ok(config.environment.sun.intensity >= 0.92);
+    assert.ok(config.environment.sun.intensity <= 1.48);
     generatedSunColors.add(config.environment.sun.color);
+    generatedSunRadii.add(generatedSun.radius);
+    generatedSunMasses.add(generatedSun.mass);
+    generatedSunIntensities.add(config.environment.sun.intensity);
+    sampledSuns.push({
+      seed,
+      color: config.environment.sun.color,
+      radius: generatedSun.radius,
+      mass: generatedSun.mass,
+      intensity: config.environment.sun.intensity,
+    });
     assert.ok(config.initialPlanets.length >= 8);
     assert.ok(config.initialPlanets.length <= 11);
     assert.ok(generatedPrimaryPlanets.length >= 6);
@@ -828,6 +865,23 @@ function testSeededMatchGeneration(): void {
   }
 
   assert.ok(generatedSunColors.size > 16);
+  assert.ok(generatedSunRadii.size > 16);
+  assert.ok(generatedSunMasses.size > 16);
+  assert.ok(generatedSunIntensities.size > 16);
+
+  const smallestSun = sampledSuns.reduce((smallest, candidate) =>
+    candidate.radius < smallest.radius ? candidate : smallest
+  );
+  const largestSun = sampledSuns.reduce((largest, candidate) =>
+    candidate.radius > largest.radius ? candidate : largest
+  );
+  const smallestSunColor = hexColorToRgb(smallestSun.color);
+  const largestSunColor = hexColorToRgb(largestSun.color);
+
+  assert.ok(smallestSun.mass > largestSun.mass);
+  assert.ok(smallestSun.intensity > largestSun.intensity);
+  assert.ok(smallestSunColor.b >= smallestSunColor.r);
+  assert.ok(largestSunColor.r > largestSunColor.b);
 }
 
 function testPlanetaryOrbitMotion(): void {
@@ -914,7 +968,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "8dc81eda");
+  assert.equal(first, "50a8eced");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -928,11 +982,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "8dc81eda");
+  assert.equal(result.finalHash, "50a8eced");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "8dc81eda",
+      hash: "50a8eced",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -3658,6 +3712,16 @@ function distance(
   b: Readonly<{ x: number; y: number; z: number }>
 ): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function hexColorToRgb(color: string): { r: number; g: number; b: number } {
+  assert.match(color, /^#[0-9a-f]{6}$/);
+
+  return {
+    r: Number.parseInt(color.slice(1, 3), 16),
+    g: Number.parseInt(color.slice(3, 5), 16),
+    b: Number.parseInt(color.slice(5, 7), 16),
+  };
 }
 
 function nearestDropShipSurfaceGap(

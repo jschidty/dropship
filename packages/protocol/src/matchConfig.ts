@@ -53,6 +53,9 @@ export type SunConfig = Readonly<{
   position: Vec3Data;
   orbitCenter: Vec3Data;
   distance: number;
+  radius: number;
+  mass: number;
+  intensity: number;
   color: string;
 }>;
 
@@ -395,9 +398,19 @@ export type PartialSimTuningConfig = Readonly<{
   avoidance?: Partial<SimAvoidanceTuningConfig>;
 }>;
 
-type SunColorStop = Readonly<{
+type StarProfileStop = Readonly<{
   position: number;
   color: readonly [number, number, number];
+  radius: number;
+  mass: number;
+  intensity: number;
+}>;
+
+type StarProfile = Readonly<{
+  color: string;
+  radius: number;
+  mass: number;
+  intensity: number;
 }>;
 
 const DEFAULT_MATCH_SEED = 1337;
@@ -419,8 +432,12 @@ const PARENT_PLANET_RADIUS_SCALE = 9.75;
 const PARENT_PLANET_RADIUS_VARIANCE = 0.2;
 const MOON_RADIUS_SCALE = 0.85;
 const MOON_DISTANCE_SCALE = 1.2;
-const SUN_PLANET_RADIUS = 1200;
-const SUN_PLANET_MASS = 900_000_000_000_000;
+const MIN_SUN_RADIUS = 760;
+const MAX_SUN_RADIUS = 1580;
+const MIN_SUN_MASS = 580_000_000_000_000;
+const MAX_SUN_MASS = 1_220_000_000_000_000;
+const MIN_SUN_INTENSITY = 0.92;
+const MAX_SUN_INTENSITY = 1.48;
 const PARENT_PLANET_INNER_ORBIT_RADIUS = 4200;
 const PARENT_PLANET_OUTER_ORBIT_RADIUS = 12500;
 const PARENT_PLANET_OUTER_ORBIT_COUNT_BONUS = 420;
@@ -435,13 +452,49 @@ const CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA = 900;
 const CAPTURE_DEMO_FLEET_DEPTH_SCALE = 0.75;
 const CAPTURE_DEMO_FLEET_LATERAL_SCALE = 0.9;
 const MINIMAL_SKIRMISH_PLANET_SPAWN_PADDING = 95;
-const SUN_COLOR_STOPS: readonly SunColorStop[] = [
-  { position: 0, color: [0.42, 0.68, 1] },
-  { position: 0.22, color: [0.7, 0.86, 1] },
-  { position: 0.45, color: [1, 0.97, 0.86] },
-  { position: 0.66, color: [1, 0.82, 0.48] },
-  { position: 0.84, color: [1, 0.58, 0.27] },
-  { position: 1, color: [1, 0.28, 0.22] },
+const STAR_PROFILE_STOPS: readonly StarProfileStop[] = [
+  {
+    position: 0,
+    color: [0.42, 0.68, 1],
+    radius: 780,
+    mass: 1_190_000_000_000_000,
+    intensity: 1.44,
+  },
+  {
+    position: 0.22,
+    color: [0.7, 0.86, 1],
+    radius: 900,
+    mass: 1_070_000_000_000_000,
+    intensity: 1.34,
+  },
+  {
+    position: 0.45,
+    color: [1, 0.97, 0.86],
+    radius: 1120,
+    mass: 900_000_000_000_000,
+    intensity: 1.14,
+  },
+  {
+    position: 0.66,
+    color: [1, 0.82, 0.48],
+    radius: 1260,
+    mass: 780_000_000_000_000,
+    intensity: 0.98,
+  },
+  {
+    position: 0.84,
+    color: [1, 0.58, 0.27],
+    radius: 1420,
+    mass: 690_000_000_000_000,
+    intensity: 1.08,
+  },
+  {
+    position: 1,
+    color: [1, 0.28, 0.22],
+    radius: 1560,
+    mass: 620_000_000_000_000,
+    intensity: 1.24,
+  },
 ];
 const MIN_GENERATED_PLANETS = 7;
 const MAX_GENERATED_PLANETS = 10;
@@ -1296,12 +1349,12 @@ function generatePlanetarySystem(seed: number): {
   );
   const planetCount = targetPlanetCount - targetMoonCount;
   const sunPosition = SYSTEM_SUN_POSITION;
-  const sunColor = sampleSunColor(seed);
+  const star = sampleStarProfile(seed);
   const systemOrbitAxis = sampleSolarPlaneAxis(random);
   const systemPhaseOffset = quantize(random() * MATCH_TAU);
   const systemPeriapsisAngle = quantize(random() * MATCH_TAU);
   const planets: InitialPlanetConfig[] = [
-    createSunPlanetConfig(sunPosition, systemOrbitAxis, sunColor),
+    createSunPlanetConfig(sunPosition, systemOrbitAxis, star),
   ];
   let remainingMoons = targetMoonCount;
 
@@ -1414,7 +1467,10 @@ function generatePlanetarySystem(seed: number): {
         position: sunPosition,
         orbitCenter: sunPosition,
         distance: PARENT_PLANET_OUTER_ORBIT_RADIUS,
-        color: sunColor,
+        radius: star.radius,
+        mass: star.mass,
+        intensity: star.intensity,
+        color: star.color,
       },
     },
     planets,
@@ -1424,15 +1480,15 @@ function generatePlanetarySystem(seed: number): {
 function createSunPlanetConfig(
   position: Vec3Data,
   orbitAxis: Vec3Data,
-  color: string,
+  star: StarProfile,
 ): InitialPlanetConfig {
   return {
     templateId: TEMPLATE_IDS.billboardPlanet,
     name: "Sun",
     position,
-    mass: SUN_PLANET_MASS,
-    radius: SUN_PLANET_RADIUS,
-    color,
+    mass: star.mass,
+    radius: star.radius,
+    color: star.color,
     hasAtmosphere: true,
     appearance: {
       planetClass: "sun",
@@ -1657,13 +1713,14 @@ function scaleInitialUnitOffset(
   return scaleVec3(offset, targetDistance / distance);
 }
 
-function sampleSunColor(seed: number): string {
+function sampleStarProfile(seed: number): StarProfile {
   const random = createSeededRandom(seed, "match-sun-color");
   const position = random();
-  let previous = SUN_COLOR_STOPS[0];
+  const variance = random() - 0.5;
+  let previous = STAR_PROFILE_STOPS[0];
 
-  for (let index = 1; index < SUN_COLOR_STOPS.length; index += 1) {
-    const next = SUN_COLOR_STOPS[index];
+  for (let index = 1; index < STAR_PROFILE_STOPS.length; index += 1) {
+    const next = STAR_PROFILE_STOPS[index];
 
     if (position > next.position) {
       previous = next;
@@ -1673,15 +1730,43 @@ function sampleSunColor(seed: number): string {
     const span = Math.max(next.position - previous.position, 0.000001);
     const amount = clamp((position - previous.position) / span, 0, 1);
 
-    return rgbToHex(
+    return interpolateStarProfile(previous, next, amount, variance);
+  }
+
+  const last = STAR_PROFILE_STOPS[STAR_PROFILE_STOPS.length - 1];
+  return interpolateStarProfile(last, last, 0, variance);
+}
+
+function interpolateStarProfile(
+  previous: StarProfileStop,
+  next: StarProfileStop,
+  amount: number,
+  variance: number,
+): StarProfile {
+  const radius = lerp(previous.radius, next.radius, amount);
+  const mass = lerp(previous.mass, next.mass, amount);
+  const intensity = lerp(previous.intensity, next.intensity, amount);
+
+  return {
+    color: rgbToHex(
       lerp(previous.color[0], next.color[0], amount),
       lerp(previous.color[1], next.color[1], amount),
       lerp(previous.color[2], next.color[2], amount),
-    );
-  }
-
-  const last = SUN_COLOR_STOPS[SUN_COLOR_STOPS.length - 1];
-  return rgbToHex(last.color[0], last.color[1], last.color[2]);
+    ),
+    radius: quantize(
+      clamp(radius * (1 + variance * 0.05), MIN_SUN_RADIUS, MAX_SUN_RADIUS),
+    ),
+    mass: quantize(
+      clamp(mass * (1 - variance * 0.035), MIN_SUN_MASS, MAX_SUN_MASS),
+    ),
+    intensity: quantize(
+      clamp(
+        intensity * (1 + variance * 0.045),
+        MIN_SUN_INTENSITY,
+        MAX_SUN_INTENSITY,
+      ),
+    ),
+  };
 }
 
 function samplePlanetColor(

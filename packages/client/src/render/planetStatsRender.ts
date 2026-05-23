@@ -242,6 +242,10 @@ function renderPlanetStatsPreview(
     sunFlareMaterial.uniforms.uSunPosition.value.set(0.5, 0.5);
     sunFlareMaterial.uniforms.uSunColor.value.set(planet.color);
     sunFlareMaterial.uniforms.uVisibility.value = 1;
+    sunFlareMaterial.uniforms.uSunIntensity.value = 1;
+    sunFlareMaterial.uniforms.uSunAngularSize.value = readPreviewSunAngularSize(
+      planet.radius
+    );
     sunFlareMaterial.uniforms.uTime.value = PLANET_PREVIEW_TIME_SECONDS;
   } else {
     glow.visible = true;
@@ -448,6 +452,8 @@ function createSunFlarePreviewMaterial(): THREE.ShaderMaterial {
       uSunPosition: { value: new THREE.Vector2(0.5, 0.5) },
       uSunColor: { value: new THREE.Color(0xffd27a) },
       uVisibility: { value: 1 },
+      uSunIntensity: { value: 1 },
+      uSunAngularSize: { value: 1 },
       uTime: { value: PLANET_PREVIEW_TIME_SECONDS },
     },
     vertexShader: FULLSCREEN_VERTEX_SHADER,
@@ -457,6 +463,10 @@ function createSunFlarePreviewMaterial(): THREE.ShaderMaterial {
     depthTest: false,
     depthWrite: false,
   });
+}
+
+function readPreviewSunAngularSize(radius: number): number {
+  return Math.min(Math.max(radius / 1200, 0.62), 1.42);
 }
 
 function writePlanetRingEllipse(target: THREE.Vector2, seed: number): THREE.Vector2 {

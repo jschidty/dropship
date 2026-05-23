@@ -134,8 +134,11 @@ function hashSun(hasher: FnvHasher, value: unknown): void {
   hashKnownObject(hasher, value as Record<string, unknown>, [
     ["color"],
     ["distance", hashQuantizedNumber],
+    ["intensity", hashQuantizedNumber],
+    ["mass", hashQuantizedNumber],
     ["orbitCenter", hashQuantizedVec3],
     ["position", hashQuantizedVec3],
+    ["radius", hashQuantizedNumber],
   ]);
 }
 

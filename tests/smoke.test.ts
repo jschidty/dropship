@@ -911,7 +911,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "3c0e2313");
+  assert.equal(first, "8dc81eda");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -925,11 +925,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "3c0e2313");
+  assert.equal(result.finalHash, "8dc81eda");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "3c0e2313",
+      hash: "8dc81eda",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -1800,6 +1800,16 @@ function testCaptureDemoConfig(): void {
     distance(playerTwoFleetCenter, systemCenter) > parentMapRadius,
     "Expected player two fleet to start outside the parent-planet rim"
   );
+  for (const playerId of [1, 2] as const) {
+    assert.ok(
+      nearestDropShipSurfaceGap(
+        world,
+        playerId,
+        parentPlanets.filter(isPrimaryPlanet)
+      ) < 2600,
+      "Expected a forward drop-ship squadron to start near an outer primary planet"
+    );
+  }
   assert.ok(
     distance(playerOneDropShip.position, playerTwoDropShip.position) > 450,
     "Expected starting fleets to begin separated around the planetary system"
@@ -3434,6 +3444,32 @@ function distance(
   b: Readonly<{ x: number; y: number; z: number }>
 ): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function nearestDropShipSurfaceGap(
+  world: ReturnType<typeof createWorld>,
+  playerId: PlayerId,
+  planets: readonly ReturnType<typeof createWorld>["planets"][number][]
+): number {
+  let nearest = Number.POSITIVE_INFINITY;
+
+  for (const unit of world.units) {
+    if (
+      unit.owner !== playerId ||
+      unit.shipClassId !== SHIP_CLASS_IDS.dropShip
+    ) {
+      continue;
+    }
+
+    for (const planet of planets) {
+      nearest = Math.min(
+        nearest,
+        distance(unit.position, planet.position) - planet.radius
+      );
+    }
+  }
+
+  return nearest;
 }
 
 function isSunPlanet(

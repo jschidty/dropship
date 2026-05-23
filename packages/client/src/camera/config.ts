@@ -45,14 +45,14 @@ export const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
     label: "Tactical",
     defaultViewHeight: 76,
     minViewHeight: 24,
-    maxViewHeight: 14000,
+    maxViewHeight: 28000,
     pitch: 0.82,
   },
   strategic: {
     label: "Strategic",
     defaultViewHeight: 280,
     minViewHeight: 110,
-    maxViewHeight: 18000,
+    maxViewHeight: 36000,
     pitch: 1,
   },
   fpv: {

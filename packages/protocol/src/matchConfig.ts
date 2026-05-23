@@ -428,7 +428,10 @@ const PARENT_PLANET_PHASE_JITTER = 0.24;
 const PARENT_PLANET_MIN_ECCENTRICITY = 0.035;
 const PARENT_PLANET_ECCENTRICITY_RANGE = 0.17;
 const PARENT_PLANET_INCLINATION_JITTER = 0.035;
-const CAPTURE_DEMO_RIM_SPAWN_PADDING = 130;
+const CAPTURE_DEMO_RIM_SPAWN_PADDING = 60;
+const CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA = 900;
+const CAPTURE_DEMO_FLEET_DEPTH_SCALE = 0.75;
+const CAPTURE_DEMO_FLEET_LATERAL_SCALE = 0.9;
 const MINIMAL_SKIRMISH_PLANET_SPAWN_PADDING = 95;
 const SUN_COLOR_STOPS: readonly SunColorStop[] = [
   { position: 0, color: [0.42, 0.68, 1] },
@@ -495,7 +498,10 @@ export function createCaptureDemoConfig(
   const normalizedOptions =
     typeof options === "number" ? { seed: options } : options;
   const base = createMinimalSkirmishConfig(options);
-  const initialUnits = createCaptureDemoUnits(base.initialPlanets);
+  const initialUnits = createCaptureDemoUnits(
+    base.initialPlanets,
+    base.rules.capture.orbitMaxRadiusMultiplier,
+  );
 
   return {
     ...base,
@@ -649,6 +655,8 @@ export function resolveSimTuning(
 
 function createCaptureDemoUnits(
   planets: readonly InitialPlanetConfig[],
+  captureOrbitMaxRadiusMultiplier =
+    DEFAULT_MATCH_RULES.capture.orbitMaxRadiusMultiplier,
 ): readonly InitialUnitConfig[] {
   const primaryPlanetPosition =
     readFirstPrimaryPlanet(planets)?.position ??
@@ -763,12 +771,17 @@ function createCaptureDemoUnits(
     },
   }));
 
-  return moveCaptureDemoFleetsToOuterRim(centeredUnits, planets);
+  return moveCaptureDemoFleetsToOuterRim(
+    centeredUnits,
+    planets,
+    captureOrbitMaxRadiusMultiplier,
+  );
 }
 
 function moveCaptureDemoFleetsToOuterRim(
   units: readonly InitialUnitConfig[],
   planets: readonly InitialPlanetConfig[],
+  captureOrbitMaxRadiusMultiplier: number,
 ): readonly InitialUnitConfig[] {
   const center = readPlanetarySystemCenter(planets);
   const mapRadius = readParentPlanetMapRadius(planets, center);
@@ -782,25 +795,382 @@ function moveCaptureDemoFleetsToOuterRim(
     subtractVec3(playerTwoCentroid, playerOneCentroid),
     { x: 1, y: 0, z: 1 },
   );
-  const spawnDistance = mapRadius + CAPTURE_DEMO_RIM_SPAWN_PADDING;
-  const targetCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
-    1: addVec3(center, scaleVec3(axis, -spawnDistance)),
-    2: addVec3(center, scaleVec3(axis, spawnDistance)),
-  };
+  const outerPlanets = readOutermostOpposingPlanets(
+    planets,
+    center,
+    axis,
+    mapRadius,
+  );
+
+  if (!outerPlanets) {
+    const spawnDistance = mapRadius + CAPTURE_DEMO_RIM_SPAWN_PADDING;
+    const targetCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
+      1: addVec3(center, scaleVec3(axis, -spawnDistance)),
+      2: addVec3(center, scaleVec3(axis, spawnDistance)),
+    };
+    const sourceCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
+      1: playerOneCentroid,
+      2: playerTwoCentroid,
+    };
+
+    return units.map((unit) => {
+      const owner = unit.owner === 1 ? 1 : 2;
+      const offset = subtractVec3(unit.position, sourceCentroids[owner]);
+
+      return {
+        ...unit,
+        position: addVec3(targetCentroids[owner], offset),
+      };
+    });
+  }
+
+  const outerDeploymentAxis = normalizeVec3OrFallback(
+    subtractVec3(outerPlanets[2].position, outerPlanets[1].position),
+    axis,
+  );
   const sourceCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
     1: playerOneCentroid,
     2: playerTwoCentroid,
   };
+  const outerDeployment: Readonly<
+    Record<1 | 2, CaptureDemoPlayerDeployment>
+  > = {
+    1: readPlayerDeployment(
+      units,
+      sourceCentroids[1],
+      outerPlanets[1],
+      center,
+      outerDeploymentAxis,
+      1,
+      captureOrbitMaxRadiusMultiplier,
+    ),
+    2: readPlayerDeployment(
+      units,
+      sourceCentroids[2],
+      outerPlanets[2],
+      center,
+      outerDeploymentAxis,
+      2,
+      captureOrbitMaxRadiusMultiplier,
+    ),
+  };
+  const outerUnits = units.map((unit) => ({
+    ...unit,
+    position: readCaptureDemoDeployedUnitPosition(
+      unit.position,
+      outerDeployment[unit.owner === 1 ? 1 : 2],
+      1,
+      1,
+    ),
+  }));
+  const outerPlayerOneCentroid = averagePosition(
+    outerUnits.filter((unit) => unit.owner === 1).map((unit) => unit.position),
+  );
+  const outerPlayerTwoCentroid = averagePosition(
+    outerUnits.filter((unit) => unit.owner === 2).map((unit) => unit.position),
+  );
+  const closePairAxis = normalizeVec3OrFallback(
+    subtractVec3(outerPlayerTwoCentroid, outerPlayerOneCentroid),
+    outerDeploymentAxis,
+  );
+  const closePlanets =
+    readClosestOpposedOuterPlanets(
+      planets,
+      center,
+      closePairAxis,
+      mapRadius,
+    ) ?? outerPlanets;
+  const primaryPlanets = planets.filter(isPrimaryPlanet);
+  const closeDeployment: Readonly<
+    Record<1 | 2, CaptureDemoPlayerDeployment>
+  > = {
+    1: readClosePairDeployment(
+      outerUnits,
+      primaryPlanets,
+      closePlanets[1],
+      center,
+      closePairAxis,
+      1,
+      captureOrbitMaxRadiusMultiplier,
+    ),
+    2: readClosePairDeployment(
+      outerUnits,
+      primaryPlanets,
+      closePlanets[2],
+      center,
+      closePairAxis,
+      2,
+      captureOrbitMaxRadiusMultiplier,
+    ),
+  };
 
-  return units.map((unit) => {
-    const owner = unit.owner === 1 ? 1 : 2;
-    const offset = subtractVec3(unit.position, sourceCentroids[owner]);
+  return outerUnits.map((unit) => ({
+    ...unit,
+    position: readCaptureDemoDeployedUnitPosition(
+      unit.position,
+      closeDeployment[unit.owner === 1 ? 1 : 2],
+      CAPTURE_DEMO_FLEET_DEPTH_SCALE,
+      CAPTURE_DEMO_FLEET_LATERAL_SCALE,
+    ),
+  }));
+}
 
-    return {
-      ...unit,
-      position: addVec3(targetCentroids[owner], offset),
-    };
-  });
+type CaptureDemoPlayerDeployment = Readonly<{
+  sourceFrontline: Vec3Data;
+  targetFrontline: Vec3Data;
+  outward: Vec3Data;
+}>;
+
+function readOutermostOpposingPlanets(
+  planets: readonly InitialPlanetConfig[],
+  center: Vec3Data,
+  axis: Vec3Data,
+  mapRadius: number,
+): Readonly<Record<1 | 2, InitialPlanetConfig>> | null {
+  const candidates = planets.filter(isPrimaryPlanet);
+
+  if (candidates.length < 2) {
+    return null;
+  }
+
+  let bestPair: readonly [InitialPlanetConfig, InitialPlanetConfig] | null =
+    null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const left of candidates) {
+    for (const right of candidates) {
+      if (left === right) {
+        continue;
+      }
+
+      const leftOffset = subtractVec3(left.position, center);
+      const rightOffset = subtractVec3(right.position, center);
+      const leftDirection = normalizeVec3OrFallback(leftOffset, axis);
+      const rightDirection = normalizeVec3OrFallback(
+        rightOffset,
+        scaleVec3(axis, -1),
+      );
+      const opposition = (1 - dotVec3(leftDirection, rightDirection)) / 2;
+      const leftSurfaceRadius = lengthVec3(leftOffset) + left.radius;
+      const rightSurfaceRadius = lengthVec3(rightOffset) + right.radius;
+      const minSurfaceRadius = Math.min(leftSurfaceRadius, rightSurfaceRadius);
+      const averageSurfaceRadius =
+        (leftSurfaceRadius + rightSurfaceRadius) / 2;
+      const score =
+        minSurfaceRadius +
+        averageSurfaceRadius * 0.15 +
+        opposition * mapRadius * 0.35;
+
+      if (score > bestScore) {
+        bestPair = [left, right];
+        bestScore = score;
+      }
+    }
+  }
+
+  if (!bestPair) {
+    return null;
+  }
+
+  const firstProjection = dotVec3(
+    subtractVec3(bestPair[0].position, center),
+    axis,
+  );
+  const secondProjection = dotVec3(
+    subtractVec3(bestPair[1].position, center),
+    axis,
+  );
+
+  return firstProjection <= secondProjection
+    ? { 1: bestPair[0], 2: bestPair[1] }
+    : { 1: bestPair[1], 2: bestPair[0] };
+}
+
+function readClosestOpposedOuterPlanets(
+  planets: readonly InitialPlanetConfig[],
+  center: Vec3Data,
+  axis: Vec3Data,
+  mapRadius: number,
+): Readonly<Record<1 | 2, InitialPlanetConfig>> | null {
+  const candidates = planets.filter(isPrimaryPlanet);
+
+  let bestPair:
+    | Readonly<{
+        left: InitialPlanetConfig;
+        right: InitialPlanetConfig;
+      }>
+    | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const left of candidates) {
+    const leftOffset = subtractVec3(left.position, center);
+    const leftProjection = dotVec3(leftOffset, axis);
+    const leftSurfaceRadius = lengthVec3(leftOffset) + left.radius;
+
+    if (leftProjection >= 0 || leftSurfaceRadius < mapRadius * 0.48) {
+      continue;
+    }
+
+    for (const right of candidates) {
+      const rightOffset = subtractVec3(right.position, center);
+      const rightProjection = dotVec3(rightOffset, axis);
+      const rightSurfaceRadius = lengthVec3(rightOffset) + right.radius;
+
+      if (
+        left === right ||
+        rightProjection <= 0 ||
+        rightSurfaceRadius < mapRadius * 0.48
+      ) {
+        continue;
+      }
+
+      const pairDistance = distanceVec3(left.position, right.position);
+      const outerness =
+        Math.min(leftSurfaceRadius, rightSurfaceRadius) / mapRadius;
+      const opposition =
+        Math.min(Math.abs(leftProjection) + Math.abs(rightProjection), mapRadius * 2) /
+        (mapRadius * 2);
+      const score =
+        -pairDistance +
+        outerness * mapRadius * 0.65 +
+        opposition * mapRadius * 0.35;
+
+      if (score > bestScore) {
+        bestPair = { left, right };
+        bestScore = score;
+      }
+    }
+  }
+
+  if (!bestPair) {
+    return null;
+  }
+
+  return { 1: bestPair.left, 2: bestPair.right };
+}
+
+function readPlayerDeployment(
+  units: readonly InitialUnitConfig[],
+  sourceCentroid: Vec3Data,
+  planet: InitialPlanetConfig,
+  center: Vec3Data,
+  axis: Vec3Data,
+  owner: PlayerId,
+  captureOrbitMaxRadiusMultiplier: number,
+): CaptureDemoPlayerDeployment {
+  const outward = normalizeVec3OrFallback(
+    subtractVec3(planet.position, center),
+    owner === 1 ? scaleVec3(axis, -1) : axis,
+  );
+  const frontlineDropShip =
+    units
+      .filter(
+        (unit) =>
+          unit.owner === owner && unit.templateId === TEMPLATE_IDS.dropShip,
+      )
+      .sort((left, right) => {
+        const leftOffset = subtractVec3(left.position, sourceCentroid);
+        const rightOffset = subtractVec3(right.position, sourceCentroid);
+
+        return dotVec3(leftOffset, outward) - dotVec3(rightOffset, outward);
+      })[0] ?? null;
+  const sourceOffset = frontlineDropShip
+    ? subtractVec3(frontlineDropShip.position, sourceCentroid)
+    : ({ x: 0, y: 0, z: 0 } as const);
+  const frontlineTarget = addVec3(
+    planet.position,
+    scaleVec3(
+      outward,
+      planet.radius * captureOrbitMaxRadiusMultiplier +
+        CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA,
+    ),
+  );
+
+  return {
+    sourceFrontline: addVec3(sourceCentroid, sourceOffset),
+    targetFrontline: frontlineTarget,
+    outward,
+  };
+}
+
+function readClosePairDeployment(
+  units: readonly InitialUnitConfig[],
+  planets: readonly InitialPlanetConfig[],
+  planet: InitialPlanetConfig,
+  center: Vec3Data,
+  axis: Vec3Data,
+  owner: PlayerId,
+  captureOrbitMaxRadiusMultiplier: number,
+): CaptureDemoPlayerDeployment {
+  const sourceFrontline =
+    readNearestDropShipPosition(units, planets, owner) ??
+    averagePosition(
+      units.filter((unit) => unit.owner === owner).map((unit) => unit.position),
+    );
+  const outward = normalizeVec3OrFallback(
+    subtractVec3(planet.position, center),
+    owner === 1 ? scaleVec3(axis, -1) : axis,
+  );
+  const targetFrontline = addVec3(
+    planet.position,
+    scaleVec3(
+      outward,
+      planet.radius * captureOrbitMaxRadiusMultiplier +
+        CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA,
+    ),
+  );
+
+  return {
+    sourceFrontline,
+    targetFrontline,
+    outward,
+  };
+}
+
+function readNearestDropShipPosition(
+  units: readonly InitialUnitConfig[],
+  planets: readonly InitialPlanetConfig[],
+  owner: PlayerId,
+): Vec3Data | null {
+  let nearest: Vec3Data | null = null;
+  let nearestGap = Number.POSITIVE_INFINITY;
+
+  for (const unit of units) {
+    if (unit.owner !== owner || unit.templateId !== TEMPLATE_IDS.dropShip) {
+      continue;
+    }
+
+    for (const planet of planets) {
+      const gap = distanceVec3(unit.position, planet.position) - planet.radius;
+
+      if (gap < nearestGap) {
+        nearest = unit.position;
+        nearestGap = gap;
+      }
+    }
+  }
+
+  return nearest;
+}
+
+function readCaptureDemoDeployedUnitPosition(
+  position: Vec3Data,
+  deployment: CaptureDemoPlayerDeployment,
+  depthScale: number,
+  lateralScale: number,
+): Vec3Data {
+  const offset = subtractVec3(position, deployment.sourceFrontline);
+  const depth = dotVec3(offset, deployment.outward);
+  const depthVector = scaleVec3(deployment.outward, depth);
+  const lateralVector = subtractVec3(offset, depthVector);
+
+  return addVec3(
+    deployment.targetFrontline,
+    addVec3(
+      scaleVec3(depthVector, depthScale),
+      scaleVec3(lateralVector, lateralScale),
+    ),
+  );
 }
 
 function readPlanetarySystemCenter(
@@ -887,8 +1257,16 @@ function scaleVec3(vector: Vec3Data, scalar: number): Vec3Data {
   };
 }
 
+function dotVec3(left: Vec3Data, right: Vec3Data): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
 function lengthVec3(vector: Vec3Data): number {
   return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function distanceVec3(left: Vec3Data, right: Vec3Data): number {
+  return lengthVec3(subtractVec3(left, right));
 }
 
 function normalizeVec3OrFallback(vector: Vec3Data, fallback: Vec3Data): Vec3Data {

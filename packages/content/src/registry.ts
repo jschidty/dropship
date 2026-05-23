@@ -147,7 +147,7 @@ export type ContentRegistry = Readonly<{
   getPlanetTemplate: (templateId: number) => PlanetTemplate;
 }>;
 
-const SHIP_SPEED_MASS_FACTOR = 1.8;
+const SHIP_SPEED_MASS_FACTOR = 1.2;
 const SHIP_CRUISE_SPEED_RATIO = 22 / 30;
 
 export const DEFAULT_CONTENT_HASH = createContentHash({

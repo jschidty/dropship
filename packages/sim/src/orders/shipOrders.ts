@@ -14,7 +14,7 @@ import {
 import {
   findPlanetByHandle,
   findUnitByHandle,
-  clearUnitOrder,
+  completeUnitOrder,
   getUnitsInStableOrder,
   promoteQueuedUnitOrder,
   type SimUnit,
@@ -64,8 +64,13 @@ function computeOrderVelocity(
   if (order.type === "attackTarget") {
     const target = findUnitByHandle(world, order.target);
 
-    if (!target || target.health.current <= 0) {
-      clearUnitOrder(unit);
+    if (!target) {
+      completeUnitOrder(unit, tick, "failed", "targetMissing");
+      return null;
+    }
+
+    if (target.health.current <= 0) {
+      completeUnitOrder(unit, tick, "objectiveMet", "targetDestroyed");
       return null;
     }
 
@@ -86,7 +91,7 @@ function computeOrderVelocity(
     const planet = findPlanetByHandle(world, order.planet);
 
     if (!planet) {
-      clearUnitOrder(unit);
+      completeUnitOrder(unit, tick, "failed", "planetMissing");
       return null;
     }
 
@@ -117,7 +122,7 @@ function computeOrderVelocity(
     const target = findUnitByHandle(world, order.target);
 
     if (!target || target.health.current <= 0) {
-      clearUnitOrder(unit);
+      completeUnitOrder(unit, tick, "failed", "targetMissing");
       return null;
     }
 
@@ -135,7 +140,7 @@ function computeOrderVelocity(
   const distance = length(offset);
 
   if (distance <= tuning.movement.arrivalDistanceWorldUnits) {
-    clearUnitOrder(unit);
+    completeUnitOrder(unit, tick, "objectiveMet", "arrived");
     return null;
   }
 

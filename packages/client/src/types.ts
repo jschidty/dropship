@@ -8,9 +8,9 @@ import type {
   CommandSource,
   CompactSimSnapshot,
   EntityHandle,
+  MatchSessionRole,
   PlanetAppearanceConfig,
   PlayerId,
-  type MatchSessionRole,
   UnitOrderIntent,
   Vec3Data,
 } from "@drop-ship/protocol";

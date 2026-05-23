@@ -279,7 +279,11 @@ type PlanetSelectionMarker = {
 type ScreenSceneSelectionCandidate = SceneSelectionCandidate &
   (
     | Readonly<{
-        kind: "friendlyUnit" | "enemyUnit";
+        kind: "friendlyUnit";
+        unit: UnitViewModel;
+      }>
+    | Readonly<{
+        kind: "enemyUnit";
         unit: UnitViewModel;
       }>
     | Readonly<{
@@ -3398,7 +3402,7 @@ function readWaitingForPlayerText(status: RuntimeConnectionStatus): string {
       return "Player 1 has not connected yet.";
     }
 
-    return status.state === "connecting" ? "Connecting..." : "Waiting...";
+    return "Waiting...";
   }
 
   if (missingPlayers.length === 1) {

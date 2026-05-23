@@ -6,6 +6,7 @@ import { DropShipSpawnSystem } from "./dropShipSpawn";
 import { LifecycleSystem } from "./lifecycle";
 import { MatchEndSystem } from "./matchEnd";
 import { OrbitTrackingSystem } from "./orbitTracking";
+import { OrderCompletionSystem } from "./orderCompletion";
 import { PhysicsSystem, SteeringSystem } from "./motion";
 import { PlanetMotionSystem } from "./planetMotion";
 import {
@@ -25,6 +26,7 @@ export * from "./dropShipSpawn";
 export * from "./lifecycle";
 export * from "./matchEnd";
 export * from "./motion";
+export * from "./orderCompletion";
 export * from "./orbitTracking";
 export * from "./planetMotion";
 export * from "./placeholders";
@@ -41,6 +43,7 @@ export const PHASE_ONE_SYSTEMS: readonly SimSystem[] = [
   OrbitTrackingSystem,
   CombatSystem,
   CaptureSystem,
+  OrderCompletionSystem,
   DropShipSpawnSystem,
   MiningSystem,
   ResourceSystem,

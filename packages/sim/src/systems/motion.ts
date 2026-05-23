@@ -10,7 +10,7 @@ export const SteeringSystem: SimSystem = {
 
 export const PhysicsSystem: SimSystem = {
   name: "PhysicsSystem",
-  run(world) {
-    integrateUnitMotion(world);
+  run(world, tick) {
+    integrateUnitMotion(world, tick);
   },
 };

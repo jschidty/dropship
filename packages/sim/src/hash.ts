@@ -78,6 +78,8 @@ function hashUnit(hasher: FnvHasher, value: unknown): void {
     ["fighterSpawn", hashFighterSpawn],
     ["handle", hashEntityHandle],
     ["health", hashHealth],
+    ["lastOrderEnd", hashUnitOrderEnd],
+    ["lastPlayerOrderEnd", hashUnitOrderEnd],
     ["lastPlayerOrderTick"],
     ["moveOrder", hashUnitOrder],
     ["orbit", hashOrbitState],
@@ -151,6 +153,22 @@ function hashFighterSpawn(hasher: FnvHasher, value: unknown): void {
 
 function hashUnitOrders(hasher: FnvHasher, value: unknown): void {
   hashArray(hasher, value as readonly unknown[], hashUnitOrder);
+}
+
+function hashUnitOrderEnd(hasher: FnvHasher, value: unknown): void {
+  if (!value) {
+    hashStableValue(hasher, value);
+    return;
+  }
+
+  hashKnownObject(hasher, value as Record<string, unknown>, [
+    ["endedTick"],
+    ["issuedTick"],
+    ["order", hashUnitOrder],
+    ["outcome"],
+    ["reason"],
+    ["source"],
+  ]);
 }
 
 function hashUnitOrder(hasher: FnvHasher, value: unknown): void {

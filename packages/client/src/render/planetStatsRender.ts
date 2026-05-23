@@ -107,7 +107,8 @@ export function createPlanetStatsRenderCache(
     throw new Error("Unable to create planet stats preview canvas");
   }
 
-  const imageData = canvasContext.createImageData(
+  const previewCanvasContext = canvasContext;
+  const imageData = previewCanvasContext.createImageData(
     PLANET_STATS_RENDER_WIDTH,
     PLANET_STATS_RENDER_HEIGHT
   );
@@ -175,7 +176,7 @@ export function createPlanetStatsRenderCache(
         renderer,
         renderTarget,
         canvas,
-        canvasContext,
+        previewCanvasContext,
         imageData
       ),
       renderTarget,

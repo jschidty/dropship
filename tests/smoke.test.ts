@@ -116,7 +116,10 @@ testLocalRuntimeUsesScriptedNpcController();
 testLocalRuntimeDoesNotRunNpcForLocalPlayer();
 testPlayerCommandsTrackOrderProvenance();
 testFleetAutonomyCommandsIdlePlayerUnits();
-testFleetAutonomyRespectsRecentPlayerOrders();
+testFleetAutonomyWaitsForPlayerMoveObjective();
+testFleetAutonomyDoesNotReplaceStandingPlayerOrders();
+testFleetAutonomyResumesAfterPlayerAttackObjectiveMet();
+testFleetAutonomyResumesAfterPlayerCaptureObjectiveMet();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
 testNpcDropShipsClaimDifferentCapturePlanets();
@@ -2429,7 +2432,6 @@ function testFleetAutonomyCommandsIdlePlayerUnits(): void {
 
   const controller = createFleetAutonomyController({
     playerIds: [1],
-    playerOrderGraceTicks: 3,
     orbitLaneHeuristics: false,
   });
   const commands = controller.commandsForTick(world);
@@ -2455,7 +2457,7 @@ function testFleetAutonomyCommandsIdlePlayerUnits(): void {
   assert.equal(unit.orderIssuedTick, 0);
 }
 
-function testFleetAutonomyRespectsRecentPlayerOrders(): void {
+function testFleetAutonomyWaitsForPlayerMoveObjective(): void {
   const world = createWorld({
     config: createFleetAutonomyTestConfig(),
     content: DEFAULT_CONTENT_REGISTRY,
@@ -2490,7 +2492,6 @@ function testFleetAutonomyRespectsRecentPlayerOrders(): void {
 
   const controller = createFleetAutonomyController({
     playerIds: [1],
-    playerOrderGraceTicks: 3,
     orbitLaneHeuristics: false,
   });
   const recentCommands = controller.commandsForTick(world);
@@ -2507,10 +2508,30 @@ function testFleetAutonomyRespectsRecentPlayerOrders(): void {
     )
   );
 
-  runBatches(world, [], 3);
+  runBatches(world, [], 6);
 
-  const staleCommands = controller.commandsForTick(world);
-  const staleUnitCommand = staleCommands.find(
+  const longHorizonCommands = controller.commandsForTick(world);
+
+  assert.ok(
+    !longHorizonCommands.some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+
+  unit.position = playerTarget;
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(unit.moveOrder, null);
+  assert.equal(unit.lastPlayerOrderEnd?.outcome, "objectiveMet");
+  assert.equal(unit.lastPlayerOrderEnd?.reason, "arrived");
+
+  const completedCommands = controller.commandsForTick(world);
+  const completedUnitCommand = completedCommands.find(
     (scheduled) =>
       scheduled.command.type === "issueUnitOrder" &&
       scheduled.command.unitHandles.some((handle) =>
@@ -2518,15 +2539,208 @@ function testFleetAutonomyRespectsRecentPlayerOrders(): void {
       )
   );
 
-  assert.ok(staleUnitCommand);
+  assert.ok(completedUnitCommand);
 
   runTick(world, {
     tick: world.tick,
-    commands: staleCommands,
+    commands: completedCommands,
   });
 
   assert.equal(unit.orderSource, "autonomy");
-  assert.equal(unit.orderIssuedTick, 3);
+  assert.equal(unit.orderIssuedTick, 7);
+}
+
+function testFleetAutonomyDoesNotReplaceStandingPlayerOrders(): void {
+  const world = createWorld({
+    config: createFleetAutonomyTestConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find(
+    (entry) =>
+      entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+  const planet = world.planets.find((entry) => entry.control.capturable);
+
+  assert.ok(unit);
+  assert.ok(planet);
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "orbitPlanet",
+            planet: planet.handle,
+          },
+          queueMode: "replace",
+        },
+      },
+    ],
+  });
+
+  const controller = createFleetAutonomyController({
+    playerIds: [1],
+    orbitLaneHeuristics: false,
+  });
+
+  runBatches(world, [], 6);
+
+  const commands = controller.commandsForTick(world);
+
+  assert.equal(unit.orderSource, "player");
+  assert.equal(unit.moveOrder?.type, "orbitPlanet");
+  assert.equal(unit.lastPlayerOrderEnd, null);
+  assert.ok(
+    !commands.some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+}
+
+function testFleetAutonomyResumesAfterPlayerAttackObjectiveMet(): void {
+  const world = createWorld({
+    config: createFleetAutonomyTestConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find(
+    (entry) => entry.owner === 1 && entry.shipClassId !== SHIP_CLASS_IDS.dropShip
+  );
+  const target = world.units.find((entry) => entry.owner === 2);
+
+  assert.ok(unit);
+  assert.ok(target);
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "attackTarget",
+            target: target.handle,
+          },
+          queueMode: "replace",
+        },
+      },
+    ],
+  });
+
+  const controller = createFleetAutonomyController({
+    playerIds: [1],
+    orbitLaneHeuristics: false,
+  });
+  const blockedCommands = controller.commandsForTick(world);
+
+  assert.equal(unit.orderSource, "player");
+  assert.ok(
+    !blockedCommands.some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+
+  target.health.current = 0;
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(unit.moveOrder, null);
+  assert.equal(unit.lastPlayerOrderEnd?.outcome, "objectiveMet");
+  assert.equal(unit.lastPlayerOrderEnd?.reason, "targetDestroyed");
+  assert.ok(
+    controller.commandsForTick(world).some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+}
+
+function testFleetAutonomyResumesAfterPlayerCaptureObjectiveMet(): void {
+  const world = createWorld({
+    config: createFleetAutonomyTestConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find(
+    (entry) =>
+      entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+  const planet = world.planets.find(
+    (entry) => entry.control.capturable && entry.control.owner !== 1
+  );
+
+  assert.ok(unit);
+  assert.ok(planet);
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "capturePlanet",
+            planet: planet.handle,
+          },
+          queueMode: "replace",
+        },
+      },
+    ],
+  });
+
+  const controller = createFleetAutonomyController({
+    playerIds: [1],
+    orbitLaneHeuristics: false,
+  });
+  const blockedCommands = controller.commandsForTick(world);
+
+  assert.equal(unit.orderSource, "player");
+  assert.ok(
+    !blockedCommands.some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+
+  planet.control.owner = 1;
+
+  runTick(world, createEmptyCommandBatch(world.tick));
+
+  assert.equal(unit.moveOrder, null);
+  assert.equal(unit.lastPlayerOrderEnd?.outcome, "objectiveMet");
+  assert.equal(unit.lastPlayerOrderEnd?.reason, "planetCaptured");
+  assert.ok(
+    controller.commandsForTick(world).some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
 }
 
 function testNpcDefenderIssuesAttackOrders(): void {

@@ -2,7 +2,6 @@ import {
   SHIP_CLASS_IDS,
   handleKey,
   sameHandle,
-  PHASE_ONE_SIM_HZ,
   type CommandSource,
   type EntityHandle,
   type OrbitLaneSpec,
@@ -42,13 +41,9 @@ export type ScriptedNpcControllerOptions = Readonly<{
 export type FleetAutonomyControllerOptions = Readonly<{
   id?: string;
   playerIds: readonly PlayerId[];
-  playerOrderGraceTicks?: number;
   dedupeOrders?: boolean;
   orbitLaneHeuristics?: boolean;
 }>;
-
-export const DEFAULT_FLEET_AUTONOMY_PLAYER_ORDER_GRACE_TICKS =
-  45 * PHASE_ONE_SIM_HZ;
 
 export function createScriptedNpcController(
   options: ScriptedNpcControllerOptions = {}
@@ -79,9 +74,6 @@ export function createFleetAutonomyController(
   options: FleetAutonomyControllerOptions
 ): CommandController {
   const clientSeqByPlayer = new Map<PlayerId, number>();
-  const graceTicks =
-    options.playerOrderGraceTicks ??
-    DEFAULT_FLEET_AUTONOMY_PLAYER_ORDER_GRACE_TICKS;
 
   return {
     id: options.id ?? "fleet-autonomy-v1",
@@ -94,8 +86,8 @@ export function createFleetAutonomyController(
         source: "autonomy",
         dedupeOrders: options.dedupeOrders,
         orbitLaneHeuristics: options.orbitLaneHeuristics,
-        canCommandUnit: (candidateWorld, unit) =>
-          isFleetAutonomyEligibleUnit(candidateWorld, unit, graceTicks),
+        canCommandUnit: (_candidateWorld, unit) =>
+          isFleetAutonomyEligibleUnit(unit),
         nextClientSeq(playerId) {
           const clientSeq = (clientSeqByPlayer.get(playerId) ?? 0) + 1;
           clientSeqByPlayer.set(playerId, clientSeq);
@@ -193,32 +185,28 @@ export function createScriptedNpcCommands(
   return commands;
 }
 
-function isFleetAutonomyEligibleUnit(
-  world: SimWorld,
-  unit: SimUnit,
-  graceTicks: number
-): boolean {
-  if (!unit.moveOrder && unit.orderQueue.length === 0) {
-    return true;
-  }
-
+function isFleetAutonomyEligibleUnit(unit: SimUnit): boolean {
   if (
     unit.orderQueueMetadata.some(
-      (metadata) =>
-        metadata.source === "player" &&
-        world.tick - metadata.issuedTick < graceTicks
+      (metadata) => metadata.source === "player"
     )
   ) {
     return false;
   }
 
-  if (unit.orderSource !== "player") {
+  if (unit.orderSource === "player") {
+    return false;
+  }
+
+  if (unit.moveOrder || unit.orderQueue.length > 0) {
     return true;
   }
 
-  const issuedTick = unit.orderIssuedTick ?? unit.lastPlayerOrderTick;
+  if (!unit.lastPlayerOrderEnd) {
+    return true;
+  }
 
-  return issuedTick === null || world.tick - issuedTick >= graceTicks;
+  return unit.lastPlayerOrderEnd.outcome === "objectiveMet";
 }
 
 function isScriptedNpcUnit(

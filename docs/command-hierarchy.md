@@ -77,10 +77,13 @@ use it to decide whether they are allowed to replace an order. It must
 round-trip through snapshots and participate in replay hashes.
 
 The current fleet-autonomy controller uses this contract to keep player agency
-intact: it may command idle units, and it may replace stale player orders after
-a grace window, but it must not overwrite a fresh manual order. In local and
-headless command batches, non-player sources sort before `player` for the same
-player and tick, so a same-tick click remains the last applied command.
+intact: it may command units with no unresolved player intent, and it may resume
+after a player-authored terminal order records an `objectiveMet` ending. It must
+not replace active or queued player orders, and standing player orders such as
+escort, guard, and orbit remain player intent until the player changes them or
+their target becomes invalid. In local and headless command batches, non-player
+sources sort before `player` for the same player and tick, so a same-tick click
+remains the last applied command.
 
 Provenance is not a permission system by itself. Seat ownership, network
 validation, and replay authority still live at the command scheduling layer.

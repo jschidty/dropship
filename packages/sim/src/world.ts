@@ -15,6 +15,8 @@ import {
   type PlanetOrbitConfig,
   type PlayerId,
   type QuaternionData,
+  type UnitOrderEndOutcomeSnapshot,
+  type UnitOrderEndReasonSnapshot,
   type UnitOrderIntent,
   type Vec3Data,
 } from "@drop-ship/protocol";
@@ -47,6 +49,19 @@ export type SimUnitOrder = UnitOrderIntent;
 export type SimUnitOrderMetadata = {
   source: CommandSource;
   issuedTick: number;
+};
+
+export type SimUnitOrderEndOutcome = UnitOrderEndOutcomeSnapshot;
+
+export type SimUnitOrderEndReason = UnitOrderEndReasonSnapshot;
+
+export type SimUnitOrderEnd = {
+  order: SimUnitOrder;
+  source: CommandSource;
+  issuedTick: number;
+  endedTick: number;
+  outcome: SimUnitOrderEndOutcome;
+  reason: SimUnitOrderEndReason;
 };
 
 export type SimFighterSpawnState = {
@@ -111,6 +126,8 @@ export type SimUnit = {
   orderSource: CommandSource | null;
   orderIssuedTick: number | null;
   lastPlayerOrderTick: number | null;
+  lastOrderEnd: SimUnitOrderEnd | null;
+  lastPlayerOrderEnd: SimUnitOrderEnd | null;
   orderQueue: SimUnitOrder[];
   orderQueueMetadata: SimUnitOrderMetadata[];
   health: {
@@ -305,6 +322,8 @@ export function spawnUnit(
     orderSource?: CommandSource | null;
     orderIssuedTick?: number | null;
     lastPlayerOrderTick?: number | null;
+    lastOrderEnd?: SimUnitOrderEnd | null;
+    lastPlayerOrderEnd?: SimUnitOrderEnd | null;
     orderQueue?: readonly SimUnitOrder[];
     orderQueueMetadata?: readonly SimUnitOrderMetadata[];
     health?: { current: number; max: number };
@@ -356,6 +375,8 @@ export function spawnUnit(
     orderIssuedTick:
       options.orderIssuedTick ?? (moveOrder ? spawnedTick : null),
     lastPlayerOrderTick: options.lastPlayerOrderTick ?? null,
+    lastOrderEnd: copyUnitOrderEnd(options.lastOrderEnd ?? null),
+    lastPlayerOrderEnd: copyUnitOrderEnd(options.lastPlayerOrderEnd ?? null),
     orderQueue: copyUnitOrders(options.orderQueue ?? []),
     orderQueueMetadata: copyUnitOrderMetadata(
       options.orderQueueMetadata ?? [],
@@ -737,11 +758,32 @@ export function copyUnitOrderMetadata(
   }));
 }
 
+export function copyUnitOrderEnd(
+  orderEnd: SimUnitOrderEnd | null
+): SimUnitOrderEnd | null {
+  const order = copyUnitOrder(orderEnd?.order ?? null);
+
+  return order && orderEnd
+    ? {
+        order,
+        source: orderEnd.source,
+        issuedTick: orderEnd.issuedTick,
+        endedTick: orderEnd.endedTick,
+        outcome: orderEnd.outcome,
+        reason: orderEnd.reason,
+      }
+    : null;
+}
+
 export function replaceUnitOrder(
   unit: SimUnit,
   order: SimUnitOrder | null,
   metadata: SimUnitOrderMetadata | null = null
 ): void {
+  if (unit.moveOrder && metadata) {
+    recordUnitOrderEnd(unit, metadata.issuedTick, "superseded", "replaced");
+  }
+
   unit.moveOrder = copyUnitOrder(order);
   unit.orderSource = unit.moveOrder ? (metadata?.source ?? "system") : null;
   unit.orderIssuedTick = unit.moveOrder ? (metadata?.issuedTick ?? 0) : null;
@@ -796,6 +838,44 @@ export function clearUnitOrder(unit: SimUnit): void {
   unit.moveOrder = null;
   unit.orderSource = null;
   unit.orderIssuedTick = null;
+}
+
+export function completeUnitOrder(
+  unit: SimUnit,
+  endedTick: number,
+  outcome: SimUnitOrderEndOutcome,
+  reason: SimUnitOrderEndReason
+): void {
+  recordUnitOrderEnd(unit, endedTick, outcome, reason);
+  clearUnitOrder(unit);
+}
+
+function recordUnitOrderEnd(
+  unit: SimUnit,
+  endedTick: number,
+  outcome: SimUnitOrderEndOutcome,
+  reason: SimUnitOrderEndReason
+): void {
+  const order = copyUnitOrder(unit.moveOrder);
+
+  if (!order) {
+    return;
+  }
+
+  const orderEnd: SimUnitOrderEnd = {
+    order,
+    source: unit.orderSource ?? "system",
+    issuedTick: unit.orderIssuedTick ?? 0,
+    endedTick,
+    outcome,
+    reason,
+  };
+
+  unit.lastOrderEnd = orderEnd;
+
+  if (orderEnd.source === "player") {
+    unit.lastPlayerOrderEnd = copyUnitOrderEnd(orderEnd);
+  }
 }
 
 export function copyFighterSpawnState(

@@ -327,6 +327,9 @@ export function readUnitViewModels(world: SimWorld): readonly UnitViewModel[] {
         orbitTicks: unit.orbit.orbitTicks,
       },
       moveOrder: copyUnitOrderIntent(unit.moveOrder),
+      orderSource: unit.orderSource,
+      orderIssuedTick: unit.orderIssuedTick,
+      lastPlayerOrderTick: unit.lastPlayerOrderTick,
       queuedOrderCount: unit.orderQueue.length,
       health: {
         current: unit.health.current,

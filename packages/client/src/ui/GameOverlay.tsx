@@ -1293,7 +1293,7 @@ function shouldShowReadyButton(status: RuntimeConnectionStatus): boolean {
 }
 
 function shouldShowCloseButton(status: RuntimeConnectionStatus): boolean {
-  return status.mode !== "network" || status.running;
+  return status.mode !== "network" || Boolean(status.running);
 }
 
 function isCurrentPlayerReady(status: RuntimeConnectionStatus): boolean {

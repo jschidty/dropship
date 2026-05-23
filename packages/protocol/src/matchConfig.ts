@@ -377,6 +377,8 @@ export type CreateMinimalSkirmishConfigOptions = Readonly<{
   initialPlanets?: readonly InitialPlanetConfig[];
 }>;
 
+export type CreateCaptureDemoConfigOptions = CreateMinimalSkirmishConfigOptions;
+
 export type PartialMatchRulesConfig = Readonly<{
   capture?: Partial<CaptureRulesConfig>;
   spawning?: Partial<SpawningRulesConfig>;

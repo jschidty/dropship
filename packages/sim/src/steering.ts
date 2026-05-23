@@ -9,7 +9,7 @@ import {
 } from "@drop-ship/protocol";
 import type { ShipStats } from "@drop-ship/content";
 import {
-  clearUnitOrder,
+  completeUnitOrder,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   findPlanetByHandle,
@@ -230,7 +230,7 @@ function writeApproachedVelocity(
   output.z = quantizeSimFloat(current.z + deltaZ * scale);
 }
 
-export function integrateUnitMotion(world: SimWorld): void {
+export function integrateUnitMotion(world: SimWorld, tick: number): void {
   const tuning = readSimTuning(world);
 
   for (const unit of getUnitsInStableOrder(world)) {
@@ -264,7 +264,7 @@ export function integrateUnitMotion(world: SimWorld): void {
         tuning.movement.arrivalDistanceWorldUnits *
           tuning.movement.arrivalDistanceWorldUnits
     ) {
-      clearUnitOrder(unit);
+      completeUnitOrder(unit, tick, "objectiveMet", "arrived");
     }
   }
 }

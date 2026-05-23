@@ -39,6 +39,29 @@ export type UnitOrderMetadataSnapshot = Readonly<{
   issuedTick: number;
 }>;
 
+export type UnitOrderEndOutcomeSnapshot =
+  | "objectiveMet"
+  | "failed"
+  | "cancelled"
+  | "superseded";
+
+export type UnitOrderEndReasonSnapshot =
+  | "arrived"
+  | "targetDestroyed"
+  | "planetCaptured"
+  | "targetMissing"
+  | "planetMissing"
+  | "replaced";
+
+export type UnitOrderEndSnapshot = Readonly<{
+  order: UnitOrderSnapshot;
+  source: CommandSource;
+  issuedTick: number;
+  endedTick: number;
+  outcome: UnitOrderEndOutcomeSnapshot;
+  reason: UnitOrderEndReasonSnapshot;
+}>;
+
 export type UnitFighterSpawnSnapshot = Readonly<{
   nextSpawnTick: number;
   spawnedFighters: readonly EntityHandle[];
@@ -63,6 +86,8 @@ export type UnitSnapshot = Readonly<{
   orderSource?: CommandSource | null;
   orderIssuedTick?: number | null;
   lastPlayerOrderTick?: number | null;
+  lastOrderEnd?: UnitOrderEndSnapshot | null;
+  lastPlayerOrderEnd?: UnitOrderEndSnapshot | null;
   orderQueue?: readonly UnitOrderSnapshot[];
   orderQueueMetadata?: readonly UnitOrderMetadataSnapshot[];
   health: HealthSnapshot;

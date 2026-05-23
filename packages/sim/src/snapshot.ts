@@ -16,6 +16,7 @@ import {
   createEmptyWorld,
   copyComponentsBySlot,
   copyMoveOrder,
+  copyUnitOrderEnd,
   copyUnitOrderMetadata,
   copyUnitOrders,
   copyOrbitState,
@@ -101,6 +102,8 @@ export function hydrateWorldFromSnapshot(
       orderSource: unit.orderSource ?? null,
       orderIssuedTick: unit.orderIssuedTick ?? null,
       lastPlayerOrderTick: unit.lastPlayerOrderTick ?? null,
+      lastOrderEnd: copyUnitOrderEnd(unit.lastOrderEnd ?? null),
+      lastPlayerOrderEnd: copyUnitOrderEnd(unit.lastPlayerOrderEnd ?? null),
       orderQueue: copyUnitOrders(unit.orderQueue ?? []),
       orderQueueMetadata: copyUnitOrderMetadata(
         unit.orderQueueMetadata ?? [],
@@ -179,13 +182,26 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     spawnedTick: unit.spawnedTick,
   };
 
+  const snapshotWithOrderEnds =
+    unit.lastOrderEnd || unit.lastPlayerOrderEnd
+      ? {
+          ...snapshot,
+          ...(unit.lastOrderEnd
+            ? { lastOrderEnd: copyUnitOrderEnd(unit.lastOrderEnd) }
+            : {}),
+          ...(unit.lastPlayerOrderEnd
+            ? { lastPlayerOrderEnd: copyUnitOrderEnd(unit.lastPlayerOrderEnd) }
+            : {}),
+        }
+      : snapshot;
+
   const snapshotWithCooldowns =
     Object.keys(weaponCooldownTicksBySlot).length > 0
       ? {
-          ...snapshot,
+          ...snapshotWithOrderEnds,
           weaponCooldownTicksBySlot,
         }
-      : snapshot;
+      : snapshotWithOrderEnds;
 
   const snapshotWithQueue =
     unit.orderQueue.length > 0

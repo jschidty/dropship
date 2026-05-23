@@ -14,6 +14,7 @@ import {
 import {
   findPlanetByHandle,
   findUnitByHandle,
+  clearUnitOrder,
   getUnitsInStableOrder,
   promoteQueuedUnitOrder,
   type SimUnit,
@@ -64,7 +65,7 @@ function computeOrderVelocity(
     const target = findUnitByHandle(world, order.target);
 
     if (!target || target.health.current <= 0) {
-      unit.moveOrder = null;
+      clearUnitOrder(unit);
       return null;
     }
 
@@ -85,7 +86,7 @@ function computeOrderVelocity(
     const planet = findPlanetByHandle(world, order.planet);
 
     if (!planet) {
-      unit.moveOrder = null;
+      clearUnitOrder(unit);
       return null;
     }
 
@@ -116,7 +117,7 @@ function computeOrderVelocity(
     const target = findUnitByHandle(world, order.target);
 
     if (!target || target.health.current <= 0) {
-      unit.moveOrder = null;
+      clearUnitOrder(unit);
       return null;
     }
 
@@ -134,7 +135,7 @@ function computeOrderVelocity(
   const distance = length(offset);
 
   if (distance <= tuning.movement.arrivalDistanceWorldUnits) {
-    unit.moveOrder = null;
+    clearUnitOrder(unit);
     return null;
   }
 

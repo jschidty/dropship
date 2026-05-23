@@ -236,7 +236,7 @@ JSON is fine for the first playable build. Keep message shapes compact and numer
 | Message | Purpose |
 |---|---|
 | `{ type: "ready" }` | Player-loaded signal; the DO starts the match only after both seated players send it |
-| `{ type: "command", clientSeq, localTick, command }` | Player command intent |
+| `{ type: "command", clientSeq, localTick, source?, command }` | Player or autonomy command intent; the DO records supported provenance in the scheduled command batch |
 | `{ type: "hash", tick, hash }` | Periodic state hash |
 | `{ type: "snapshot", tick, snapshot }` | Trusted full snapshot from the elected author |
 | `{ type: "matchEndReport", tick, winner, reason, finalHash }` | Client-reported deterministic match end |

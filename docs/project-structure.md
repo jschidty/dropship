@@ -128,11 +128,11 @@ Command-producing controllers that read `SimWorld` and emit normal protocol comm
 
 ```text
 controllers/src/
-|-- scriptedNpc.ts      deterministic scripted-v1 NPC command controller
+|-- scriptedNpc.ts      deterministic scripted-v1 NPC and fleet-autonomy controllers
 `-- index.ts
 ```
 
-The client and headless tools can both use these controllers before `runTick`, then feed their commands through `CommandBatch` and `CommandIntakeSystem`.
+The client and headless tools can both use these controllers before `runTick`, then feed their commands through `CommandBatch` and `CommandIntakeSystem`. Controllers should label command provenance (`npc`, `autonomy`, etc.) when future order decisions depend on who issued the previous order.
 
 ### `packages/client`
 

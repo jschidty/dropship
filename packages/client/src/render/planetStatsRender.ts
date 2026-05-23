@@ -3,11 +3,13 @@ import {
   type PlanetClass,
 } from "@drop-ship/protocol";
 import {
+  FULLSCREEN_VERTEX_SHADER,
   PLANET_BILLBOARD_FRAGMENT_SHADER,
   PLANET_BILLBOARD_VERTEX_SHADER,
   PLANET_GLOW_FRAGMENT_SHADER,
   PLANET_RING_FRAGMENT_SHADER,
   PLANET_RING_VERTEX_SHADER,
+  SUN_FLARE_FRAGMENT_SHADER,
 } from "./shaders";
 import type { PlanetViewModel, RenderQualityMode } from "../types";
 
@@ -80,6 +82,7 @@ export function createPlanetStatsRenderCache(
   camera.updateProjectionMatrix();
 
   const geometry = new THREE.PlaneGeometry(1, 1);
+  const sunFlareGeometry = new THREE.PlaneGeometry(2, 2);
   const ringGeometry = new THREE.RingGeometry(
     PLANET_RING_INNER_RADIUS,
     PLANET_RING_OUTER_RADIUS,
@@ -89,9 +92,11 @@ export function createPlanetStatsRenderCache(
   const glowMaterial = createPlanetGlowMaterial(gasGiantTextures);
   const bodyMaterial = createPlanetBillboardMaterial(gasGiantTextures);
   const ringMaterial = createPlanetRingMaterial();
+  const sunFlareMaterial = createSunFlarePreviewMaterial();
   const glow = new THREE.Mesh(geometry, glowMaterial);
   const body = new THREE.Mesh(geometry, bodyMaterial);
   const rings = new THREE.Mesh(ringGeometry, ringMaterial);
+  const sunFlare = new THREE.Mesh(sunFlareGeometry, sunFlareMaterial);
   const entries = new Map<string, PlanetStatsRenderCacheEntry>();
   const canvas = document.createElement("canvas");
   canvas.width = PLANET_STATS_RENDER_WIDTH;
@@ -118,7 +123,10 @@ export function createPlanetStatsRenderCache(
   rings.rotation.set(-0.92, 0.18, -0.18);
   rings.renderOrder = 3;
   rings.visible = false;
-  scene.add(glow, body, rings);
+  sunFlare.name = "selected sun stats preview flare";
+  sunFlare.renderOrder = 4;
+  sunFlare.visible = false;
+  scene.add(glow, body, rings, sunFlare);
 
   function readImageUrl(
     planet: PlanetViewModel,
@@ -152,10 +160,14 @@ export function createPlanetStatsRenderCache(
       renderTarget,
       planet,
       sunDirection,
+      glow,
+      body,
       bodyMaterial,
       glowMaterial,
       ringMaterial,
-      rings
+      rings,
+      sunFlare,
+      sunFlareMaterial
     );
 
     const entry = {
@@ -179,10 +191,12 @@ export function createPlanetStatsRenderCache(
 
     entries.clear();
     geometry.dispose();
+    sunFlareGeometry.dispose();
     ringGeometry.dispose();
     glowMaterial.dispose();
     bodyMaterial.dispose();
     ringMaterial.dispose();
+    sunFlareMaterial.dispose();
   }
 
   return {
@@ -198,10 +212,14 @@ function renderPlanetStatsPreview(
   renderTarget: THREE.WebGLRenderTarget,
   planet: PlanetViewModel,
   sunDirection: THREE.Vector3,
+  glow: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>,
+  body: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>,
   bodyMaterial: THREE.ShaderMaterial,
   glowMaterial: THREE.ShaderMaterial,
   ringMaterial: THREE.ShaderMaterial,
-  rings: THREE.Mesh<THREE.RingGeometry, THREE.ShaderMaterial>
+  rings: THREE.Mesh<THREE.RingGeometry, THREE.ShaderMaterial>,
+  sunFlare: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>,
+  sunFlareMaterial: THREE.ShaderMaterial
 ): void {
   PREVIEW_SUN_DIRECTION.copy(sunDirection);
 
@@ -210,18 +228,37 @@ function renderPlanetStatsPreview(
   }
 
   PREVIEW_SUN_DIRECTION.normalize();
-  writeBillboardUniforms(bodyMaterial, planet, PREVIEW_SUN_DIRECTION);
-  writeBillboardUniforms(glowMaterial, planet, PREVIEW_SUN_DIRECTION, {
-    previewGlow: true,
-  });
-  ringMaterial.uniforms.uSunDirection.value.copy(PREVIEW_SUN_DIRECTION);
-  ringMaterial.uniforms.uPlanetColor.value.set(planet.color);
-  ringMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
-  writePlanetRingEllipse(
-    ringMaterial.uniforms.uRingEllipse.value,
-    planet.appearance.seed
-  );
-  rings.visible = planet.appearance.hasRings;
+
+  if (isSunPlanetView(planet)) {
+    glow.visible = false;
+    body.visible = false;
+    rings.visible = false;
+    sunFlare.visible = true;
+    sunFlareMaterial.uniforms.uResolution.value.set(
+      PLANET_STATS_RENDER_WIDTH,
+      PLANET_STATS_RENDER_HEIGHT
+    );
+    sunFlareMaterial.uniforms.uSunPosition.value.set(0.5, 0.5);
+    sunFlareMaterial.uniforms.uSunColor.value.set(planet.color);
+    sunFlareMaterial.uniforms.uVisibility.value = 1;
+    sunFlareMaterial.uniforms.uTime.value = PLANET_PREVIEW_TIME_SECONDS;
+  } else {
+    glow.visible = true;
+    body.visible = true;
+    sunFlare.visible = false;
+    writeBillboardUniforms(bodyMaterial, planet, PREVIEW_SUN_DIRECTION);
+    writeBillboardUniforms(glowMaterial, planet, PREVIEW_SUN_DIRECTION, {
+      previewGlow: true,
+    });
+    ringMaterial.uniforms.uSunDirection.value.copy(PREVIEW_SUN_DIRECTION);
+    ringMaterial.uniforms.uPlanetColor.value.set(planet.color);
+    ringMaterial.uniforms.uPlanetSeed.value = planet.appearance.seed;
+    writePlanetRingEllipse(
+      ringMaterial.uniforms.uRingEllipse.value,
+      planet.appearance.seed
+    );
+    rings.visible = planet.appearance.hasRings;
+  }
 
   const previousTarget = renderer.getRenderTarget();
   const previousAutoClear = renderer.autoClear;
@@ -236,6 +273,10 @@ function renderPlanetStatsPreview(
   renderer.setRenderTarget(previousTarget);
   renderer.setClearColor(PREVIEW_PREVIOUS_CLEAR_COLOR, previousClearAlpha);
   renderer.autoClear = previousAutoClear;
+}
+
+function isSunPlanetView(planet: PlanetViewModel): boolean {
+  return planet.appearance.planetClass === "sun";
 }
 
 function readRenderTargetImageUrl(
@@ -394,6 +435,29 @@ function createPlanetRingMaterial(): THREE.ShaderMaterial {
   });
 }
 
+function createSunFlarePreviewMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uResolution: {
+        value: new THREE.Vector2(
+          PLANET_STATS_RENDER_WIDTH,
+          PLANET_STATS_RENDER_HEIGHT
+        ),
+      },
+      uSunPosition: { value: new THREE.Vector2(0.5, 0.5) },
+      uSunColor: { value: new THREE.Color(0xffd27a) },
+      uVisibility: { value: 1 },
+      uTime: { value: PLANET_PREVIEW_TIME_SECONDS },
+    },
+    vertexShader: FULLSCREEN_VERTEX_SHADER,
+    fragmentShader: SUN_FLARE_FRAGMENT_SHADER,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthTest: false,
+    depthWrite: false,
+  });
+}
+
 function writePlanetRingEllipse(target: THREE.Vector2, seed: number): THREE.Vector2 {
   const scaleSeed = Math.sin(seed * 12.9898 + 4.1414) * 43758.5453;
   const scale = 1.035 + (scaleSeed - Math.floor(scaleSeed)) * 0.085;
@@ -509,6 +573,8 @@ function planetClassToShaderValue(planetClass: PlanetClass): number {
       return 1;
     case "ice":
       return 2;
+    case "sun":
+      return 0;
   }
 }
 

@@ -16,6 +16,7 @@ import {
   createEmptyWorld,
   copyComponentsBySlot,
   copyMoveOrder,
+  copyUnitOrderMetadata,
   copyUnitOrders,
   copyOrbitState,
   copyPlanetOrbit,
@@ -97,7 +98,14 @@ export function hydrateWorldFromSnapshot(
       velocity: unit.velocity,
       rotation: unit.rotation,
       moveOrder: copyMoveOrder(unit.moveOrder),
+      orderSource: unit.orderSource ?? null,
+      orderIssuedTick: unit.orderIssuedTick ?? null,
+      lastPlayerOrderTick: unit.lastPlayerOrderTick ?? null,
       orderQueue: copyUnitOrders(unit.orderQueue ?? []),
+      orderQueueMetadata: copyUnitOrderMetadata(
+        unit.orderQueueMetadata ?? [],
+        unit.orderQueue?.length ?? 0
+      ),
       health: unit.health,
       weaponCooldownTicks: unit.weaponCooldownTicks,
       weaponCooldownTicksBySlot: unit.weaponCooldownTicksBySlot,
@@ -150,6 +158,9 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
     velocity: unit.velocity,
     rotation: unit.rotation,
     moveOrder: copyMoveOrder(unit.moveOrder),
+    orderSource: unit.orderSource,
+    orderIssuedTick: unit.orderIssuedTick,
+    lastPlayerOrderTick: unit.lastPlayerOrderTick,
     health: {
       current: unit.health.current,
       max: unit.health.max,
@@ -176,12 +187,23 @@ function unitToSnapshot(unit: SimWorld["units"][number]): UnitSnapshot {
         }
       : snapshot;
 
-  return unit.orderQueue.length > 0
+  const snapshotWithQueue =
+    unit.orderQueue.length > 0
+      ? {
+          ...snapshotWithCooldowns,
+          orderQueue: copyUnitOrders(unit.orderQueue),
+        }
+      : snapshotWithCooldowns;
+
+  return unit.orderQueueMetadata.length > 0
     ? {
-        ...snapshotWithCooldowns,
-        orderQueue: copyUnitOrders(unit.orderQueue),
+        ...snapshotWithQueue,
+        orderQueueMetadata: copyUnitOrderMetadata(
+          unit.orderQueueMetadata,
+          unit.orderQueue.length
+        ),
       }
-    : snapshotWithCooldowns;
+    : snapshotWithQueue;
 }
 
 function planetToSnapshot(planet: SimWorld["planets"][number]): PlanetSnapshot {

@@ -5,6 +5,7 @@ import type {
 } from "@drop-ship/content";
 import {
   handleKey,
+  type CommandSource,
   type EntityHandle,
   type PlanetAppearanceConfig,
   type PlayerId,
@@ -35,6 +36,9 @@ type MutableUnitViewModel = {
     orbitTicks: number;
   };
   moveOrder: UnitOrderIntent | null;
+  orderSource: CommandSource | null;
+  orderIssuedTick: number | null;
+  lastPlayerOrderTick: number | null;
   queuedOrderCount: number;
   health: {
     current: number;
@@ -153,6 +157,9 @@ function syncUnitViewModels(
           orbitTicks: unit.orbit.orbitTicks,
         },
         moveOrder: copyUnitOrderIntent(unit.moveOrder),
+        orderSource: unit.orderSource,
+        orderIssuedTick: unit.orderIssuedTick,
+        lastPlayerOrderTick: unit.lastPlayerOrderTick,
         queuedOrderCount: unit.orderQueue.length,
         health: {
           current: unit.health.current,
@@ -187,6 +194,9 @@ function syncUnitViewModels(
     view.orbit.planet = unit.orbit.planet ? { ...unit.orbit.planet } : null;
     view.orbit.orbitTicks = unit.orbit.orbitTicks;
     view.moveOrder = copyUnitOrderIntent(unit.moveOrder);
+    view.orderSource = unit.orderSource;
+    view.orderIssuedTick = unit.orderIssuedTick;
+    view.lastPlayerOrderTick = unit.lastPlayerOrderTick;
     view.queuedOrderCount = unit.orderQueue.length;
     view.health.current = unit.health.current;
     view.health.max = unit.health.max;

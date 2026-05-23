@@ -789,6 +789,7 @@ void main() {
   vec3 sunDirection = normalize(uSunDirection);
   float mu = dot(normal, sunDirection);
   float solidMask = 1.0 - smoothstep(solidRadius - 0.004, solidRadius + 0.004, radius);
+
 #ifdef CINEMATIC_RENDER
   vec3 spunNormal = rotateY(normal, uTime * 0.028 + uPlanetSeed * 0.013);
   vec2 planetUv = vec2(

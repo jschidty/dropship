@@ -1,6 +1,7 @@
 import type * as THREE from "three";
 
-export type CameraMode = "tactical" | "strategic";
+export type CameraMode = "tactical" | "strategic" | "fpv";
+export type CameraProjection = "orthographic" | "perspective";
 
 export type CameraModeConfig = Readonly<{
   label: string;
@@ -12,6 +13,7 @@ export type CameraModeConfig = Readonly<{
 
 export type CameraControls = {
   mode: CameraMode;
+  projection: CameraProjection;
   preset: CameraPreset | null;
   yaw: number;
   pitch: number;
@@ -43,15 +45,22 @@ export const CAMERA_MODES: Record<CameraMode, CameraModeConfig> = {
     label: "Tactical",
     defaultViewHeight: 76,
     minViewHeight: 24,
-    maxViewHeight: 1200,
+    maxViewHeight: 14000,
     pitch: 0.82,
   },
   strategic: {
     label: "Strategic",
     defaultViewHeight: 280,
     minViewHeight: 110,
-    maxViewHeight: 900,
+    maxViewHeight: 18000,
     pitch: 1,
+  },
+  fpv: {
+    label: "FPV",
+    defaultViewHeight: 52,
+    minViewHeight: 28,
+    maxViewHeight: 120,
+    pitch: 0.46,
   },
 };
 export const CAMERA_PRESETS: Record<

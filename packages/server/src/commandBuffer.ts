@@ -1,8 +1,10 @@
 import {
+  compareScheduledCommands,
   createEmptyCommandBatch,
   type CommandAckMessage,
   type CommandBatch,
   type CommandMessage,
+  type ClientCommandSource,
   type ScheduledCommand,
 } from "@drop-ship/protocol";
 
@@ -21,6 +23,7 @@ export function createCommandBuffer(): CommandBuffer {
       commands.push({
         playerId: message.playerId,
         clientSeq: message.clientSeq,
+        source: readScheduledCommandSource(message),
         command: message.command,
       });
       scheduled.set(executeTick, commands);
@@ -41,17 +44,21 @@ export function createCommandBuffer(): CommandBuffer {
 
       return {
         tick,
-        commands: commands
-          .slice()
-          .sort((a, b) =>
-            a.playerId === b.playerId
-              ? a.clientSeq - b.clientSeq
-              : a.playerId - b.playerId
-          ),
+        commands: sortScheduledCommands(commands),
       };
     },
     peekScheduledTicks() {
       return [...scheduled.keys()].sort((a, b) => a - b);
     },
   };
+}
+
+function readScheduledCommandSource(message: CommandMessage): ClientCommandSource {
+  return message.source === "autonomy" ? "autonomy" : "player";
+}
+
+function sortScheduledCommands(
+  commands: readonly ScheduledCommand[]
+): readonly ScheduledCommand[] {
+  return commands.slice().sort(compareScheduledCommands);
 }

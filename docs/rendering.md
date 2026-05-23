@@ -177,6 +177,58 @@ Modes:
 
 Camera transitions are presentation only. The first capture demo uses tactical-view UI and controls only; first-person piloting is outside its scope.
 
+## Vastness Presentation
+
+The larger capture-demo map creates room for scale, but the player only feels
+that scale if camera, rendering, and UI reinforce it. These devices are
+presentation rules unless they explicitly emit normal commands.
+
+Camera devices:
+
+- Maintain a strategic camera height that can see the planetary system as a
+  system, not just as adjacent arenas.
+- Use slow, interruptible zoom and focus tweens so moving from system view to a
+  battle feels like traveling through space instead of snapping between boards.
+- Keep the sun direction, orbital plane, and parent-planet rim legible across
+  presets so players do not lose orientation after long pans.
+- Let explicit recentering commands such as `Fit` and `Z` do the large camera
+  moves; normal selection changes should not aggressively collapse the sense of
+  distance.
+- When following a battle, preserve enough peripheral context to show nearby
+  objectives and long travel lanes.
+
+Rendering devices:
+
+- Use planet atmosphere, horizon glow, shadows, and orbital rings as scale
+  references.
+- Use distant ship glints, impostors, exhaust streaks, and projectile traces to
+  make travel visible at strategic zoom.
+- Add parallax layers such as stars, dust, and sun glare carefully; they should
+  help depth reading without becoming fog-of-war or hiding commands.
+- Prefer LOD transitions that preserve faction color and ship role. At the
+  farthest zoom, a unit can become an icon-like light, but it should not become
+  anonymous.
+- Keep large-scale depth choices, floating origin, and logarithmic depth buffer
+  behavior render-only. They must not change sim coordinates.
+
+UI devices:
+
+- Show offscreen and long-range objective indicators so spread-out fleets feel
+  manageable rather than lost.
+- Surface travel intent: selected-unit panels, reticles, and order
+  visualization should make it clear that a ship is crossing a large distance,
+  guarding a lane, or converging on a contested planet.
+- Distinguish manual player orders from autonomous fleet orders in command
+  history and selected-unit details. The UI should make autonomy feel like crew
+  initiative, not unexplained control loss.
+- Contested planets should become strategic beacons at system zoom, while local
+  battle UI remains readable when the player zooms in.
+
+Do not solve scale by secretly speeding ships up at distance or by making
+camera state affect sim rules. If pacing needs to change, tune movement,
+spawning, aggro, capture, or autonomy through serializable config and normal
+commands.
+
 ## Input system
 
 The input system is the only code that touches DOM pointer, keyboard, mouse, or gamepad events.

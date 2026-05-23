@@ -1,6 +1,11 @@
 import { Fragment, render } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { CAMERA_PRESETS, type CameraPreset } from "../camera/config";
+import {
+  CAMERA_PRESETS,
+  type CameraPreset,
+  type CameraMode,
+  type CameraProjection,
+} from "../camera/config";
 import {
   PHASE_ONE_SIM_HZ,
   SHIP_CLASS_IDS,
@@ -81,7 +86,10 @@ export type SelectedUnitObjectiveSnapshot = Readonly<{
 
 export type GameOverlaySnapshot = Readonly<{
   activeCameraPreset: CameraPreset | null;
+  cameraMode: CameraMode;
+  cameraProjection: CameraProjection;
   tacticalOverlayEnabled: boolean;
+  gravityOverlayEnabled: boolean;
   renderMode: RenderQualityMode;
   selectedUnits: readonly UnitViewModel[];
   selectedUnitObjective: SelectedUnitObjectiveSnapshot | null;
@@ -99,8 +107,10 @@ export type GameOverlaySnapshot = Readonly<{
 
 export type GameOverlayActions = Readonly<{
   selectCameraPreset: (preset: CameraPreset) => void;
+  toggleCameraProjection: () => void;
   zoomToFit: () => void;
   setTacticalOverlayEnabled: (enabled: boolean) => void;
+  setGravityOverlayEnabled: (enabled: boolean) => void;
   toggleRenderMode: () => void;
   selectCommandLeader: (unitKey: string) => void;
   deselectUnit: (unitKey: string) => void;
@@ -119,7 +129,10 @@ export function createInitialOverlaySnapshot(
 ): GameOverlaySnapshot {
   return {
     activeCameraPreset: "top",
+    cameraMode: "tactical",
+    cameraProjection: "perspective",
     tacticalOverlayEnabled: true,
+    gravityOverlayEnabled: false,
     renderMode,
     selectedUnits: [],
     selectedUnitObjective: null,
@@ -266,6 +279,20 @@ function CameraPresetControls({
       >
         Fit
       </button>
+      <button
+        type="button"
+        className="camera-preset-button camera-projection-button"
+        aria-pressed={snapshot.cameraProjection === "perspective"}
+        onPointerDown={stopOverlayPointer}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          actions.toggleCameraProjection();
+          event.currentTarget.blur();
+        }}
+      >
+        {snapshot.cameraProjection === "perspective" ? "Persp" : "Ortho"}
+      </button>
     </div>
   );
 }
@@ -289,6 +316,17 @@ function TopLeftControls({
           }}
         />
         <span>Tactical</span>
+      </label>
+      <label className="tactical-toggle" onPointerDown={stopOverlayPointer}>
+        <input
+          type="checkbox"
+          checked={snapshot.gravityOverlayEnabled}
+          onChange={(event) => {
+            actions.setGravityOverlayEnabled(event.currentTarget.checked);
+            event.currentTarget.blur();
+          }}
+        />
+        <span>Gravity</span>
       </label>
       <button
         type="button"
@@ -453,7 +491,7 @@ function PlanetStatsPanel({
         <h2 className="selected-object-title">{planet.label}</h2>
         <div className="selected-object-subtitle">
           {formatPlanetClass(planet.appearance.planetClass)}{" "}
-          {planet.parentPlanetIndex === null ? "primary" : "moon"}
+          {formatPlanetKind(planet)}
         </div>
       </div>
       <div className="selected-planet-control">
@@ -1052,6 +1090,8 @@ function formatPlanetClass(
   planetClass: PlanetViewModel["appearance"]["planetClass"]
 ): string {
   switch (planetClass) {
+    case "sun":
+      return "Sun";
     case "gas-giant":
       return "Gas giant";
     case "terran":
@@ -1061,6 +1101,14 @@ function formatPlanetClass(
     default:
       return planetClass;
   }
+}
+
+function formatPlanetKind(planet: PlanetViewModel): string {
+  if (planet.appearance.planetClass === "sun") {
+    return "star";
+  }
+
+  return planet.parentPlanetIndex === null ? "primary" : "moon";
 }
 
 function formatLoadoutSlotLabel(slot: UnitLoadoutSlotViewModel): string {

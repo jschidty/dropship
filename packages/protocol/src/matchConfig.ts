@@ -74,9 +74,11 @@ export type PlanetOrbitConfig = Readonly<{
   radius: number;
   phase: number;
   angularSpeed: number;
+  eccentricity?: number;
+  periapsisAngle?: number;
 }>;
 
-export type PlanetClass = "gas-giant" | "terran" | "ice";
+export type PlanetClass = "gas-giant" | "terran" | "ice" | "sun";
 
 export type PlanetAppearanceConfig = Readonly<{
   planetClass: PlanetClass;
@@ -235,6 +237,8 @@ export type MatchContentOverrides = Readonly<{
   shipComponents?: readonly ShipComponentStatOverride[];
 }>;
 
+const DEFAULT_MATCH_DURATION_MINUTES = 8;
+
 export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
   capture: {
     planetCaptureSeconds: 15,
@@ -247,7 +251,7 @@ export const DEFAULT_MATCH_RULES: MatchRulesConfig = {
     fighterSpawnCapPerDropShip: 7,
   },
   matchEnd: {
-    durationTicks: 6 * 60 * PHASE_ONE_SIM_HZ,
+    durationTicks: DEFAULT_MATCH_DURATION_MINUTES * 60 * PHASE_ONE_SIM_HZ,
   },
   npc: {
     thinkIntervalTicks: 30,
@@ -389,6 +393,11 @@ export type PartialSimTuningConfig = Readonly<{
   avoidance?: Partial<SimAvoidanceTuningConfig>;
 }>;
 
+type SunColorStop = Readonly<{
+  position: number;
+  color: readonly [number, number, number];
+}>;
+
 const DEFAULT_MATCH_SEED = 1337;
 const PLANET_NAMES = [
   "Aurora",
@@ -404,10 +413,36 @@ const PLANET_NAMES = [
 ];
 const MATCH_TAU = Math.PI * 2;
 const DEFAULT_PLANET_DISTANCE_MULTIPLIER = 1.5;
-const MIN_GENERATED_PLANETS = 8;
-const MAX_GENERATED_PLANETS = 11;
-const MIN_PARENT_PLANETS = 7;
+const PARENT_PLANET_RADIUS_SCALE = 9.75;
+const PARENT_PLANET_RADIUS_VARIANCE = 0.2;
+const MOON_RADIUS_SCALE = 0.85;
+const MOON_DISTANCE_SCALE = 1.2;
+const SUN_PLANET_RADIUS = 1200;
+const SUN_PLANET_MASS = 900_000_000_000_000;
+const PARENT_PLANET_INNER_ORBIT_RADIUS = 4200;
+const PARENT_PLANET_OUTER_ORBIT_RADIUS = 12500;
+const PARENT_PLANET_OUTER_ORBIT_COUNT_BONUS = 420;
+const PARENT_PLANET_ORBIT_EXPONENT = 1.18;
+const PARENT_PLANET_ORBIT_JITTER = 260;
+const PARENT_PLANET_PHASE_JITTER = 0.24;
+const PARENT_PLANET_MIN_ECCENTRICITY = 0.035;
+const PARENT_PLANET_ECCENTRICITY_RANGE = 0.17;
+const PARENT_PLANET_INCLINATION_JITTER = 0.035;
+const CAPTURE_DEMO_RIM_SPAWN_PADDING = 130;
+const MINIMAL_SKIRMISH_PLANET_SPAWN_PADDING = 95;
+const SUN_COLOR_STOPS: readonly SunColorStop[] = [
+  { position: 0, color: [0.42, 0.68, 1] },
+  { position: 0.22, color: [0.7, 0.86, 1] },
+  { position: 0.45, color: [1, 0.97, 0.86] },
+  { position: 0.66, color: [1, 0.82, 0.48] },
+  { position: 0.84, color: [1, 0.58, 0.27] },
+  { position: 1, color: [1, 0.28, 0.22] },
+];
+const MIN_GENERATED_PLANETS = 7;
+const MAX_GENERATED_PLANETS = 10;
+const MIN_PARENT_PLANETS = 6;
 const MAX_MOONS_PER_PLANET = 2;
+const SYSTEM_SUN_POSITION: Vec3Data = { x: 0, y: 0, z: 0 };
 const DEFAULT_PLAYERS: readonly PlayerConfig[] = [
   { id: 1, name: "Player 1", color: "#74d9ff" },
   { id: 2, name: "Player 2", color: "#ff4fd8" },
@@ -424,9 +459,12 @@ export function createMinimalSkirmishConfig(
     : normalizedOptions.matchId;
   const players = normalizedOptions.players ?? DEFAULT_PLAYERS;
   const generated = generatePlanetarySystem(seed);
+  const primaryPlanet = readFirstPrimaryPlanet(generated.planets);
+  const primaryPlanetPosition =
+    primaryPlanet?.position ?? ({ x: 0, y: 0, z: 0 } as const);
   const initialUnits =
     normalizedOptions.initialUnits ??
-    createInitialUnits(generated.planets[0]?.position ?? { x: 0, y: 0, z: 0 });
+    createInitialUnits(primaryPlanetPosition, primaryPlanet?.radius ?? 0);
   const rules = resolveMatchRules(normalizedOptions.rules);
   const tuning = resolveSimTuning(normalizedOptions.tuning);
 
@@ -457,11 +495,7 @@ export function createCaptureDemoConfig(
   const normalizedOptions =
     typeof options === "number" ? { seed: options } : options;
   const base = createMinimalSkirmishConfig(options);
-  const primaryPlanet =
-    base.initialPlanets.find((planet) => planet.parentPlanetIndex === null) ??
-    base.initialPlanets[0];
-  const center = primaryPlanet?.position ?? { x: 0, y: 0, z: 0 };
-  const initialUnits = createCaptureDemoUnits(center);
+  const initialUnits = createCaptureDemoUnits(base.initialPlanets);
 
   return {
     ...base,
@@ -614,8 +648,12 @@ export function resolveSimTuning(
 }
 
 function createCaptureDemoUnits(
-  primaryPlanetPosition: Vec3Data,
+  planets: readonly InitialPlanetConfig[],
 ): readonly InitialUnitConfig[] {
+  const primaryPlanetPosition =
+    readFirstPrimaryPlanet(planets)?.position ??
+    planets[0]?.position ??
+    ({ x: 0, y: 0, z: 0 } as const);
   const offsets: InitialUnitConfig[] = [];
   const addSquadron = (
     owner: PlayerId,
@@ -661,6 +699,9 @@ function createCaptureDemoUnits(
       { anchorIndex: 1, x: -38, y: 4, z: -24 },
       { anchorIndex: 2, x: 30, y: -2, z: 26 },
       { anchorIndex: 3, x: -28, y: 3, z: -30 },
+      { anchorIndex: 4, x: 36, y: -1, z: 22 },
+      { anchorIndex: 5, x: -34, y: 5, z: 28 },
+      { anchorIndex: 6, x: 32, y: 1, z: -26 },
     ];
 
     for (const offset of battleshipOffsets) {
@@ -683,16 +724,22 @@ function createCaptureDemoUnits(
   };
 
   const playerOneAnchors: readonly Vec3Data[] = [
-    { x: -220, y: 8, z: -120 },
-    { x: -292, y: 12, z: -48 },
-    { x: -360, y: 10, z: -190 },
-    { x: -430, y: 14, z: 110 },
+    { x: -2140, y: 8, z: -1520 },
+    { x: -1760, y: 12, z: 260 },
+    { x: -1320, y: 10, z: 1820 },
+    { x: -360, y: 14, z: -2180 },
+    { x: 260, y: 9, z: -520 },
+    { x: 860, y: 13, z: 1320 },
+    { x: 1840, y: 11, z: -1040 },
   ];
   const playerTwoAnchors: readonly Vec3Data[] = [
-    { x: 220, y: 8, z: 120 },
-    { x: 292, y: 12, z: 48 },
-    { x: 360, y: 10, z: 190 },
-    { x: 430, y: 14, z: -110 },
+    { x: 2140, y: 8, z: 1520 },
+    { x: 1760, y: 12, z: -260 },
+    { x: 1320, y: 10, z: -1820 },
+    { x: 360, y: 14, z: 2180 },
+    { x: -260, y: 9, z: 520 },
+    { x: -860, y: 13, z: -1320 },
+    { x: -1840, y: 11, z: 1040 },
   ];
 
   for (const anchor of playerOneAnchors) {
@@ -707,7 +754,7 @@ function createCaptureDemoUnits(
 
   addBattleships(2, playerTwoAnchors, -1);
 
-  return offsets.map((unit) => ({
+  const centeredUnits = offsets.map((unit) => ({
     ...unit,
     position: {
       x: quantize(primaryPlanetPosition.x + unit.position.x),
@@ -715,6 +762,144 @@ function createCaptureDemoUnits(
       z: quantize(primaryPlanetPosition.z + unit.position.z),
     },
   }));
+
+  return moveCaptureDemoFleetsToOuterRim(centeredUnits, planets);
+}
+
+function moveCaptureDemoFleetsToOuterRim(
+  units: readonly InitialUnitConfig[],
+  planets: readonly InitialPlanetConfig[],
+): readonly InitialUnitConfig[] {
+  const center = readPlanetarySystemCenter(planets);
+  const mapRadius = readParentPlanetMapRadius(planets, center);
+  const playerOneCentroid = averagePosition(
+    units.filter((unit) => unit.owner === 1).map((unit) => unit.position),
+  );
+  const playerTwoCentroid = averagePosition(
+    units.filter((unit) => unit.owner === 2).map((unit) => unit.position),
+  );
+  const axis = normalizeVec3OrFallback(
+    subtractVec3(playerTwoCentroid, playerOneCentroid),
+    { x: 1, y: 0, z: 1 },
+  );
+  const spawnDistance = mapRadius + CAPTURE_DEMO_RIM_SPAWN_PADDING;
+  const targetCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
+    1: addVec3(center, scaleVec3(axis, -spawnDistance)),
+    2: addVec3(center, scaleVec3(axis, spawnDistance)),
+  };
+  const sourceCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
+    1: playerOneCentroid,
+    2: playerTwoCentroid,
+  };
+
+  return units.map((unit) => {
+    const owner = unit.owner === 1 ? 1 : 2;
+    const offset = subtractVec3(unit.position, sourceCentroids[owner]);
+
+    return {
+      ...unit,
+      position: addVec3(targetCentroids[owner], offset),
+    };
+  });
+}
+
+function readPlanetarySystemCenter(
+  planets: readonly InitialPlanetConfig[],
+): Vec3Data {
+  const parentPlanets = planets.filter(
+    (planet) => planet.parentPlanetIndex === null,
+  );
+
+  return parentPlanets.length > 0
+    ? averagePosition(parentPlanets.map((planet) => planet.orbit.center))
+    : averagePosition(planets.map((planet) => planet.position));
+}
+
+function readParentPlanetMapRadius(
+  planets: readonly InitialPlanetConfig[],
+  center: Vec3Data,
+): number {
+  const parentPlanets = planets.filter(
+    (planet) => planet.parentPlanetIndex === null,
+  );
+  const candidates = parentPlanets.length > 0 ? parentPlanets : planets;
+
+  return Math.max(
+    1,
+    ...candidates.map(
+      (planet) => lengthVec3(subtractVec3(planet.position, center)) + planet.radius,
+    ),
+  );
+}
+
+function readFirstPrimaryPlanet(
+  planets: readonly InitialPlanetConfig[],
+): InitialPlanetConfig | undefined {
+  return planets.find(isPrimaryPlanet);
+}
+
+function isPrimaryPlanet(planet: InitialPlanetConfig): boolean {
+  return planet.parentPlanetIndex === null && !isSunPlanet(planet);
+}
+
+function isSunPlanet(planet: InitialPlanetConfig): boolean {
+  return planet.appearance.planetClass === "sun";
+}
+
+function averagePosition(points: readonly Vec3Data[]): Vec3Data {
+  if (points.length === 0) {
+    return { x: 0, y: 0, z: 0 };
+  }
+
+  const total = points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x,
+      y: sum.y + point.y,
+      z: sum.z + point.z,
+    }),
+    { x: 0, y: 0, z: 0 },
+  );
+
+  return scaleVec3(total, 1 / points.length);
+}
+
+function addVec3(left: Vec3Data, right: Vec3Data): Vec3Data {
+  return {
+    x: quantize(left.x + right.x),
+    y: quantize(left.y + right.y),
+    z: quantize(left.z + right.z),
+  };
+}
+
+function subtractVec3(left: Vec3Data, right: Vec3Data): Vec3Data {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z,
+  };
+}
+
+function scaleVec3(vector: Vec3Data, scalar: number): Vec3Data {
+  return {
+    x: quantize(vector.x * scalar),
+    y: quantize(vector.y * scalar),
+    z: quantize(vector.z * scalar),
+  };
+}
+
+function lengthVec3(vector: Vec3Data): number {
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function normalizeVec3OrFallback(vector: Vec3Data, fallback: Vec3Data): Vec3Data {
+  const length = lengthVec3(vector);
+
+  if (length > 0.000001) {
+    return scaleVec3(vector, 1 / length);
+  }
+
+  const fallbackLength = Math.max(lengthVec3(fallback), 1);
+  return scaleVec3(fallback, 1 / fallbackLength);
 }
 
 function generatePlanetarySystem(seed: number): {
@@ -730,34 +915,43 @@ function generatePlanetarySystem(seed: number): {
     targetPlanetCount - MIN_PARENT_PLANETS + 1,
   );
   const planetCount = targetPlanetCount - targetMoonCount;
-  const sunDirection = sampleOrbitAxis(random);
-  const sunDistance = quantize(1800 + random() * 1800);
-  const sunOrbitCenter = {
-    x: quantize(sunDirection.x * 36),
-    y: quantize(sunDirection.y * 12),
-    z: quantize(sunDirection.z * 36),
-  };
-  const planets: InitialPlanetConfig[] = [];
+  const sunPosition = SYSTEM_SUN_POSITION;
+  const sunColor = sampleSunColor(seed);
+  const systemOrbitAxis = sampleSolarPlaneAxis(random);
+  const systemPhaseOffset = quantize(random() * MATCH_TAU);
+  const systemPeriapsisAngle = quantize(random() * MATCH_TAU);
+  const planets: InitialPlanetConfig[] = [
+    createSunPlanetConfig(sunPosition, systemOrbitAxis, sunColor),
+  ];
   let remainingMoons = targetMoonCount;
 
   for (let index = 0; index < planetCount; index += 1) {
-    const radius = quantize(24 + random() * 20);
-    const appearance = samplePlanetAppearance(random, radius, false);
-    const orbitAxis = sampleOrbitAxis(random);
-    const orbitRadius =
-      (index === 0 ? 64 : 126 + index * 82 + random() * 34) *
-      DEFAULT_PLANET_DISTANCE_MULTIPLIER;
+    const baseRadius = 24 + random() * 20;
+    const radius = scaleParentPlanetRadius(baseRadius);
+    const appearance = samplePlanetAppearance(random, baseRadius, false);
+    const orbitAxis = sampleCoplanarOrbitAxis(random, systemOrbitAxis);
+    const orbitRadius = sampleParentOrbitRadius(random, index, planetCount);
+    const phaseStep = MATCH_TAU / Math.max(planetCount, 1);
+    const phaseJitter = Math.min(PARENT_PLANET_PHASE_JITTER, phaseStep * 0.28);
+    const phase =
+      systemPhaseOffset + index * phaseStep + (random() - 0.5) * phaseJitter;
     const orbit: PlanetOrbitConfig = {
-      center: sunOrbitCenter,
+      center: sunPosition,
       radius: quantize(orbitRadius),
-      phase: quantize(index === 0 ? -Math.PI / 2 : random() * MATCH_TAU),
-      angularSpeed: sampleAngularSpeed(random, false),
+      phase: quantize(phase),
+      angularSpeed: sampleParentAngularSpeed(random, orbitRadius),
+      eccentricity: sampleParentOrbitEccentricity(random, index),
+      periapsisAngle: quantize(
+        systemPeriapsisAngle + index * 0.17 + (random() - 0.5) * 0.28,
+      ),
     };
     const position = positionOnOrbit(
       orbit.center,
       orbitAxis,
       orbit.radius,
       orbit.phase,
+      orbit.eccentricity,
+      orbit.periapsisAngle,
     );
     const parentPlanetIndex = planets.length;
     const planet: InitialPlanetConfig = {
@@ -789,12 +983,15 @@ function generatePlanetarySystem(seed: number): {
     remainingMoons -= moonCount;
 
     for (let moonIndex = 0; moonIndex < moonCount; moonIndex += 1) {
-      const moonRadius = quantize(radius * (0.22 + random() * 0.16));
-      const appearance = samplePlanetAppearance(random, moonRadius, true);
+      const baseMoonRadius = baseRadius * (0.22 + random() * 0.16);
+      const moonRadius = quantize(
+        baseMoonRadius * PARENT_PLANET_RADIUS_SCALE * MOON_RADIUS_SCALE,
+      );
+      const appearance = samplePlanetAppearance(random, baseMoonRadius, true);
       const moonAxis = sampleOrbitAxis(random);
       const moonDistance =
         (radius * (2.05 + random() * 1.2) + moonRadius) *
-        DEFAULT_PLANET_DISTANCE_MULTIPLIER;
+        MOON_DISTANCE_SCALE;
       const moonOrbit: PlanetOrbitConfig = {
         center: position,
         radius: quantize(moonDistance),
@@ -834,18 +1031,141 @@ function generatePlanetarySystem(seed: number): {
   return {
     environment: {
       sun: {
-        position: {
-          x: quantize(sunDirection.x * sunDistance),
-          y: quantize(sunDirection.y * sunDistance),
-          z: quantize(sunDirection.z * sunDistance),
-        },
-        orbitCenter: sunOrbitCenter,
-        distance: sunDistance,
-        color: "#b99cff",
+        position: sunPosition,
+        orbitCenter: sunPosition,
+        distance: PARENT_PLANET_OUTER_ORBIT_RADIUS,
+        color: sunColor,
       },
     },
     planets,
   };
+}
+
+function createSunPlanetConfig(
+  position: Vec3Data,
+  orbitAxis: Vec3Data,
+  color: string,
+): InitialPlanetConfig {
+  return {
+    templateId: TEMPLATE_IDS.billboardPlanet,
+    name: "Sun",
+    position,
+    mass: SUN_PLANET_MASS,
+    radius: SUN_PLANET_RADIUS,
+    color,
+    hasAtmosphere: true,
+    appearance: {
+      planetClass: "sun",
+      hasRings: false,
+      seed: 1,
+    },
+    orbitAxis,
+    orbit: {
+      center: position,
+      radius: 0,
+      phase: 0,
+      angularSpeed: 0,
+      eccentricity: 0,
+      periapsisAngle: 0,
+    },
+    parentPlanetIndex: null,
+    capturable: true,
+    initialOwner: 0,
+  };
+}
+
+function scaleParentPlanetRadius(baseRadius: number): number {
+  const midpoint = 34;
+  const relative = (baseRadius - midpoint) / midpoint;
+  const varianceMultiplier = Math.max(
+    0.75,
+    1 + relative * PARENT_PLANET_RADIUS_VARIANCE,
+  );
+
+  return quantize(baseRadius * PARENT_PLANET_RADIUS_SCALE * varianceMultiplier);
+}
+
+function sampleSolarPlaneAxis(random: () => number): Vec3Data {
+  const tilt = 0.035 + random() * 0.115;
+  const angle = random() * MATCH_TAU;
+
+  return normalizeVec3({
+    x: Math.cos(angle) * tilt,
+    y: 1,
+    z: Math.sin(angle) * tilt,
+  });
+}
+
+function sampleCoplanarOrbitAxis(
+  random: () => number,
+  systemOrbitAxis: Vec3Data,
+): Vec3Data {
+  const basis = orbitBasis(systemOrbitAxis);
+  const tangentTilt = (random() - 0.5) * PARENT_PLANET_INCLINATION_JITTER;
+  const bitangentTilt = (random() - 0.5) * PARENT_PLANET_INCLINATION_JITTER;
+
+  return normalizeVec3({
+    x:
+      systemOrbitAxis.x +
+      basis.tangent.x * tangentTilt +
+      basis.bitangent.x * bitangentTilt,
+    y:
+      systemOrbitAxis.y +
+      basis.tangent.y * tangentTilt +
+      basis.bitangent.y * bitangentTilt,
+    z:
+      systemOrbitAxis.z +
+      basis.tangent.z * tangentTilt +
+      basis.bitangent.z * bitangentTilt,
+  });
+}
+
+function sampleParentOrbitRadius(
+  random: () => number,
+  index: number,
+  planetCount: number,
+): number {
+  const orbitSpan =
+    PARENT_PLANET_OUTER_ORBIT_RADIUS +
+    Math.max(0, planetCount - MIN_PARENT_PLANETS) *
+      PARENT_PLANET_OUTER_ORBIT_COUNT_BONUS -
+    PARENT_PLANET_INNER_ORBIT_RADIUS;
+  const normalizedOrbit =
+    planetCount <= 1 ? 0 : index / Math.max(planetCount - 1, 1);
+  const spread = Math.pow(normalizedOrbit, PARENT_PLANET_ORBIT_EXPONENT);
+  const jitter = index === 0 ? 0 : (random() - 0.5) * PARENT_PLANET_ORBIT_JITTER;
+
+  return Math.max(
+    PARENT_PLANET_INNER_ORBIT_RADIUS,
+    PARENT_PLANET_INNER_ORBIT_RADIUS + orbitSpan * spread + jitter,
+  );
+}
+
+function sampleParentOrbitEccentricity(
+  random: () => number,
+  index: number,
+): number {
+  const innerOrbitBias = index === 0 ? 0.55 : 1;
+
+  return quantize(
+    PARENT_PLANET_MIN_ECCENTRICITY +
+      random() * PARENT_PLANET_ECCENTRICITY_RANGE * innerOrbitBias,
+  );
+}
+
+function sampleParentAngularSpeed(
+  random: () => number,
+  orbitRadius: number,
+): number {
+  const relativeRadius = Math.max(
+    orbitRadius / PARENT_PLANET_INNER_ORBIT_RADIUS,
+    1,
+  );
+  const magnitude =
+    (0.00028 + random() * 0.00018) / Math.pow(relativeRadius, 1.5);
+  const direction = random() < 0.5 ? -1 : 1;
+
+  return quantizeAngularSpeed(magnitude * direction);
 }
 
 function enforceSingleRingedPlanet(planets: InitialPlanetConfig[]): void {
@@ -879,7 +1199,7 @@ function selectRingedPlanetIndex(
   for (let index = 0; index < planets.length; index += 1) {
     const planet = planets[index];
 
-    if (planet.parentPlanetIndex === null && planet.appearance.hasRings) {
+    if (isPrimaryPlanet(planet) && planet.appearance.hasRings) {
       return index;
     }
   }
@@ -888,18 +1208,19 @@ function selectRingedPlanetIndex(
     const planet = planets[index];
 
     if (
-      planet.parentPlanetIndex === null &&
+      isPrimaryPlanet(planet) &&
       planet.appearance.planetClass === "gas-giant"
     ) {
       return index;
     }
   }
 
-  return planets.findIndex((planet) => planet.parentPlanetIndex === null);
+  return planets.findIndex(isPrimaryPlanet);
 }
 
 function createInitialUnits(
   primaryPlanetPosition: Vec3Data,
+  primaryPlanetRadius: number,
 ): readonly InitialUnitConfig[] {
   const offsets: readonly InitialUnitConfig[] = [
     {
@@ -936,12 +1257,51 @@ function createInitialUnits(
 
   return offsets.map((unit) => ({
     ...unit,
-    position: {
-      x: quantize(primaryPlanetPosition.x + unit.position.x),
-      y: quantize(primaryPlanetPosition.y + unit.position.y),
-      z: quantize(primaryPlanetPosition.z + unit.position.z),
-    },
+    position: addVec3(
+      primaryPlanetPosition,
+      scaleInitialUnitOffset(unit.position, primaryPlanetRadius),
+    ),
   }));
+}
+
+function scaleInitialUnitOffset(
+  offset: Vec3Data,
+  primaryPlanetRadius: number,
+): Vec3Data {
+  const distance = Math.max(lengthVec3(offset), 1);
+  const targetDistance = Math.max(
+    distance,
+    primaryPlanetRadius + MINIMAL_SKIRMISH_PLANET_SPAWN_PADDING,
+  );
+
+  return scaleVec3(offset, targetDistance / distance);
+}
+
+function sampleSunColor(seed: number): string {
+  const random = createSeededRandom(seed, "match-sun-color");
+  const position = random();
+  let previous = SUN_COLOR_STOPS[0];
+
+  for (let index = 1; index < SUN_COLOR_STOPS.length; index += 1) {
+    const next = SUN_COLOR_STOPS[index];
+
+    if (position > next.position) {
+      previous = next;
+      continue;
+    }
+
+    const span = Math.max(next.position - previous.position, 0.000001);
+    const amount = clamp((position - previous.position) / span, 0, 1);
+
+    return rgbToHex(
+      lerp(previous.color[0], next.color[0], amount),
+      lerp(previous.color[1], next.color[1], amount),
+      lerp(previous.color[2], next.color[2], amount),
+    );
+  }
+
+  const last = SUN_COLOR_STOPS[SUN_COLOR_STOPS.length - 1];
+  return rgbToHex(last.color[0], last.color[1], last.color[2]);
 }
 
 function samplePlanetColor(
@@ -950,6 +1310,10 @@ function samplePlanetColor(
   muted: boolean,
   planetClass: PlanetClass,
 ): string {
+  if (planetClass === "sun") {
+    return "#ffd27a";
+  }
+
   const goldenRatioConjugate = 0.618033988749895;
   let hue: number;
   let saturation: number;
@@ -1031,7 +1395,7 @@ function sampleAngularSpeed(random: () => number, moon: boolean): number {
   const magnitude = moon ? 0.032 + random() * 0.038 : 0.006 + random() * 0.009;
   const direction = random() < 0.5 ? -1 : 1;
 
-  return quantize(magnitude * direction);
+  return quantizeAngularSpeed(magnitude * direction);
 }
 
 function positionOnOrbit(
@@ -1039,23 +1403,39 @@ function positionOnOrbit(
   axis: Vec3Data,
   radius: number,
   phase: number,
+  eccentricity = 0,
+  periapsisAngle = 0,
 ): Vec3Data {
   const basis = orbitBasis(axis);
   const phaseCos = Math.cos(phase);
   const phaseSin = Math.sin(phase);
+  const clampedEccentricity = clamp(eccentricity, 0, 0.8);
+  const semiMinorRadius =
+    radius * Math.sqrt(Math.max(1 - clampedEccentricity * clampedEccentricity, 0));
+  const apsisCos = Math.cos(periapsisAngle);
+  const apsisSin = Math.sin(periapsisAngle);
+  const majorAxis = {
+    x: basis.tangent.x * apsisCos + basis.bitangent.x * apsisSin,
+    y: basis.tangent.y * apsisCos + basis.bitangent.y * apsisSin,
+    z: basis.tangent.z * apsisCos + basis.bitangent.z * apsisSin,
+  };
+  const minorAxis = {
+    x: -basis.tangent.x * apsisSin + basis.bitangent.x * apsisCos,
+    y: -basis.tangent.y * apsisSin + basis.bitangent.y * apsisCos,
+    z: -basis.tangent.z * apsisSin + basis.bitangent.z * apsisCos,
+  };
+  const majorOffset = radius * (phaseCos - clampedEccentricity);
+  const minorOffset = semiMinorRadius * phaseSin;
 
   return {
     x: quantize(
-      center.x +
-        (basis.tangent.x * phaseCos + basis.bitangent.x * phaseSin) * radius,
+      center.x + majorAxis.x * majorOffset + minorAxis.x * minorOffset,
     ),
     y: quantize(
-      center.y +
-        (basis.tangent.y * phaseCos + basis.bitangent.y * phaseSin) * radius,
+      center.y + majorAxis.y * majorOffset + minorAxis.y * minorOffset,
     ),
     z: quantize(
-      center.z +
-        (basis.tangent.z * phaseCos + basis.bitangent.z * phaseSin) * radius,
+      center.z + majorAxis.z * majorOffset + minorAxis.z * minorOffset,
     ),
   };
 }
@@ -1128,6 +1508,10 @@ function rgbToHex(r: number, g: number, b: number): string {
   return `#${toHexByte(r)}${toHexByte(g)}${toHexByte(b)}`;
 }
 
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * amount;
+}
+
 function toHexByte(value: number): string {
   return Math.round(clamp(value, 0, 1) * 255)
     .toString(16)
@@ -1166,6 +1550,10 @@ function normalizeSeed(seed: number | undefined): number {
 
 function quantize(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function quantizeAngularSpeed(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function clamp(value: number, min: number, max: number): number {

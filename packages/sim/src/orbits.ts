@@ -25,7 +25,9 @@ export function updatePlanetaryOrbits(world: SimWorld, tick: number): void {
       center,
       planet.orbitAxis,
       planet.orbit.radius,
-      planet.orbit.phase + planet.orbit.angularSpeed * elapsedSeconds
+      planet.orbit.phase + planet.orbit.angularSpeed * elapsedSeconds,
+      planet.orbit.eccentricity,
+      planet.orbit.periapsisAngle
     );
   }
 }
@@ -34,24 +36,49 @@ function positionOnOrbit(
   center: Vec3Data,
   axis: Vec3Data,
   radius: number,
-  phase: number
+  phase: number,
+  eccentricity = 0,
+  periapsisAngle = 0
 ): Vec3Data {
   const basis = orbitBasis(axis);
   const phaseCos = deterministicCos(phase);
   const phaseSin = deterministicSin(phase);
+  const clampedEccentricity = clamp(eccentricity, 0, 0.8);
+  const semiMinorRadius =
+    radius *
+    deterministicSqrt(
+      Math.max(1 - clampedEccentricity * clampedEccentricity, 0)
+    );
+  const apsisCos = deterministicCos(periapsisAngle);
+  const apsisSin = deterministicSin(periapsisAngle);
+  const majorAxis = {
+    x: quantizeSimFloat(basis.tangent.x * apsisCos + basis.bitangent.x * apsisSin),
+    y: quantizeSimFloat(basis.tangent.y * apsisCos + basis.bitangent.y * apsisSin),
+    z: quantizeSimFloat(basis.tangent.z * apsisCos + basis.bitangent.z * apsisSin),
+  };
+  const minorAxis = {
+    x: quantizeSimFloat(
+      -basis.tangent.x * apsisSin + basis.bitangent.x * apsisCos
+    ),
+    y: quantizeSimFloat(
+      -basis.tangent.y * apsisSin + basis.bitangent.y * apsisCos
+    ),
+    z: quantizeSimFloat(
+      -basis.tangent.z * apsisSin + basis.bitangent.z * apsisCos
+    ),
+  };
+  const majorOffset = radius * (phaseCos - clampedEccentricity);
+  const minorOffset = semiMinorRadius * phaseSin;
 
   return {
     x: quantizeSimFloat(
-      center.x +
-        (basis.tangent.x * phaseCos + basis.bitangent.x * phaseSin) * radius
+      center.x + majorAxis.x * majorOffset + minorAxis.x * minorOffset
     ),
     y: quantizeSimFloat(
-      center.y +
-        (basis.tangent.y * phaseCos + basis.bitangent.y * phaseSin) * radius
+      center.y + majorAxis.y * majorOffset + minorAxis.y * minorOffset
     ),
     z: quantizeSimFloat(
-      center.z +
-        (basis.tangent.z * phaseCos + basis.bitangent.z * phaseSin) * radius
+      center.z + majorAxis.z * majorOffset + minorAxis.z * minorOffset
     ),
   };
 }
@@ -93,4 +120,8 @@ function crossVec3(a: Vec3Data, b: Vec3Data): Vec3Data {
     y: quantizeSimFloat(a.z * b.x - a.x * b.z),
     z: quantizeSimFloat(a.x * b.y - a.y * b.x),
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

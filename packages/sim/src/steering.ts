@@ -9,6 +9,7 @@ import {
 } from "@drop-ship/protocol";
 import type { ShipStats } from "@drop-ship/content";
 import {
+  clearUnitOrder,
   getPlanetsInStableOrder,
   getUnitsInStableOrder,
   findPlanetByHandle,
@@ -263,7 +264,7 @@ export function integrateUnitMotion(world: SimWorld): void {
         tuning.movement.arrivalDistanceWorldUnits *
           tuning.movement.arrivalDistanceWorldUnits
     ) {
-      unit.moveOrder = null;
+      clearUnitOrder(unit);
     }
   }
 }

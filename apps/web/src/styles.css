@@ -114,6 +114,7 @@ canvas {
 
 .camera-preset-button:hover,
 .camera-preset-button.is-active,
+.camera-projection-button[aria-pressed="true"],
 .tactical-toggle:hover,
 .tactical-toggle:has(input:checked),
 .render-mode-button:hover,
@@ -121,6 +122,13 @@ canvas {
   border-color: rgb(252 61 33 / 100%);
   background: rgb(252 61 33 / 16%);
   color: rgb(255 106 72 / 100%);
+}
+
+.camera-preset-button:disabled {
+  border-color: rgb(214 218 232 / 22%);
+  background: rgb(5 8 18 / 34%);
+  color: rgb(214 218 232 / 34%);
+  cursor: not-allowed;
 }
 
 .camera-preset-button:focus-visible,

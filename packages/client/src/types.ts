@@ -5,16 +5,17 @@ import type {
   ShipSlot,
 } from "@drop-ship/content";
 import type {
+  CommandSource,
   CompactSimSnapshot,
   EntityHandle,
   PlanetAppearanceConfig,
   PlayerId,
   type MatchSessionRole,
+  UnitOrderIntent,
   Vec3Data,
 } from "@drop-ship/protocol";
 import type { SimWorld } from "@drop-ship/sim";
 import type { SimEvent } from "@drop-ship/sim";
-import type { UnitOrderIntent } from "@drop-ship/protocol";
 
 export type UnitLoadoutSlotViewModel = Readonly<{
   slot: ShipSlot;
@@ -44,6 +45,9 @@ export type UnitViewModel = Readonly<{
     orbitTicks: number;
   }>;
   moveOrder: UnitOrderIntent | null;
+  orderSource: CommandSource | null;
+  orderIssuedTick: number | null;
+  lastPlayerOrderTick: number | null;
   queuedOrderCount: number;
   health: Readonly<{
     current: number;

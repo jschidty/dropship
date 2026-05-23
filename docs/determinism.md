@@ -154,6 +154,7 @@ Include:
 - relevant component values
 - deterministic side stores
 - order queues
+- active and queued order provenance when future controller behavior depends on it
 - active pilot input
 - PRNG stream states
 - lifecycle state
@@ -179,7 +180,7 @@ Snapshot rules:
 
 - Must serialize under 2 MB in Phase 1.
 - Use stable handles, numeric content IDs, and compact arrays.
-- Include PRNG states and order queues.
+- Include PRNG states, order queues, and order provenance.
 - Exclude raw content files and render-only state.
 - On load, rebuild runtime eid mappings and set `PrevPosition = Position`.
 
@@ -228,6 +229,8 @@ Use this for sim-path code review:
 - [ ] Force and damage contributors are sorted or otherwise fixed.
 - [ ] PRNG state is snapshotted and hashed.
 - [ ] New persistent state participates in snapshot and hash.
+- [ ] Controller decisions that depend on previous orders use snapshotted
+      provenance, not local UI memory.
 - [ ] New replay fixture covers the behavior.
 
 ## Stance

@@ -142,6 +142,35 @@ Reticles are predictive UI, not confirmation. Command history and selected-unit
 objective panels show what was actually submitted or what the sim is currently
 executing.
 
+## Autonomy Feedback
+
+Fleet autonomy is allowed to help the player only through normal command
+provenance. The UI should read order source from sim view models and avoid
+inventing a separate local "AI is doing this" state.
+
+Useful labels and states:
+
+- `Player order`: the unit is executing a recent manual command.
+- `Autonomous`: the unit is following a helper-issued command.
+- `System`: the unit is following setup or spawn behavior, such as initial
+  escorting.
+- `Idle`: the unit has no active or queued order.
+
+Autonomy feedback should be calm and tactical:
+
+- Selected-unit details may show the active order source and age.
+- Command history may separate manual commands from autonomous commands.
+- If a player submits a command while autonomy would also command the unit in
+  the same tick, the player command is the one to present as active.
+- A manual command should visibly reset the grace window so the player
+  understands the unit will not immediately be taken back over.
+- Autonomy hints should not obscure target reticles, command buttons, selected
+  unit health, or contested-planet state.
+
+This feedback is explanatory only. It does not decide whether autonomy can issue
+commands; the deterministic controller decides that from snapshotted order
+metadata.
+
 ## Camera State Model
 
 Camera state is local presentation state:

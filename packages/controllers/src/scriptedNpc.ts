@@ -2,6 +2,8 @@ import {
   SHIP_CLASS_IDS,
   handleKey,
   sameHandle,
+  PHASE_ONE_SIM_HZ,
+  type CommandSource,
   type EntityHandle,
   type OrbitLaneSpec,
   type PlayerId,
@@ -37,6 +39,17 @@ export type ScriptedNpcControllerOptions = Readonly<{
   orbitLaneHeuristics?: boolean;
 }>;
 
+export type FleetAutonomyControllerOptions = Readonly<{
+  id?: string;
+  playerIds: readonly PlayerId[];
+  playerOrderGraceTicks?: number;
+  dedupeOrders?: boolean;
+  orbitLaneHeuristics?: boolean;
+}>;
+
+export const DEFAULT_FLEET_AUTONOMY_PLAYER_ORDER_GRACE_TICKS =
+  45 * PHASE_ONE_SIM_HZ;
+
 export function createScriptedNpcController(
   options: ScriptedNpcControllerOptions = {}
 ): CommandController {
@@ -62,10 +75,43 @@ export function createScriptedNpcController(
   };
 }
 
+export function createFleetAutonomyController(
+  options: FleetAutonomyControllerOptions
+): CommandController {
+  const clientSeqByPlayer = new Map<PlayerId, number>();
+  const graceTicks =
+    options.playerOrderGraceTicks ??
+    DEFAULT_FLEET_AUTONOMY_PLAYER_ORDER_GRACE_TICKS;
+
+  return {
+    id: options.id ?? "fleet-autonomy-v1",
+    reset() {
+      clientSeqByPlayer.clear();
+    },
+    commandsForTick(world) {
+      return createScriptedNpcCommands(world, {
+        playerIds: options.playerIds,
+        source: "autonomy",
+        dedupeOrders: options.dedupeOrders,
+        orbitLaneHeuristics: options.orbitLaneHeuristics,
+        canCommandUnit: (candidateWorld, unit) =>
+          isFleetAutonomyEligibleUnit(candidateWorld, unit, graceTicks),
+        nextClientSeq(playerId) {
+          const clientSeq = (clientSeqByPlayer.get(playerId) ?? 0) + 1;
+          clientSeqByPlayer.set(playerId, clientSeq);
+          return clientSeq;
+        },
+      });
+    },
+  };
+}
+
 export type CreateScriptedNpcCommandsOptions = Readonly<{
   playerIds?: readonly PlayerId[];
+  source?: CommandSource;
   dedupeOrders?: boolean;
   orbitLaneHeuristics?: boolean;
+  canCommandUnit?: (world: SimWorld, unit: SimUnit) => boolean;
   nextClientSeq?: (playerId: PlayerId) => number;
 }>;
 
@@ -78,6 +124,7 @@ export function createScriptedNpcCommands(
   }
 
   const rules = readNpcRules(world);
+  const source = options.source ?? "npc";
   const dedupeOrders = options.dedupeOrders ?? true;
   const orbitLaneHeuristics = options.orbitLaneHeuristics ?? true;
 
@@ -97,7 +144,10 @@ export function createScriptedNpcCommands(
     });
 
   for (const unit of getUnitsInStableOrder(world)) {
-    if (!isScriptedNpcUnit(world, unit, options.playerIds)) {
+    if (
+      !isScriptedNpcUnit(world, unit, options.playerIds) ||
+      (options.canCommandUnit && !options.canCommandUnit(world, unit))
+    ) {
       continue;
     }
 
@@ -130,6 +180,7 @@ export function createScriptedNpcCommands(
     commands.push({
       playerId: unit.owner,
       clientSeq: nextClientSeq(unit.owner),
+      source,
       command: {
         type: "issueUnitOrder",
         unitHandles: [unit.handle],
@@ -140,6 +191,34 @@ export function createScriptedNpcCommands(
   }
 
   return commands;
+}
+
+function isFleetAutonomyEligibleUnit(
+  world: SimWorld,
+  unit: SimUnit,
+  graceTicks: number
+): boolean {
+  if (!unit.moveOrder && unit.orderQueue.length === 0) {
+    return true;
+  }
+
+  if (
+    unit.orderQueueMetadata.some(
+      (metadata) =>
+        metadata.source === "player" &&
+        world.tick - metadata.issuedTick < graceTicks
+    )
+  ) {
+    return false;
+  }
+
+  if (unit.orderSource !== "player") {
+    return true;
+  }
+
+  const issuedTick = unit.orderIssuedTick ?? unit.lastPlayerOrderTick;
+
+  return issuedTick === null || world.tick - issuedTick >= graceTicks;
 }
 
 function isScriptedNpcUnit(
@@ -550,6 +629,7 @@ function chooseDropShipTargetPlanet(
 
 type PlanetCaptureScore = Readonly<{
   ownerPriority: number;
+  sunPriority: number;
   friendlyAssignmentCount: number;
   currentTargetPriority: number;
   contestedPriority: number;
@@ -565,6 +645,7 @@ function scorePlanetCaptureOpportunity(
 ): PlanetCaptureScore {
   return {
     ownerPriority: planet.control.owner === dropShip.owner ? 1 : 0,
+    sunPriority: planet.appearance.planetClass === "sun" ? 1 : 0,
     friendlyAssignmentCount: countFriendlyDropShipAssignments(
       world,
       dropShip,
@@ -584,6 +665,10 @@ function comparePlanetCaptureScores(
 ): number {
   if (left.ownerPriority !== right.ownerPriority) {
     return left.ownerPriority - right.ownerPriority;
+  }
+
+  if (left.sunPriority !== right.sunPriority) {
+    return left.sunPriority - right.sunPriority;
   }
 
   if (left.friendlyAssignmentCount !== right.friendlyAssignmentCount) {

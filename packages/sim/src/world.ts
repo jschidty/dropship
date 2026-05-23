@@ -7,6 +7,7 @@ import {
   compareHandles,
   SHIP_CLASS_IDS,
   type CommandBatch,
+  type CommandSource,
   type EntityHandle,
   type MatchEndReason,
   type MatchConfig,
@@ -42,6 +43,11 @@ export type SimUnitMoveOrder = {
 };
 
 export type SimUnitOrder = UnitOrderIntent;
+
+export type SimUnitOrderMetadata = {
+  source: CommandSource;
+  issuedTick: number;
+};
 
 export type SimFighterSpawnState = {
   nextSpawnTick: number;
@@ -102,7 +108,11 @@ export type SimUnit = {
   desiredVelocity: Vec3Data | null;
   rotation: QuaternionData;
   moveOrder: SimUnitOrder | null;
+  orderSource: CommandSource | null;
+  orderIssuedTick: number | null;
+  lastPlayerOrderTick: number | null;
   orderQueue: SimUnitOrder[];
+  orderQueueMetadata: SimUnitOrderMetadata[];
   health: {
     current: number;
     max: number;
@@ -292,7 +302,11 @@ export function spawnUnit(
     velocity?: Vec3Data;
     rotation?: QuaternionData;
     moveOrder?: SimUnitOrder | null;
+    orderSource?: CommandSource | null;
+    orderIssuedTick?: number | null;
+    lastPlayerOrderTick?: number | null;
     orderQueue?: readonly SimUnitOrder[];
+    orderQueueMetadata?: readonly SimUnitOrderMetadata[];
     health?: { current: number; max: number };
     weaponCooldownTicks?: number;
     weaponCooldownTicksBySlot?: Readonly<Record<string, number>> | null;
@@ -321,6 +335,8 @@ export function spawnUnit(
     current: stats.maxHealth,
     max: stats.maxHealth,
   };
+  const spawnedTick = options.spawnedTick ?? world.tick;
+  const moveOrder = copyUnitOrder(options.moveOrder ?? null);
   const unit: SimUnit = {
     runtimeEntityId,
     handle,
@@ -332,9 +348,19 @@ export function spawnUnit(
     prevPosition: copyVec3(position),
     velocity: copyVec3(options.velocity ?? template.initialVelocity),
     desiredVelocity: null,
-    rotation: options.rotation ?? yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
-    moveOrder: copyUnitOrder(options.moveOrder ?? null),
+    rotation:
+      options.rotation ??
+      yawRotation(options.owner === 1 ? Math.PI / 2 : -Math.PI / 2),
+    moveOrder,
+    orderSource: options.orderSource ?? (moveOrder ? "system" : null),
+    orderIssuedTick:
+      options.orderIssuedTick ?? (moveOrder ? spawnedTick : null),
+    lastPlayerOrderTick: options.lastPlayerOrderTick ?? null,
     orderQueue: copyUnitOrders(options.orderQueue ?? []),
+    orderQueueMetadata: copyUnitOrderMetadata(
+      options.orderQueueMetadata ?? [],
+      options.orderQueue?.length ?? 0
+    ),
     health: {
       current: health.current,
       max: health.max,
@@ -350,7 +376,7 @@ export function spawnUnit(
       materialId: template.render.materialIdsByPlayer[options.owner],
       scaleTier: template.render.scaleTier,
     },
-    spawnedTick: options.spawnedTick ?? world.tick,
+    spawnedTick,
   };
 
   world.units.push(unit);
@@ -629,6 +655,8 @@ export function copyPlanetOrbit(orbit: PlanetOrbitConfig): PlanetOrbitConfig {
     radius: orbit.radius,
     phase: orbit.phase,
     angularSpeed: orbit.angularSpeed,
+    eccentricity: orbit.eccentricity ?? 0,
+    periapsisAngle: orbit.periapsisAngle ?? 0,
   };
 }
 
@@ -699,24 +727,58 @@ export function copyUnitOrders(
     .filter((order): order is SimUnitOrder => order !== null);
 }
 
-export function replaceUnitOrder(unit: SimUnit, order: SimUnitOrder | null): void {
-  unit.moveOrder = copyUnitOrder(order);
-  unit.orderQueue = [];
+export function copyUnitOrderMetadata(
+  metadata: readonly SimUnitOrderMetadata[],
+  orderCount: number
+): SimUnitOrderMetadata[] {
+  return metadata.slice(0, orderCount).map((entry) => ({
+    source: entry.source,
+    issuedTick: entry.issuedTick,
+  }));
 }
 
-export function appendUnitOrder(unit: SimUnit, order: SimUnitOrder): void {
+export function replaceUnitOrder(
+  unit: SimUnit,
+  order: SimUnitOrder | null,
+  metadata: SimUnitOrderMetadata | null = null
+): void {
+  unit.moveOrder = copyUnitOrder(order);
+  unit.orderSource = unit.moveOrder ? (metadata?.source ?? "system") : null;
+  unit.orderIssuedTick = unit.moveOrder ? (metadata?.issuedTick ?? 0) : null;
+  if (metadata?.source === "player") {
+    unit.lastPlayerOrderTick = metadata.issuedTick;
+  }
+  unit.orderQueue = [];
+  unit.orderQueueMetadata = [];
+}
+
+export function appendUnitOrder(
+  unit: SimUnit,
+  order: SimUnitOrder,
+  metadata: SimUnitOrderMetadata = { source: "system", issuedTick: 0 }
+): void {
   const copiedOrder = copyUnitOrder(order);
 
   if (!copiedOrder) {
     return;
   }
 
+  if (metadata.source === "player") {
+    unit.lastPlayerOrderTick = metadata.issuedTick;
+  }
+
   if (!unit.moveOrder) {
     unit.moveOrder = copiedOrder;
+    unit.orderSource = metadata.source;
+    unit.orderIssuedTick = metadata.issuedTick;
     return;
   }
 
   unit.orderQueue.push(copiedOrder);
+  unit.orderQueueMetadata.push({
+    source: metadata.source,
+    issuedTick: metadata.issuedTick,
+  });
 }
 
 export function promoteQueuedUnitOrder(unit: SimUnit): void {
@@ -725,6 +787,15 @@ export function promoteQueuedUnitOrder(unit: SimUnit): void {
   }
 
   unit.moveOrder = unit.orderQueue.shift() ?? null;
+  const metadata = unit.orderQueueMetadata.shift() ?? null;
+  unit.orderSource = unit.moveOrder ? (metadata?.source ?? "system") : null;
+  unit.orderIssuedTick = unit.moveOrder ? (metadata?.issuedTick ?? 0) : null;
+}
+
+export function clearUnitOrder(unit: SimUnit): void {
+  unit.moveOrder = null;
+  unit.orderSource = null;
+  unit.orderIssuedTick = null;
 }
 
 export function copyFighterSpawnState(
@@ -786,10 +857,14 @@ function assignInitialCaptureDemoOrders(world: SimWorld): void {
       const dropShip = findNearestFriendlyDropShip(world, unit);
 
       if (dropShip) {
-        unit.moveOrder = {
-          type: "escort",
-          target: dropShip.handle,
-        };
+        replaceUnitOrder(
+          unit,
+          {
+            type: "escort",
+            target: dropShip.handle,
+          },
+          { source: "system", issuedTick: world.tick }
+        );
       }
     }
   }

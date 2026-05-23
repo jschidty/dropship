@@ -1,3 +1,4 @@
+import { createFleetAutonomyController } from "@drop-ship/controllers";
 import {
   DEFAULT_CONTENT_REGISTRY,
   createCaptureDemoConfig,
@@ -52,6 +53,7 @@ export function createNetworkedGame(options: {
   });
   const queuedBatches = new Map<number, CommandBatch>();
   const pendingEvents: typeof world.events = [];
+  const pendingAutonomyClientSeqs = new Set<number>();
   const outbox: string[] = [];
   let socket: WebSocket | null = null;
   let reconnectTimerId: number | null = null;
@@ -70,6 +72,9 @@ export function createNetworkedGame(options: {
   };
   const viewModelCache = createViewModelCache();
   const hashCache = createHashCache();
+  let fleetAutonomyController = createFleetAutonomyController({
+    playerIds: [assignedPlayerId],
+  });
   const debugLog = createNetworkDebugLogger(
     options.debugLogs,
     options.matchId,
@@ -78,6 +83,8 @@ export function createNetworkedGame(options: {
   let loggedMatchResultTick: number | null = null;
   let reportedMatchEndTick: number | null = null;
   let lastConnectionStatusLogKey = "";
+  let lastAutonomyCommandTick: number | null = null;
+  let pendingAutonomyExecuteTick: number | null = null;
 
   debugLog("connection:init", {
     serverUrl: options.serverUrl ?? "same-origin",
@@ -99,6 +106,8 @@ export function createNetworkedGame(options: {
       }
 
       let processed = 0;
+
+      sendFleetAutonomyCommandsForCurrentTick();
 
       while (processed < 8 && !world.matchResult) {
         const batch = queuedBatches.get(world.tick);
@@ -134,6 +143,8 @@ export function createNetworkedGame(options: {
             snapshot: serializeWorld(world),
           });
         }
+
+        sendFleetAutonomyCommandsForCurrentTick();
       }
 
       if (world.matchResult) {
@@ -440,6 +451,10 @@ export function createNetworkedGame(options: {
       queuedBatches.clear();
       pendingEvents.splice(0);
       clientSeq = 0;
+      fleetAutonomyController = createFleetAutonomyController({
+        playerIds: [assignedPlayerId],
+      });
+      resetFleetAutonomyCommandState();
       loggedMatchResultTick = null;
       reportedMatchEndTick = null;
       status = {
@@ -474,6 +489,13 @@ export function createNetworkedGame(options: {
     }
 
     if (message.type === "commandAck") {
+      if (pendingAutonomyClientSeqs.delete(message.clientSeq)) {
+        pendingAutonomyExecuteTick = Math.max(
+          pendingAutonomyExecuteTick ?? message.executeTick,
+          message.executeTick
+        );
+      }
+
       status = {
         ...status,
         lastAckTick: message.executeTick,
@@ -522,6 +544,7 @@ export function createNetworkedGame(options: {
       });
       world = hydrateWorldFromSnapshot(message.snapshot, DEFAULT_CONTENT_REGISTRY);
       queuedBatches.clear();
+      resetFleetAutonomyCommandState();
       logMatchResult();
       return;
     }
@@ -557,6 +580,7 @@ export function createNetworkedGame(options: {
         });
 
     queuedBatches.clear();
+    resetFleetAutonomyCommandState();
 
     const catchupBatches = new Map(
       message.commands.map((batch) => [batch.tick, batch])
@@ -607,6 +631,55 @@ export function createNetworkedGame(options: {
       ...status,
       serverTick: message.serverTick,
     };
+  }
+
+  function sendFleetAutonomyCommandsForCurrentTick(): void {
+    if (
+      pendingAutonomyExecuteTick !== null &&
+      world.tick > pendingAutonomyExecuteTick
+    ) {
+      pendingAutonomyExecuteTick = null;
+    }
+
+    if (
+      !canControl ||
+      assignedRole === "spectator" ||
+      !status.running ||
+      world.matchResult ||
+      pendingAutonomyClientSeqs.size > 0 ||
+      pendingAutonomyExecuteTick !== null ||
+      lastAutonomyCommandTick === world.tick
+    ) {
+      return;
+    }
+
+    lastAutonomyCommandTick = world.tick;
+
+    const commands = fleetAutonomyController.commandsForTick(world);
+
+    for (const scheduled of commands) {
+      if (scheduled.playerId !== assignedPlayerId) {
+        continue;
+      }
+
+      clientSeq += 1;
+      pendingAutonomyClientSeqs.add(clientSeq);
+      sendClientMessage({
+        type: "command",
+        playerId: assignedPlayerId,
+        clientSeq,
+        localTick: world.tick,
+        source: "autonomy",
+        command: scheduled.command,
+      });
+    }
+  }
+
+  function resetFleetAutonomyCommandState(): void {
+    fleetAutonomyController.reset?.(world);
+    pendingAutonomyClientSeqs.clear();
+    lastAutonomyCommandTick = null;
+    pendingAutonomyExecuteTick = null;
   }
 
   function sendClientMessage(message: ClientMessage): void {

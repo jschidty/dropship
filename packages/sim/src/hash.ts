@@ -78,9 +78,13 @@ function hashUnit(hasher: FnvHasher, value: unknown): void {
     ["fighterSpawn", hashFighterSpawn],
     ["handle", hashEntityHandle],
     ["health", hashHealth],
+    ["lastPlayerOrderTick"],
     ["moveOrder", hashUnitOrder],
     ["orbit", hashOrbitState],
+    ["orderIssuedTick"],
     ["orderQueue", hashUnitOrders],
+    ["orderQueueMetadata"],
+    ["orderSource"],
     ["owner"],
     ["position", hashQuantizedVec3],
     ["render", hashRender],
@@ -239,7 +243,9 @@ function hashPlanetOrbit(hasher: FnvHasher, value: unknown): void {
   hashKnownObject(hasher, value as Record<string, unknown>, [
     ["angularSpeed", hashQuantizedNumber],
     ["center", hashQuantizedVec3],
+    ["eccentricity", hashQuantizedNumberOrZero],
     ["phase", hashQuantizedNumber],
+    ["periapsisAngle", hashQuantizedNumberOrZero],
     ["radius", hashQuantizedNumber],
   ]);
 }
@@ -263,6 +269,10 @@ function hashQuantizedQuaternion(hasher: FnvHasher, value: unknown): void {
 
 function hashQuantizedNumber(hasher: FnvHasher, value: unknown): void {
   hashStableValue(hasher, quantize(value as number));
+}
+
+function hashQuantizedNumberOrZero(hasher: FnvHasher, value: unknown): void {
+  hashStableValue(hasher, quantize(typeof value === "number" ? value : 0));
 }
 
 function hashKnownObject(

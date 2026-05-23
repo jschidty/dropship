@@ -19,8 +19,8 @@ See [determinism.md](determinism.md), [command-hierarchy.md](command-hierarchy.m
 Phase 1 target:
 
 - 2 players
-- 5 minute match length for the current demo tuning
-- 2 capturable parent planets from the default match config
+- 8 minute match length for the current demo tuning
+- at least 7 capturable parent planets from the default capture-demo config
 - up to 1,000 live sim entities
 - one energy weapon family
 - tactical-view controls and UI only
@@ -37,7 +37,54 @@ Default objective:
 6. A match can end when one player owns all capturable planets, loses all drop ships, or the demo timer expires.
 7. Timer resolution compares captured planets first, then living units, then declares a draw if still tied.
 
-The demo should support both multiplayer and a local single-player attacker/defender mode. Single-player is not a different simulation path; it injects deterministic commands for Player 2.
+The demo should support both multiplayer and a local single-player
+attacker/defender mode. Single-player is not a different simulation path; it
+injects deterministic NPC commands for Player 2 and deterministic autonomy
+commands for unattended Player 1 units.
+
+## Scale, Pacing, And Autonomy
+
+The current capture-demo tuning is intentionally pushing the feeling of space
+larger instead of making every opening decision immediately decisive.
+
+Current scale choices:
+
+- Parent planets are generated 25% larger, with modest extra radius variance so
+  the system has stronger landmarks.
+- Parent planet orbital spacing is generated 25% wider.
+- Moons are smaller relative to their parent than before, but orbit slightly
+  farther out so they read as satellites rather than decorations stuck to the
+  parent surface.
+- Player fleets start outside the parent-planet rim, mirrored around the
+  generated planetary system center, instead of spawning close to the middle.
+- Default NPC aggro remains intentionally local. The larger map should reduce
+  immediate fleet-wide combat while still allowing local fights and contested
+  capture attempts to emerge around planets.
+
+Fleet autonomy is part of the pacing answer. In local play, the human player's
+ships may receive deterministic `autonomy` commands when they are idle or when a
+manual player order has aged past the grace window. This is meant to make the
+fleet feel staffed and tactically alive while the player zooms into a battle or
+thinks at the strategic layer.
+
+Autonomy rules:
+
+- Autonomy emits normal scheduled commands before `runTick`; it does not mutate
+  units directly.
+- Player commands keep `source: "player"` and update the unit's latest player
+  order tick.
+- Autonomous commands keep `source: "autonomy"` and may replace stale or idle
+  orders, but not recent player orders.
+- Within a same-tick local batch, autonomy sorts before player commands so a
+  fresh player click wins.
+- Active and queued order provenance is serialized, snapshotted, and hashed
+  because it can affect future autonomy decisions.
+
+Network multiplayer uses the same command-log contract. The controlling client
+may produce autonomy for its own seat, but it sends those decisions over the
+WebSocket command path with `source: "autonomy"`. The Durable Object schedules,
+logs, and broadcasts them like player commands, so reconnect, replay, and other
+clients see the same order provenance.
 
 ## Tunable Rules
 
@@ -69,11 +116,11 @@ type MatchRulesConfig = {
 Required default:
 
 ```ts
-const MATCH_DURATION_TICKS = 5 * 60 * PHASE_ONE_SIM_HZ;
+const MATCH_DURATION_TICKS = 8 * 60 * PHASE_ONE_SIM_HZ;
 const PLANET_CAPTURE_SECONDS = 15;
 const PLANET_CAPTURE_TICKS = PLANET_CAPTURE_SECONDS * PHASE_ONE_SIM_HZ;
 const CAPTURE_ORBIT_MIN_RADIUS_MULTIPLIER = 1;
-const CAPTURE_ORBIT_MAX_RADIUS_MULTIPLIER = 5.75;
+const CAPTURE_ORBIT_MAX_RADIUS_MULTIPLIER = 3;
 ```
 
 Any rule that affects sim outcomes must be included in match config, content, snapshot, and hash. The renderer may duplicate values for display only, but display copies are not authoritative.
@@ -310,8 +357,9 @@ Do not let UI buttons, local debug controls, or NPC code mutate units directly. 
 Single-player attacker/defender mode is a match config preset:
 
 - Player 1 is the attacker and can use the normal tactical controls.
+- Player 1 also gets fleet autonomy for idle or stale-order units.
 - Player 2 is an NPC defender.
-- Player 2 starts with a bunch of fighters and battleships near one or more planets.
+- Both players start with matching fleets outside the parent-planet rim.
 - Player 2 does not need strategy yet.
 
 NPC behavior:

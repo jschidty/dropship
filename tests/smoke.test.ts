@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { createScriptedNpcController } from "../packages/controllers/src/index";
+import {
+  createFleetAutonomyController,
+  createScriptedNpcController,
+} from "../packages/controllers/src/index";
 import {
   DEFAULT_CONTENT_HASH,
   DEFAULT_CONTENT_REGISTRY,
@@ -24,6 +27,7 @@ import {
 import {
   SNAPSHOT_WARN_BYTES,
   assignMatchSession,
+  createCommandBuffer,
   createCommandLogStore,
   createMatchCoordinator,
   createMatchEndStore,
@@ -41,6 +45,7 @@ import {
   computePlanetGravityVector,
   hashWorld,
   hydrateWorldFromSnapshot,
+  replaceUnitOrder,
   readUnitShipStats,
   readUnitWeaponProfile,
   runTick,
@@ -66,6 +71,7 @@ import {
 import type { UnitViewModel } from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
+testCommandBufferPreservesAutonomySourceAndPriority();
 await testWorkerCreatesGameId();
 await testWorkerFallsBackToAppShellForPlayRoutes();
 testMatchSessionRoleAssignment();
@@ -107,6 +113,10 @@ testLocalRuntimeReplayStartsFreshSeed();
 testLocalRuntimeKeepsFiniteViewModels();
 testLocalRuntimeViewModelsExposeOrders();
 testLocalRuntimeUsesScriptedNpcController();
+testLocalRuntimeDoesNotRunNpcForLocalPlayer();
+testPlayerCommandsTrackOrderProvenance();
+testFleetAutonomyCommandsIdlePlayerUnits();
+testFleetAutonomyRespectsRecentPlayerOrders();
 testNpcDefenderIssuesAttackOrders();
 testNpcDropShipChoosesSafePlanetBeforeContestedPlanet();
 testNpcDropShipsClaimDifferentCapturePlanets();
@@ -178,6 +188,52 @@ async function testCommandSchedulingAndCatchup(): Promise<void> {
   assert.equal(catchup.serverTick, 3);
   assert.equal(catchup.commands.length, 1);
   assert.equal(catchup.commands[0].tick, 2);
+  assert.equal(catchup.commands[0].commands[0]?.source, "player");
+}
+
+function testCommandBufferPreservesAutonomySourceAndPriority(): void {
+  const buffer = createCommandBuffer();
+
+  buffer.schedule(0, {
+    type: "command",
+    playerId: 1,
+    clientSeq: 1,
+    localTick: 0,
+    command: {
+      type: "randomTurnOwnedUnits",
+    },
+  });
+  buffer.schedule(0, {
+    type: "command",
+    playerId: 1,
+    clientSeq: 2,
+    localTick: 0,
+    source: "autonomy",
+    command: {
+      type: "randomTurnOwnedUnits",
+    },
+  });
+  buffer.schedule(0, {
+    type: "command",
+    playerId: 1,
+    clientSeq: 3,
+    localTick: 0,
+    source: "npc" as never,
+    command: {
+      type: "randomTurnOwnedUnits",
+    },
+  });
+
+  const batch = buffer.takeBatch(0);
+
+  assert.deepEqual(
+    batch.commands.map((command) => command.source),
+    ["autonomy", "player", "player"]
+  );
+  assert.deepEqual(
+    batch.commands.map((command) => command.clientSeq),
+    [2, 1, 3]
+  );
 }
 
 async function testWorkerCreatesGameId(): Promise<void> {
@@ -650,42 +706,93 @@ function testSeededMatchGeneration(): void {
   const moonCount = first.initialPlanets.filter(
     (planet) => planet.parentPlanetIndex !== null
   ).length;
-  const parentPlanetCount = first.initialPlanets.length - moonCount;
+  const parentPlanets = first.initialPlanets.filter(
+    (planet) => planet.parentPlanetIndex === null
+  );
+  const primaryPlanets = parentPlanets.filter(isPrimaryPlanet);
+  const sunPlanets = first.initialPlanets.filter(isSunPlanet);
+  const primaryPlanetCount = primaryPlanets.length;
+  const parentOrbitCenter = averageTestPosition(
+    primaryPlanets.map((planet) => planet.orbit.center)
+  );
+  const maxParentOrbitRadius = Math.max(
+    ...primaryPlanets.map((planet) => planet.orbit.radius)
+  );
+  const baseParentOrbitAxis = primaryPlanets[0]?.orbitAxis;
   const planetClasses = new Set<string>();
+  const generatedSunColors = new Set<string>();
 
   assert.deepEqual(first.initialPlanets, second.initialPlanets);
   assert.deepEqual(first.environment, second.environment);
+  assert.equal(sunPlanets.length, 1);
+  assert.equal(sunPlanets[0]?.color, first.environment.sun.color);
+  assert.deepEqual(
+    first.environment.sun.position,
+    first.environment.sun.orbitCenter
+  );
   assert.ok(Number.isFinite(first.environment.sun.orbitCenter.x));
+  assert.ok(
+    distance(parentOrbitCenter, first.environment.sun.position) < 0.01
+  );
   assert.ok(first.initialPlanets.length >= 8);
   assert.ok(first.initialPlanets.length <= 11);
-  assert.ok(parentPlanetCount >= 7);
+  assert.ok(primaryPlanetCount >= 6);
   assert.ok(moonCount <= 4);
+  assert.ok(maxParentOrbitRadius < 15000);
   const ringedPlanets = first.initialPlanets.filter(
     (planet) => planet.appearance.hasRings
   );
   assert.equal(ringedPlanets.length, 1);
-  assert.equal(ringedPlanets[0]?.parentPlanetIndex, null);
+  assert.ok(ringedPlanets.every(isPrimaryPlanet));
 
   for (const planet of first.initialPlanets) {
     assert.match(planet.color, /^#[0-9a-f]{6}$/);
     assert.ok(
-      ["gas-giant", "terran", "ice"].includes(planet.appearance.planetClass)
+      ["gas-giant", "terran", "ice", "sun"].includes(
+        planet.appearance.planetClass
+      )
     );
     assert.equal(typeof planet.appearance.hasRings, "boolean");
     assert.ok(Number.isFinite(planet.appearance.seed));
     planetClasses.add(planet.appearance.planetClass);
     assert.ok(planet.radius > 0);
     assert.ok(planet.mass > 0);
-    assert.ok(planet.orbit.radius > 0);
-    assert.notEqual(planet.orbit.angularSpeed, 0);
 
-    if (planet.parentPlanetIndex !== null) {
+    if (isSunPlanet(planet)) {
+      assert.equal(planet.parentPlanetIndex, null);
+      assert.equal(planet.orbit.radius, 0);
+      assert.equal(planet.orbit.angularSpeed, 0);
+      assert.equal(planet.position.x, first.environment.sun.position.x);
+      assert.equal(planet.position.y, first.environment.sun.position.y);
+      assert.equal(planet.position.z, first.environment.sun.position.z);
+      assert.equal(planet.color, first.environment.sun.color);
+      assert.ok(planet.mass > 100_000_000_000_000);
+      assert.ok(planet.radius >= 1000);
+    } else if (planet.parentPlanetIndex !== null) {
       assert.equal(planet.hasAtmosphere, false);
       assert.notEqual(planet.appearance.planetClass, "gas-giant");
+      assert.ok(planet.orbit.radius > 0);
+      assert.notEqual(planet.orbit.angularSpeed, 0);
       moonsByParent.set(
         planet.parentPlanetIndex,
         (moonsByParent.get(planet.parentPlanetIndex) ?? 0) + 1
       );
+    } else {
+      assert.ok(planet.orbit.radius > 0);
+      assert.notEqual(planet.orbit.angularSpeed, 0);
+      assert.ok(
+        distance(planet.orbit.center, first.environment.sun.position) < 0.01
+      );
+      assert.ok((planet.orbit.eccentricity ?? 0) >= 0.035);
+      assert.ok((planet.orbit.eccentricity ?? 0) <= 0.205);
+      assert.ok(Number.isFinite(planet.orbit.periapsisAngle ?? 0));
+
+      if (baseParentOrbitAxis) {
+        assert.ok(
+          normalizedDot(planet.orbitAxis, baseParentOrbitAxis) > 0.995,
+          "Expected parent planets to share one near-planar orbital arrangement"
+        );
+      }
     }
   }
 
@@ -697,14 +804,27 @@ function testSeededMatchGeneration(): void {
 
   for (let seed = 0; seed < 128; seed += 1) {
     const config = createMinimalSkirmishConfig({ seed });
-    const parentCount = config.initialPlanets.filter(
+    const generatedParentPlanets = config.initialPlanets.filter(
       (planet) => planet.parentPlanetIndex === null
-    ).length;
+    );
+    const generatedPrimaryPlanets = generatedParentPlanets.filter(isPrimaryPlanet);
+    const generatedMaxParentOrbitRadius = Math.max(
+      ...generatedPrimaryPlanets.map((planet) => planet.orbit.radius)
+    );
 
+    assert.equal(config.initialPlanets.filter(isSunPlanet).length, 1);
+    assert.equal(
+      config.initialPlanets.find(isSunPlanet)?.color,
+      config.environment.sun.color
+    );
+    generatedSunColors.add(config.environment.sun.color);
     assert.ok(config.initialPlanets.length >= 8);
     assert.ok(config.initialPlanets.length <= 11);
-    assert.ok(parentCount >= 7);
+    assert.ok(generatedPrimaryPlanets.length >= 6);
+    assert.ok(generatedMaxParentOrbitRadius < 15000);
   }
+
+  assert.ok(generatedSunColors.size > 16);
 }
 
 function testPlanetaryOrbitMotion(): void {
@@ -713,7 +833,7 @@ function testPlanetaryOrbitMotion(): void {
     config,
     content: DEFAULT_CONTENT_REGISTRY,
   });
-  const planet = world.planets.find((entry) => entry.parentPlanetIndex === null);
+  const planet = world.planets.find(isPrimaryPlanet);
   const moon = world.planets.find((entry) => entry.parentPlanetIndex !== null);
 
   assert.ok(planet);
@@ -791,7 +911,7 @@ function testDeterministicReplayHash(): void {
   const second = replayFixedBatches();
 
   assert.equal(first, second);
-  assert.equal(first, "49992a14");
+  assert.equal(first, "3c0e2313");
 }
 
 function testHeadlessRunnerMatchesSmokeReplayHash(): void {
@@ -805,11 +925,11 @@ function testHeadlessRunnerMatchesSmokeReplayHash(): void {
     commandBatches: createReplayBatches(runner.world),
   });
 
-  assert.equal(result.finalHash, "49992a14");
+  assert.equal(result.finalHash, "3c0e2313");
   assert.deepEqual(result.hashes, [
     {
       tick: 24,
-      hash: "49992a14",
+      hash: "3c0e2313",
     },
   ]);
   assert.equal(result.metrics.commandCount, 2);
@@ -1631,7 +1751,10 @@ function testCaptureDemoConfig(): void {
   const capturablePlanets = world.planets.filter(
     (planet) => planet.control.capturable
   );
+  const sun = world.planets.find(isSunPlanet);
 
+  assert.ok(sun);
+  assert.ok(sun.control.capturable);
   assert.ok(capturablePlanets.length >= 7);
   assert.equal(
     capturablePlanets.length,
@@ -1650,9 +1773,36 @@ function testCaptureDemoConfig(): void {
 
   assertEqualPlayerFleetStats(world);
 
+  const systemCenter = averageTestPosition(
+    parentPlanets.map((planet) => planet.orbit.center)
+  );
+  const parentMapRadius = Math.max(
+    ...parentPlanets.map(
+      (planet) => distance(planet.position, systemCenter) + planet.radius
+    )
+  );
+  const playerOneFleetCenter = averageTestPosition(
+    world.units
+      .filter((unit) => unit.owner === 1)
+      .map((unit) => unit.position)
+  );
+  const playerTwoFleetCenter = averageTestPosition(
+    world.units
+      .filter((unit) => unit.owner === 2)
+      .map((unit) => unit.position)
+  );
+
+  assert.ok(
+    distance(playerOneFleetCenter, systemCenter) > parentMapRadius,
+    "Expected player one fleet to start outside the parent-planet rim"
+  );
+  assert.ok(
+    distance(playerTwoFleetCenter, systemCenter) > parentMapRadius,
+    "Expected player two fleet to start outside the parent-planet rim"
+  );
   assert.ok(
     distance(playerOneDropShip.position, playerTwoDropShip.position) > 450,
-    "Expected starting fleets to begin separated around the primary planet"
+    "Expected starting fleets to begin separated around the planetary system"
   );
 
   for (const unit of world.units) {
@@ -1853,6 +2003,9 @@ function testDropShipSpawnsFighters(): void {
   const initialFighters = world.units.filter(
     (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
   ).length;
+  const playerOneDropShips = world.units.filter(
+    (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.dropShip
+  ).length;
 
   runBatches(world, [], 8);
 
@@ -1860,7 +2013,7 @@ function testDropShipSpawnsFighters(): void {
     (unit) => unit.owner === 1 && unit.shipClassId === SHIP_CLASS_IDS.fighter
   ).length - initialFighters;
 
-  assert.equal(spawnedFighters, 8);
+  assert.equal(spawnedFighters, playerOneDropShips * 2);
 }
 
 function testSpawnedFightersEscortParentDropShip(): void {
@@ -2122,6 +2275,16 @@ function testLocalRuntimeViewModelsExposeOrders(): void {
       target
     );
     assert.equal(orderedUnit.queuedOrderCount, 0);
+    assert.equal(orderedUnit.orderSource, "player");
+    assert.equal(orderedUnit.orderIssuedTick, 0);
+    assert.equal(orderedUnit.lastPlayerOrderTick, 0);
+
+    const simUnit = runtime.world.units.find((entry) =>
+      sameHandle(entry.handle, unit.handle)
+    );
+
+    assert.ok(simUnit);
+    assert.equal(simUnit.orderSource, "player");
   } finally {
     runtime.dispose();
   }
@@ -2157,12 +2320,211 @@ function testLocalRuntimeUsesScriptedNpcController(): void {
   runtime.dispose();
 }
 
+function testLocalRuntimeDoesNotRunNpcForLocalPlayer(): void {
+  const runtime = createMinimalLocalGame(2, { seed: 1337 });
+
+  try {
+    runtime.stepTick();
+
+    assert.ok(
+      runtime.world.units
+        .filter((unit) => unit.owner === runtime.playerId)
+        .every((unit) => unit.orderSource !== "npc")
+    );
+  } finally {
+    runtime.dispose();
+  }
+}
+
+function testPlayerCommandsTrackOrderProvenance(): void {
+  const world = createWorld({
+    config: createMinimalSkirmishConfig({ seed: 1337 }),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find((entry) => entry.owner === 1);
+
+  assert.ok(unit);
+
+  const playerTarget = {
+    x: unit.position.x + 240,
+    y: unit.position.y,
+    z: unit.position.z - 120,
+  };
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "moveUnits",
+          unitHandles: [unit.handle],
+          target: playerTarget,
+        },
+      },
+    ],
+  });
+
+  assert.equal(unit.orderSource, "player");
+  assert.equal(unit.orderIssuedTick, 0);
+  assert.equal(unit.lastPlayerOrderTick, 0);
+
+  const autonomyTarget = {
+    x: unit.position.x - 160,
+    y: unit.position.y,
+    z: unit.position.z + 80,
+  };
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 2,
+        source: "autonomy",
+        command: {
+          type: "issueUnitOrder",
+          unitHandles: [unit.handle],
+          order: {
+            type: "moveTo",
+            target: autonomyTarget,
+          },
+          queueMode: "append",
+        },
+      },
+    ],
+  });
+
+  assert.equal(unit.orderSource, "player");
+  assert.equal(unit.lastPlayerOrderTick, 0);
+  assert.equal(unit.orderQueue.length, 1);
+  assert.equal(unit.orderQueueMetadata[0]?.source, "autonomy");
+  assert.equal(unit.orderQueueMetadata[0]?.issuedTick, 1);
+}
+
+function testFleetAutonomyCommandsIdlePlayerUnits(): void {
+  const world = createWorld({
+    config: createFleetAutonomyTestConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find(
+    (entry) =>
+      entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(unit);
+
+  replaceUnitOrder(unit, null);
+
+  const controller = createFleetAutonomyController({
+    playerIds: [1],
+    playerOrderGraceTicks: 3,
+    orbitLaneHeuristics: false,
+  });
+  const commands = controller.commandsForTick(world);
+  const unitCommand = commands.find(
+    (scheduled) =>
+      scheduled.command.type === "issueUnitOrder" &&
+      scheduled.command.unitHandles.some((handle) =>
+        sameHandle(handle, unit.handle)
+      )
+  );
+
+  assert.ok(unitCommand);
+  assert.equal(unitCommand.playerId, 1);
+  assert.equal(unitCommand.source, "autonomy");
+
+  runTick(world, {
+    tick: world.tick,
+    commands,
+  });
+
+  assert.ok(unit.moveOrder);
+  assert.equal(unit.orderSource, "autonomy");
+  assert.equal(unit.orderIssuedTick, 0);
+}
+
+function testFleetAutonomyRespectsRecentPlayerOrders(): void {
+  const world = createWorld({
+    config: createFleetAutonomyTestConfig(),
+    content: DEFAULT_CONTENT_REGISTRY,
+  });
+  const unit = world.units.find(
+    (entry) =>
+      entry.owner === 1 && entry.shipClassId === SHIP_CLASS_IDS.dropShip
+  );
+
+  assert.ok(unit);
+
+  const playerTarget = {
+    x: unit.position.x + 10_000,
+    y: unit.position.y,
+    z: unit.position.z,
+  };
+
+  runTick(world, {
+    tick: world.tick,
+    commands: [
+      {
+        playerId: 1,
+        clientSeq: 1,
+        command: {
+          type: "moveUnits",
+          unitHandles: [unit.handle],
+          target: playerTarget,
+        },
+      },
+    ],
+  });
+
+  const controller = createFleetAutonomyController({
+    playerIds: [1],
+    playerOrderGraceTicks: 3,
+    orbitLaneHeuristics: false,
+  });
+  const recentCommands = controller.commandsForTick(world);
+
+  assert.equal(unit.orderSource, "player");
+  assert.equal(unit.orderIssuedTick, 0);
+  assert.ok(
+    !recentCommands.some(
+      (scheduled) =>
+        scheduled.command.type === "issueUnitOrder" &&
+        scheduled.command.unitHandles.some((handle) =>
+          sameHandle(handle, unit.handle)
+        )
+    )
+  );
+
+  runBatches(world, [], 3);
+
+  const staleCommands = controller.commandsForTick(world);
+  const staleUnitCommand = staleCommands.find(
+    (scheduled) =>
+      scheduled.command.type === "issueUnitOrder" &&
+      scheduled.command.unitHandles.some((handle) =>
+        sameHandle(handle, unit.handle)
+      )
+  );
+
+  assert.ok(staleUnitCommand);
+
+  runTick(world, {
+    tick: world.tick,
+    commands: staleCommands,
+  });
+
+  assert.equal(unit.orderSource, "autonomy");
+  assert.equal(unit.orderIssuedTick, 3);
+}
+
 function testNpcDefenderIssuesAttackOrders(): void {
   const config = createCaptureDemoConfig({
     seed: 1337,
     rules: {
       npc: {
-        aggroRangeWorldUnits: 1_000,
+        aggroRangeWorldUnits: 60_000,
       },
       spawning: {
         fighterSpawnIntervalTicks: 10_000,
@@ -2192,19 +2554,23 @@ function testNpcDefenderIssuesAttackOrders(): void {
 
 function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
   const base = createCaptureDemoConfig({ seed: 1337 });
-  const planetTemplate = base.initialPlanets.find(
-    (planet) => planet.parentPlanetIndex === null
-  );
+  const planetTemplate = base.initialPlanets.find(isPrimaryPlanet);
 
   assert.ok(planetTemplate);
 
+  const spacing = Math.max(planetTemplate.radius * 5, 1_200);
+  const orbitOffset = planetTemplate.radius * 2.1;
   const config = createCaptureDemoConfig({
     seed: 1337,
     initialPlanets: [
       createStaticTestPlanet(planetTemplate, "Exposed", { x: 0, y: 0, z: 0 }),
-      createStaticTestPlanet(planetTemplate, "Safe", { x: 420, y: 0, z: 0 }),
+      createStaticTestPlanet(planetTemplate, "Safe", {
+        x: spacing,
+        y: 0,
+        z: 0,
+      }),
       createStaticTestPlanet(planetTemplate, "Contested", {
-        x: 840,
+        x: spacing * 2,
         y: 0,
         z: 0,
       }),
@@ -2213,22 +2579,26 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
       {
         owner: 1,
         templateId: TEMPLATE_IDS.dropShip,
-        position: { x: 0, y: 8, z: 95 },
+        position: { x: 0, y: 8, z: orbitOffset },
       },
       {
         owner: 1,
         templateId: TEMPLATE_IDS.fighterShip,
-        position: { x: 30, y: 8, z: 100 },
+        position: { x: planetTemplate.radius * 0.4, y: 8, z: orbitOffset },
       },
       {
         owner: 2,
         templateId: TEMPLATE_IDS.dropShip,
-        position: { x: 360, y: 8, z: 0 },
+        position: { x: spacing - orbitOffset, y: 8, z: 0 },
       },
       {
         owner: 2,
         templateId: TEMPLATE_IDS.fighterShip,
-        position: { x: 372, y: 8, z: 12 },
+        position: {
+          x: spacing - orbitOffset + planetTemplate.radius * 0.25,
+          y: 8,
+          z: planetTemplate.radius * 0.25,
+        },
       },
     ],
     rules: {
@@ -2276,9 +2646,7 @@ function testNpcDropShipChoosesSafePlanetBeforeContestedPlanet(): void {
 
 function testNpcDropShipsClaimDifferentCapturePlanets(): void {
   const base = createCaptureDemoConfig({ seed: 1337 });
-  const planetTemplate = base.initialPlanets.find(
-    (planet) => planet.parentPlanetIndex === null
-  );
+  const planetTemplate = base.initialPlanets.find(isPrimaryPlanet);
 
   assert.ok(planetTemplate);
 
@@ -2344,9 +2712,7 @@ function testNpcDropShipsClaimDifferentCapturePlanets(): void {
 
 function testNpcFightersHoldEscortWhenDropShipIsNotThreatened(): void {
   const base = createCaptureDemoConfig({ seed: 1337 });
-  const planetTemplate = base.initialPlanets.find(
-    (planet) => planet.parentPlanetIndex === null
-  );
+  const planetTemplate = base.initialPlanets.find(isPrimaryPlanet);
 
   assert.ok(planetTemplate);
 
@@ -2424,7 +2790,7 @@ function testNpcControllersCanOwnEveryPlayer(): void {
     ],
     rules: {
       npc: {
-        aggroRangeWorldUnits: 1_000,
+        aggroRangeWorldUnits: 60_000,
       },
       spawning: {
         fighterSpawnIntervalTicks: 10_000,
@@ -2459,7 +2825,7 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
     seed: 1337,
     rules: {
       npc: {
-        aggroRangeWorldUnits: 1_000,
+        aggroRangeWorldUnits: 60_000,
       },
       spawning: {
         fighterSpawnIntervalTicks: 10_000,
@@ -2492,7 +2858,7 @@ function testLegacySnapshotHydratesResolvedConfig(): void {
       ?.type,
     "npc"
   );
-  assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 1_000);
+  assert.equal(hydrated.config.rules.npc.aggroRangeWorldUnits, 60_000);
   assert.equal(hydrated.config.rules.npc.dropShipThreatRangeWorldUnits, 300);
 
   const scriptedNpcController = createScriptedNpcController({
@@ -2810,6 +3176,20 @@ function createReplayBatches(
   ];
 }
 
+function createFleetAutonomyTestConfig(): MatchConfig {
+  return createCaptureDemoConfig({
+    seed: 1337,
+    rules: {
+      npc: {
+        thinkIntervalTicks: 1,
+      },
+      spawning: {
+        fighterSpawnIntervalTicks: 10_000,
+      },
+    },
+  });
+}
+
 function findConfigWithMoon(): MatchConfig {
   for (let seed = 0; seed < 64; seed += 1) {
     const config = createMinimalSkirmishConfig({ seed });
@@ -2882,9 +3262,9 @@ function assertCaptureDemoFleet(
   );
   const dropShip = dropShips[0];
 
-  assert.equal(dropShips.length, 4);
-  assert.equal(fighters.length, 24);
-  assert.equal(battleships.length, 5);
+  assert.equal(dropShips.length, 7);
+  assert.equal(fighters.length, 42);
+  assert.equal(battleships.length, 8);
   assert.ok(dropShip);
   assert.ok(dropShips[1]);
   assert.ok(
@@ -2957,7 +3337,7 @@ function readPlayerFleetStatSignature(
 function placeDropShipInCaptureOrbit(
   dropShip: ReturnType<typeof createWorld>["units"][number],
   planet: ReturnType<typeof createWorld>["planets"][number],
-  radiusMultiplier = 3
+  radiusMultiplier = 2.2
 ): void {
   dropShip.position = {
     x: planet.position.x + planet.radius * radiusMultiplier,
@@ -3054,6 +3434,54 @@ function distance(
   b: Readonly<{ x: number; y: number; z: number }>
 ): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function isSunPlanet(
+  planet: Readonly<{
+    appearance: Readonly<{ planetClass: string }>;
+  }>
+): boolean {
+  return planet.appearance.planetClass === "sun";
+}
+
+function isPrimaryPlanet(
+  planet: Readonly<{
+    parentPlanetIndex: number | null;
+    appearance: Readonly<{ planetClass: string }>;
+  }>
+): boolean {
+  return planet.parentPlanetIndex === null && !isSunPlanet(planet);
+}
+
+function normalizedDot(
+  a: Readonly<{ x: number; y: number; z: number }>,
+  b: Readonly<{ x: number; y: number; z: number }>
+): number {
+  const aLength = Math.max(Math.hypot(a.x, a.y, a.z), 0.000001);
+  const bLength = Math.max(Math.hypot(b.x, b.y, b.z), 0.000001);
+
+  return (a.x * b.x + a.y * b.y + a.z * b.z) / (aLength * bLength);
+}
+
+function averageTestPosition(
+  points: readonly Readonly<{ x: number; y: number; z: number }>[]
+): { x: number; y: number; z: number } {
+  assert.ok(points.length > 0);
+
+  const total = points.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x,
+      y: sum.y + point.y,
+      z: sum.z + point.z,
+    }),
+    { x: 0, y: 0, z: 0 }
+  );
+
+  return {
+    x: total.x / points.length,
+    y: total.y / points.length,
+    z: total.z / points.length,
+  };
 }
 
 function angleFromPositiveX(

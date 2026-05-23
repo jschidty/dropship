@@ -12,6 +12,19 @@ Space should feel readable, massive, and hostile without making Phase 1 simulati
 - Some maps can stage it visually closer, others farther, but it remains non-interactive.
 - Lighting, silhouettes, lens response, and color temperature should use the sun to help players understand facing and map direction.
 
+## Vastness And Camera Language
+
+- Wide tactical views should make the planetary system feel like a place, not a
+  flat board. Keep the sun, orbital plane, and largest parent planets visible as
+  recurring orientation anchors.
+- Zooming into a battle should preserve enough parallax and travel time to feel
+  like entering a local pocket of a larger system.
+- The camera may use cinematic easing, focal-length shifts, and atmospheric
+  scale cues, but those remain presentation only.
+- UI indicators should help the player manage distance without shrinking the
+  world back into a small arena. Offscreen objective markers, travel lanes, and
+  contested-planet beacons are preferred over teleport-like camera snaps.
+
 ## Render modes and asset scalability
 
 - Render mode should be selectable per entity or entity class, not only as a global renderer switch.

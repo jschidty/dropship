@@ -11,7 +11,6 @@ import {
   type PlanetClass,
   type PlayerId,
   type PlayerConfig,
-  type SunConfig,
   type Vec3Data,
 } from "@drop-ship/protocol";
 import {
@@ -61,8 +60,10 @@ import {
   Y_AXIS,
   Z_AXIS,
   clamp,
+  yawFromQuaternion,
   readWorldUnitsPerPixel,
   smoothstep,
+  readCameraViewHeight,
 } from "./renderMath";
 import {
   UNIT_SYMBOL_SIZE_PX,
@@ -302,9 +303,11 @@ type FullscreenPass = Readonly<{
   geometry: THREE.PlaneGeometry;
 }>;
 
+type GameCamera = THREE.OrthographicCamera | THREE.PerspectiveCamera;
+
 type LightingRig = Readonly<{
   group: THREE.Group;
-  sunLight: THREE.DirectionalLight;
+  sunLight: THREE.PointLight;
 }>;
 
 type RenderScratch = {
@@ -373,10 +376,22 @@ const FRIENDLY_UNIT_HOVER_RADIUS_MULTIPLIER = 0.8;
 const CAMERA_FOCUS_TWEEN_MS = 720;
 const CAMERA_ZOOM_TWEEN_MS = 560;
 const CAMERA_ZOOM_TO_FIT_PADDING = 1.18;
+const GAME_CAMERA_NEAR = 0.1;
+const GAME_CAMERA_FAR = 250_000;
+const PERSPECTIVE_CAMERA_FOV_DEGREES = 52;
+const FPV_CAMERA_FOV_DEGREES = 72;
+const FPV_CAMERA_NEAR = 0.05;
+const FPV_CAMERA_COCKPIT_FORWARD_MULTIPLIER = 0.75;
+const FPV_CAMERA_COCKPIT_HEIGHT_MULTIPLIER = 0.3;
+const FPV_CAMERA_MIN_FORWARD_OFFSET = 0.8;
+const FPV_CAMERA_MIN_HEIGHT_OFFSET = 0.25;
+const FPV_CAMERA_LOOK_AHEAD = 240;
+const FPV_CAMERA_LOOK_HEIGHT_MULTIPLIER = 0.08;
 const GRAVITY_OVERLAY_GRID_SIZE = 11;
 const GRAVITY_OVERLAY_MIN_STRENGTH = 0.006;
-const GRAVITY_OVERLAY_VECTOR_LENGTH = 5.2;
-const GRAVITY_OVERLAY_HEAD_LENGTH = 1.45;
+const GRAVITY_OVERLAY_MIN_VECTOR_LENGTH = 18;
+const GRAVITY_OVERLAY_VECTOR_SPACING_RATIO = 0.32;
+const GRAVITY_OVERLAY_HEAD_LENGTH_RATIO = 0.28;
 const GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR = 3;
 const GRAVITY_OVERLAY_VERTICES_PER_VECTOR = GRAVITY_OVERLAY_SEGMENTS_PER_VECTOR * 2;
 const TACTICAL_GRID_WORLD_SIZE = 4;
@@ -435,9 +450,24 @@ export function mountMinimalGame(
   const nebulaSkyDome = createNebulaSkyDome();
   const sunFlarePass = createSunFlarePass();
 
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
+  const orthographicCamera = new THREE.OrthographicCamera(
+    -1,
+    1,
+    1,
+    -1,
+    GAME_CAMERA_NEAR,
+    GAME_CAMERA_FAR
+  );
+  const perspectiveCamera = new THREE.PerspectiveCamera(
+    PERSPECTIVE_CAMERA_FOV_DEGREES,
+    1,
+    GAME_CAMERA_NEAR,
+    GAME_CAMERA_FAR
+  );
+  let camera: GameCamera = perspectiveCamera;
   const cameraControls: CameraControls = {
     mode: "tactical",
+    projection: "perspective",
     preset: "top",
     yaw: CAMERA_PRESETS.top.yaw,
     pitch: CAMERA_PRESETS.top.pitch,
@@ -445,6 +475,7 @@ export function mountMinimalGame(
     viewHeights: {
       tactical: CAMERA_MODES.tactical.defaultViewHeight,
       strategic: CAMERA_MODES.strategic.defaultViewHeight,
+      fpv: CAMERA_MODES.fpv.defaultViewHeight,
     },
     isDragging: false,
     dragMode: null,
@@ -485,6 +516,7 @@ export function mountMinimalGame(
     renderer,
     gasGiantTextures
   );
+  const planetStatsSunPosition = new THREE.Vector3();
   const planetStatsSunDirection = new THREE.Vector3();
   let planetMaterial = createPlanetBillboardMaterial(
     gasGiantTextures,
@@ -515,6 +547,7 @@ export function mountMinimalGame(
   let selectedOrbitLane: SelectedOrbitLane | null = null;
   let pendingCommand: PendingCommandMenuCommand = null;
   let tacticalOverlayEnabled = true;
+  let gravityOverlayEnabled = false;
   let singlePlayerPaused =
     runtime.readConnectionStatus().mode === "local" &&
     (options.initialPaused ?? false);
@@ -526,6 +559,8 @@ export function mountMinimalGame(
   let replayRequestPending = false;
   let twoPlayerShareState: "idle" | "creating" | "error" = "idle";
   let twoPlayerShareMessage = "";
+  let lastNonFpvCameraMode: Exclude<CameraControls["mode"], "fpv"> = "tactical";
+  let lastNonFpvCameraProjection: CameraControls["projection"] = "perspective";
   let nextCommandHistoryId = 1;
   const commandHistory: CommandHistoryRecord[] = [];
   const selectionBox = createSelectionBox(container);
@@ -539,17 +574,74 @@ export function mountMinimalGame(
       runtime.readConnectionStatus()
     )
   );
+
+  function setActiveCameraProjection(
+    projection: CameraControls["projection"]
+  ): void {
+    cameraControls.projection = projection;
+    camera = projection === "orthographic" ? orthographicCamera : perspectiveCamera;
+  }
+
+  function resetCameraFollowTween(): void {
+    cameraFocusTween.initialized = false;
+    cameraFocusTween.activeContextKey = null;
+    cameraControls.panOffset.set(0, 0, 0);
+    clearZoomToFitFocus();
+    cancelCameraZoomTween();
+  }
+
+  function enterFpvCameraMode(): void {
+    if (cameraControls.mode !== "fpv") {
+      lastNonFpvCameraMode = cameraControls.mode;
+      lastNonFpvCameraProjection = cameraControls.projection;
+    }
+
+    resetCameraFollowTween();
+    cameraControls.mode = "fpv";
+    cameraControls.preset = null;
+    cameraControls.pitch = CAMERA_MODES.fpv.pitch;
+    setActiveCameraProjection("perspective");
+  }
+
+  function exitFpvCameraMode(): void {
+    if (cameraControls.mode !== "fpv") {
+      return;
+    }
+
+    resetCameraFollowTween();
+    setCameraMode(cameraControls, lastNonFpvCameraMode);
+    setActiveCameraProjection(lastNonFpvCameraProjection);
+  }
+
   const overlay = mountGameOverlay(container, overlayStore, {
     selectCameraPreset(preset) {
+      exitFpvCameraMode();
       cancelCameraZoomTween();
       applyCameraPreset(cameraControls, preset);
       publishOverlaySnapshot();
     },
+    toggleCameraProjection() {
+      if (cameraControls.mode === "fpv") {
+        return;
+      }
+
+      setActiveCameraProjection(
+        cameraControls.projection === "orthographic"
+          ? "perspective"
+          : "orthographic"
+      );
+      publishOverlaySnapshot();
+    },
     zoomToFit() {
+      exitFpvCameraMode();
       startZoomToFit(performance.now());
     },
     setTacticalOverlayEnabled(enabled) {
       tacticalOverlayEnabled = enabled;
+      publishOverlaySnapshot();
+    },
+    setGravityOverlayEnabled(enabled) {
+      gravityOverlayEnabled = enabled;
       publishOverlaySnapshot();
     },
     toggleRenderMode() {
@@ -620,7 +712,7 @@ export function mountMinimalGame(
   let zoomToFitContextId = 0;
 
   const lighting = createLighting(
-    writeSunDirection(scratch.sunDirection, runtime.world.config),
+    writeSunPosition(scratch.sunPosition, runtime.world.config),
     writeSunColor(scratch.sunColor, runtime.world.config)
   );
   scene.add(lighting.group);
@@ -674,7 +766,10 @@ export function mountMinimalGame(
 
     overlayStore.setSnapshot({
       activeCameraPreset: cameraControls.preset,
+      cameraMode: cameraControls.mode,
+      cameraProjection: cameraControls.projection,
       tacticalOverlayEnabled,
+      gravityOverlayEnabled,
       renderMode: renderQuality.mode,
       selectedUnits,
       selectedUnitObjective: selectedStatsUnit
@@ -685,7 +780,11 @@ export function mountMinimalGame(
             selectedPlanet,
             planetStatsRenderCache.readImageUrl(
               selectedPlanet,
-              writeSunDirection(planetStatsSunDirection, runtime.world.config)
+              writeSunDirectionFromPosition(
+                planetStatsSunDirection,
+                selectedPlanet.position,
+                writeSunPosition(planetStatsSunPosition, runtime.world.config)
+              )
             ),
             runtime.world.config.players,
             readCaptureRules(runtime.world)
@@ -1480,6 +1579,8 @@ export function mountMinimalGame(
     }
 
     if (key === "z") {
+      exitFpvCameraMode();
+
       if (startZoomToSelection(performance.now())) {
         event.preventDefault();
         event.stopPropagation();
@@ -1505,10 +1606,16 @@ export function mountMinimalGame(
       event.preventDefault();
       clearZoomToFitFocus();
       cameraZoomTween.active = false;
-      setCameraMode(
-        cameraControls,
-        cameraControls.mode === "tactical" ? "strategic" : "tactical"
-      );
+
+      if (cameraControls.mode === "fpv") {
+        exitFpvCameraMode();
+      } else {
+        setCameraMode(
+          cameraControls,
+          cameraControls.mode === "tactical" ? "strategic" : "tactical"
+        );
+      }
+
       event.stopPropagation();
     }
   };
@@ -1998,6 +2105,16 @@ export function mountMinimalGame(
     }
 
     const selectedUnits = units.filter((unit) => selectedUnitKeys.has(unit.key));
+    let fpvFollowUnit =
+      cameraControls.mode === "fpv"
+        ? readSelectedStatsUnit(selectedUnits, commandMenuLeaderKey)
+        : null;
+
+    if (cameraControls.mode === "fpv" && !fpvFollowUnit) {
+      exitFpvCameraMode();
+      fpvFollowUnit = null;
+    }
+
     selectedOrbitLane =
       readSelectedOrbitLane(selectedUnits, planets) ?? selectedOrbitLane;
     const activeSelectionTarget = readActiveSelectionTarget();
@@ -2029,12 +2146,20 @@ export function mountMinimalGame(
           );
     const selectedPlanet = getSelectedPlanet(planets, selectedPlanetKey);
     const hoveredPlanet = getSelectedPlanet(planets, activePlanetKey);
-    const focus = zoomToFitFocusEnabled
-      ? scratch.focus.copy(zoomToFitFocus)
-      : writeCameraFocusPosition(scratch.focus, units, selectedUnitKeys);
-    const cameraFocusContextKey = zoomToFitFocusEnabled
-      ? `fit:${zoomToFitContextId}`
-      : readCameraFocusContextKey(selectedUnitKeys);
+    const focus = fpvFollowUnit
+      ? scratch.focus.lerpVectors(
+          fpvFollowUnit.prevPosition,
+          fpvFollowUnit.position,
+          interpolationAlpha
+        )
+      : zoomToFitFocusEnabled
+        ? scratch.focus.copy(zoomToFitFocus)
+        : writeCameraFocusPosition(scratch.focus, units, selectedUnitKeys);
+    const cameraFocusContextKey = fpvFollowUnit
+      ? `fpv:${fpvFollowUnit.key}`
+      : zoomToFitFocusEnabled
+        ? `fit:${zoomToFitContextId}`
+        : readCameraFocusContextKey(selectedUnitKeys);
 
     if (cameraFocusContextKey !== previousCameraFocusContextKey) {
       preservePannedCameraFocusForContextChange(
@@ -2045,20 +2170,23 @@ export function mountMinimalGame(
       previousCameraFocusContextKey = cameraFocusContextKey;
     }
 
-    const displayedFocus = updateCameraFocusTween(
-      cameraFocusTween,
-      cameraFocusContextKey,
-      focus,
-      now
-    );
-    const cameraFocus = writePannedCameraFocus(
-      scratch.pannedFocus,
-      displayedFocus,
-      cameraControls
-    );
-    const sunDirection = writeSunDirection(scratch.sunDirection, runtime.world.config);
+    const displayedFocus = fpvFollowUnit
+      ? scratch.focus.copy(focus)
+      : updateCameraFocusTween(
+          cameraFocusTween,
+          cameraFocusContextKey,
+          focus,
+          now
+        );
+    const cameraFocus = fpvFollowUnit
+      ? scratch.pannedFocus.copy(displayedFocus)
+      : writePannedCameraFocus(
+          scratch.pannedFocus,
+          displayedFocus,
+          cameraControls
+        );
+    const sunPosition = writeSunPosition(scratch.sunPosition, runtime.world.config);
     const sunColor = writeSunColor(scratch.sunColor, runtime.world.config);
-    const sunDistance = readSunDistance(runtime.world.config.environment.sun);
     const elapsedSeconds = (now - startedAt) / 1000;
     renderFrameIndex += 1;
 
@@ -2075,7 +2203,14 @@ export function mountMinimalGame(
       renderQuality
     );
     updateCameraZoomTween(cameraZoomTween, cameraControls, now);
-    applyCameraControls(camera, cameraControls, viewport, cameraFocus, scratch);
+    applyCameraControls(
+      camera,
+      cameraControls,
+      viewport,
+      cameraFocus,
+      scratch,
+      fpvFollowUnit
+    );
     camera.updateMatrixWorld();
     const worldUnitsPerPixel = readWorldUnitsPerPixel(camera, viewport.height);
 
@@ -2103,7 +2238,7 @@ export function mountMinimalGame(
       scratch
     );
 
-    updateLighting(lighting, sunDirection, sunColor);
+    updateLighting(lighting, sunPosition, sunColor);
     updateUnitBatches(
       unitBatches,
       units,
@@ -2134,7 +2269,7 @@ export function mountMinimalGame(
       planetProxies,
       camera,
       elapsedSeconds,
-      sunDirection,
+      sunPosition,
       scratch
     );
     updateTacticalGrid(
@@ -2168,7 +2303,7 @@ export function mountMinimalGame(
     updateGravityOverlay(
       gravityOverlay,
       planets,
-      tacticalOverlayEnabled,
+      gravityOverlayEnabled,
       cameraControls.preset
     );
     updateCaptureProgressRings(
@@ -2194,11 +2329,7 @@ export function mountMinimalGame(
     const sunScreenPosition = updateSunFlarePass(
       sunFlarePass,
       camera,
-      cameraFocus,
       planets,
-      sunDirection,
-      sunDistance,
-      sunColor,
       renderResolution,
       elapsedSeconds,
       scratch
@@ -2206,6 +2337,7 @@ export function mountMinimalGame(
 
     if (now - lastHudUpdateAt >= HUD_UPDATE_INTERVAL_MS) {
       container.dataset.cameraMode = cameraControls.mode;
+      container.dataset.cameraProjection = cameraControls.projection;
       container.dataset.cameraFocus = cameraFocusContextKey;
       container.dataset.cameraYaw = cameraControls.yaw.toFixed(4);
       container.dataset.cameraPitch = cameraControls.pitch.toFixed(4);
@@ -2996,16 +3128,12 @@ function readPlanetSelectionRingRadiusPx(
   viewport: ViewportMetrics,
   radiusMultiplier: number
 ): number {
-  if (camera instanceof THREE.OrthographicCamera) {
-    const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const viewHeight = Math.max(readCameraViewHeight(camera), 1);
 
-    return Math.max(
-      (planet.radius * radiusMultiplier * viewport.height) / viewHeight,
-      PLANET_SELECTION_MIN_RADIUS_PX
-    );
-  }
-
-  return PLANET_SELECTION_MIN_RADIUS_PX;
+  return Math.max(
+    (planet.radius * radiusMultiplier * viewport.height) / viewHeight,
+    PLANET_SELECTION_MIN_RADIUS_PX
+  );
 }
 
 function formatPlanetSelectionMarkerDetail(
@@ -3315,7 +3443,7 @@ function preservePannedCameraFocusForContextChange(
 
 function panCameraByScreenDelta(
   cameraControls: CameraControls,
-  camera: THREE.OrthographicCamera,
+  camera: THREE.Camera,
   viewport: ViewportMetrics,
   dx: number,
   dy: number,
@@ -3346,7 +3474,7 @@ function panCameraByScreenDelta(
 
 function writeCameraPanAxis(
   target: THREE.Vector3,
-  camera: THREE.OrthographicCamera,
+  camera: THREE.Camera,
   column: number,
   fallbackX: number,
   fallbackZ: number
@@ -3362,35 +3490,129 @@ function writeCameraPanAxis(
 }
 
 function applyCameraControls(
-  camera: THREE.OrthographicCamera,
+  camera: GameCamera,
   cameraControls: CameraControls,
   viewport: ViewportMetrics,
   focus: THREE.Vector3,
-  scratch: RenderScratch
+  scratch: RenderScratch,
+  fpvFollowUnit: UnitViewModel | null = null
 ): void {
+  if (
+    cameraControls.mode === "fpv" &&
+    fpvFollowUnit &&
+    camera instanceof THREE.PerspectiveCamera
+  ) {
+    applyFpvCameraControls(
+      camera,
+      cameraControls,
+      viewport,
+      focus,
+      fpvFollowUnit,
+      scratch
+    );
+    return;
+  }
+
   const viewHeight = cameraControls.viewHeights[cameraControls.mode];
   const halfHeight = viewHeight / 2;
-  const halfWidth = halfHeight * viewport.aspect;
   const worldUp = scratch.worldUp.set(0, 1, 0);
   const horizontal = scratch.horizontal.set(
     Math.sin(cameraControls.yaw),
     0,
     Math.cos(cameraControls.yaw)
   ).normalize();
-  const orbitDistance = viewHeight * 1.45;
+  const perspectiveDistance =
+    halfHeight /
+    Math.tan(THREE.MathUtils.degToRad(PERSPECTIVE_CAMERA_FOV_DEGREES) / 2);
+  const orbitDistance =
+    camera instanceof THREE.PerspectiveCamera
+      ? perspectiveDistance
+      : viewHeight * 1.45;
   const cameraOffset = scratch.cameraOffset
     .copy(worldUp)
     .multiplyScalar(Math.sin(cameraControls.pitch) * orbitDistance)
     .add(horizontal.multiplyScalar(Math.cos(cameraControls.pitch) * orbitDistance));
 
-  camera.left = -halfWidth;
-  camera.right = halfWidth;
-  camera.top = halfHeight;
-  camera.bottom = -halfHeight;
+  if (camera instanceof THREE.OrthographicCamera) {
+    const halfWidth = halfHeight * viewport.aspect;
+    camera.left = -halfWidth;
+    camera.right = halfWidth;
+    camera.top = halfHeight;
+    camera.bottom = -halfHeight;
+  } else {
+    camera.aspect = viewport.aspect;
+    camera.fov = PERSPECTIVE_CAMERA_FOV_DEGREES;
+  }
+
+  camera.near = GAME_CAMERA_NEAR;
+  camera.far = GAME_CAMERA_FAR;
+  camera.userData.viewHeight = viewHeight;
   camera.up.copy(worldUp);
   camera.position.copy(focus).add(cameraOffset);
   camera.lookAt(focus);
   camera.updateProjectionMatrix();
+}
+
+function applyFpvCameraControls(
+  camera: THREE.PerspectiveCamera,
+  cameraControls: CameraControls,
+  viewport: ViewportMetrics,
+  followPosition: THREE.Vector3,
+  followUnit: UnitViewModel,
+  scratch: RenderScratch
+): void {
+  const viewHeight = cameraControls.viewHeights.fpv;
+  const unitRadius = Math.max(followUnit.stats.colliderRadius, 1);
+  const forwardOffset = Math.max(
+    unitRadius * FPV_CAMERA_COCKPIT_FORWARD_MULTIPLIER,
+    FPV_CAMERA_MIN_FORWARD_OFFSET
+  );
+  const cameraHeight = Math.max(
+    unitRadius * FPV_CAMERA_COCKPIT_HEIGHT_MULTIPLIER,
+    FPV_CAMERA_MIN_HEIGHT_OFFSET
+  );
+  const lookHeight = Math.max(
+    cameraHeight * FPV_CAMERA_LOOK_HEIGHT_MULTIPLIER,
+    FPV_CAMERA_MIN_HEIGHT_OFFSET
+  );
+  const heading = writeUnitHeading(scratch.cameraForward, followUnit);
+  const cameraPosition = scratch.cameraOffset
+    .copy(followPosition)
+    .addScaledVector(heading, forwardOffset)
+    .addScaledVector(Y_AXIS, cameraHeight);
+  const lookTarget = scratch.rayTarget
+    .copy(cameraPosition)
+    .addScaledVector(heading, FPV_CAMERA_LOOK_AHEAD)
+    .addScaledVector(Y_AXIS, lookHeight);
+
+  camera.aspect = viewport.aspect;
+  camera.fov = FPV_CAMERA_FOV_DEGREES;
+  camera.near = FPV_CAMERA_NEAR;
+  camera.far = GAME_CAMERA_FAR;
+  camera.userData.viewHeight = viewHeight;
+  camera.up.copy(Y_AXIS);
+  camera.position.copy(cameraPosition);
+  camera.lookAt(lookTarget);
+  camera.updateProjectionMatrix();
+}
+
+function writeUnitHeading(
+  target: THREE.Vector3,
+  unit: UnitViewModel
+): THREE.Vector3 {
+  const yaw = yawFromQuaternion(unit.rotation);
+  target.set(Math.sin(yaw), 0, Math.cos(yaw));
+
+  if (target.lengthSq() <= 0.000001) {
+    target.subVectors(unit.position, unit.prevPosition);
+    target.y = 0;
+  }
+
+  if (target.lengthSq() <= 0.000001) {
+    target.copy(Z_AXIS);
+  }
+
+  return target.normalize();
 }
 
 function updateCameraZoomTween(
@@ -4589,16 +4811,12 @@ function findPlanetAtPointer(
   proxies: ReadonlyMap<string, PlanetProxy>,
   scratch: RenderScratch
 ): PlanetViewModel | null {
-  if (!(camera instanceof THREE.OrthographicCamera)) {
-    return null;
-  }
-
   const bounds = canvas.getBoundingClientRect();
   const normalizedX =
     ((event.clientX - bounds.left) / Math.max(bounds.width, 1)) * 2 - 1;
   const normalizedY =
     -(((event.clientY - bounds.top) / Math.max(bounds.height, 1)) * 2 - 1);
-  const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const viewHeight = Math.max(readCameraViewHeight(camera), 1);
   const pointerX = event.clientX - bounds.left;
   const pointerY = event.clientY - bounds.top;
   let closestVisualHit: PlanetViewModel | null = null;
@@ -4869,10 +5087,6 @@ function readPlanetSceneSelectionCandidate(
     return null;
   }
 
-  if (!(camera instanceof THREE.OrthographicCamera)) {
-    return null;
-  }
-
   const bounds = canvas.getBoundingClientRect();
   const projected = scratch.projected.copy(planet.position).project(camera);
 
@@ -4880,7 +5094,7 @@ function readPlanetSceneSelectionCandidate(
     return null;
   }
 
-  const viewHeight = Math.max(camera.top - camera.bottom, 1);
+  const viewHeight = Math.max(readCameraViewHeight(camera), 1);
   const screenX = (projected.x * 0.5 + 0.5) * bounds.width;
   const screenY = (-projected.y * 0.5 + 0.5) * bounds.height;
   const screenRadius = Math.max(
@@ -5199,6 +5413,10 @@ function updatePlanetProxies(
   const shaderRenderMode = renderQualityToShaderValue(renderQuality.mode);
 
   for (const planet of planets) {
+    if (isSunPlanetView(planet)) {
+      continue;
+    }
+
     let proxy = proxies.get(planet.key);
 
     if (!proxy) {
@@ -5504,19 +5722,43 @@ function planetClassToShaderValue(planetClass: PlanetClass): number {
       return 1;
     case "ice":
       return 2;
+    case "sun":
+      return 0;
   }
+}
+
+function isSunPlanetView(planet: PlanetViewModel): boolean {
+  return planet.appearance.planetClass === "sun";
+}
+
+function readSunFlarePlanet(
+  planets: readonly PlanetViewModel[]
+): PlanetViewModel | null {
+  return planets.find(isSunPlanetView) ?? null;
 }
 
 function renderQualityToShaderValue(renderMode: RenderQualityMode): number {
   return renderMode === "cinematic" ? 1 : 0;
 }
 
-function writeSunDirection(
+function writeSunPosition(
   target: THREE.Vector3,
   config: MatchConfig
 ): THREE.Vector3 {
   const { position } = config.environment.sun;
-  target.set(position.x, position.y, position.z);
+  return target.set(position.x, position.y, position.z);
+}
+
+function writeSunDirectionFromPosition(
+  target: THREE.Vector3,
+  origin: Vec3Data,
+  sunPosition: THREE.Vector3
+): THREE.Vector3 {
+  target.set(
+    sunPosition.x - origin.x,
+    sunPosition.y - origin.y,
+    sunPosition.z - origin.z
+  );
 
   if (target.lengthSq() <= 0.000001) {
     return target.copy(DEFAULT_SUN_DIRECTION);
@@ -5529,20 +5771,15 @@ function writeSunColor(target: THREE.Color, config: MatchConfig): THREE.Color {
   return target.set(config.environment.sun.color);
 }
 
-function readSunDistance(sun: SunConfig): number {
-  return Math.max(sun.distance, 1);
-}
-
 function createLighting(
-  sunDirection: THREE.Vector3,
+  sunPosition: THREE.Vector3,
   sunColor: THREE.Color
 ): LightingRig {
   const group = new THREE.Group();
 
-  const sunLight = new THREE.DirectionalLight(sunColor, 1.65);
-  sunLight.position.copy(sunDirection).multiplyScalar(1000);
+  const sunLight = new THREE.PointLight(sunColor, 2.1, 0, 0);
+  sunLight.position.copy(sunPosition);
   group.add(sunLight);
-  group.add(sunLight.target);
   group.add(new THREE.AmbientLight(0xdbe7ff, 0.42));
 
   return {
@@ -5553,11 +5790,11 @@ function createLighting(
 
 function updateLighting(
   lighting: LightingRig,
-  sunDirection: THREE.Vector3,
+  sunPosition: THREE.Vector3,
   sunColor: THREE.Color
 ): void {
   lighting.sunLight.color.copy(sunColor);
-  lighting.sunLight.position.copy(sunDirection).multiplyScalar(1000);
+  lighting.sunLight.position.copy(sunPosition);
 }
 
 function createTacticalPlane(): TacticalGrid {
@@ -6226,6 +6463,11 @@ function updateGravityOverlay(
 
   for (const context of planets) {
     const spacing = Math.max(context.radius * 0.56, 9);
+    const vectorLength = Math.max(
+      GRAVITY_OVERLAY_MIN_VECTOR_LENGTH,
+      spacing * GRAVITY_OVERLAY_VECTOR_SPACING_RATIO
+    );
+    const headLength = vectorLength * GRAVITY_OVERLAY_HEAD_LENGTH_RATIO;
 
     for (let zIndex = 0; zIndex < GRAVITY_OVERLAY_GRID_SIZE; zIndex += 1) {
       for (let xIndex = 0; xIndex < GRAVITY_OVERLAY_GRID_SIZE; xIndex += 1) {
@@ -6275,8 +6517,8 @@ function updateGravityOverlay(
           vectorIndex,
           sample,
           gravityVector.normalize(),
-          GRAVITY_OVERLAY_VECTOR_LENGTH,
-          GRAVITY_OVERLAY_HEAD_LENGTH,
+          vectorLength,
+          headLength,
           opacity
         );
       }
@@ -6577,24 +6819,22 @@ function updateNebulaSkyDome(
 function updateSunFlarePass(
   pass: FullscreenPass,
   camera: THREE.Camera,
-  focus: THREE.Vector3,
   planets: readonly PlanetViewModel[],
-  sunDirection: THREE.Vector3,
-  sunDistance: number,
-  sunColor: THREE.Color,
   resolution: THREE.Vector2,
   elapsedSeconds: number,
   scratch: RenderScratch
 ): THREE.Vector4 {
-  const projectedSun = scratch.sunPosition
-    .copy(focus)
-    .addScaledVector(sunDirection, sunDistance)
-    .project(camera);
-  camera.getWorldDirection(scratch.cameraDirection);
+  const sunPlanet = readSunFlarePlanet(planets);
+
+  if (!sunPlanet) {
+    pass.material.uniforms.uVisibility.value = 0;
+
+    return scratch.sunScreenPosition.set(0.5, 0.5, 0, 0);
+  }
+
+  const projectedSun = scratch.projected.copy(sunPlanet.position).project(camera);
   const visibility =
-    projectedSun.z >= -1 && projectedSun.z <= 1
-      ? clamp(scratch.cameraDirection.dot(sunDirection), 0, 1)
-      : 0;
+    projectedSun.z >= -1 && projectedSun.z <= 1 ? 1 : 0;
   const screenPosition = scratch.screenPosition.set(
     0.5 + projectedSun.x * 0.5,
     0.5 + projectedSun.y * 0.5
@@ -6614,7 +6854,7 @@ function updateSunFlarePass(
 
   pass.material.uniforms.uResolution.value.copy(resolution);
   pass.material.uniforms.uSunPosition.value.copy(screenPosition);
-  pass.material.uniforms.uSunColor.value.copy(sunColor);
+  pass.material.uniforms.uSunColor.value.set(sunPlanet.color);
   pass.material.uniforms.uVisibility.value = visibleSun;
   pass.material.uniforms.uTime.value = elapsedSeconds;
 
@@ -6641,6 +6881,10 @@ function computeSunPlanetOcclusion(
   let occlusion = 0;
 
   for (const planet of planets) {
+    if (isSunPlanetView(planet)) {
+      continue;
+    }
+
     const projectedPlanet = scratch.projected.copy(planet.position).project(camera);
 
     if (projectedPlanet.z < -1 || projectedPlanet.z > 1) {
@@ -6669,7 +6913,7 @@ function updatePlanetBillboards(
   proxies: Map<string, PlanetProxy>,
   camera: THREE.Camera,
   elapsedSeconds: number,
-  sunDirection: THREE.Vector3,
+  sunPosition: THREE.Vector3,
   scratch: RenderScratch
 ): void {
   const cameraRight = scratch.cameraRight
@@ -6683,6 +6927,12 @@ function updatePlanetBillboards(
     .normalize();
 
   for (const proxy of proxies.values()) {
+    const sunDirection = writeSunDirectionFromPosition(
+      scratch.sunDirection,
+      proxy.body.position,
+      sunPosition
+    );
+
     if (proxy.glow) {
       proxy.glow.quaternion.copy(camera.quaternion);
       proxy.glow.material.uniforms.uSunDirection.value.copy(sunDirection);

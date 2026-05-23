@@ -8,11 +8,18 @@ export function readWorldUnitsPerPixel(
   camera: THREE.Camera,
   viewportHeight: number
 ): number {
+  return readCameraViewHeight(camera) / Math.max(viewportHeight, 1);
+}
+
+export function readCameraViewHeight(camera: THREE.Camera): number {
   if (camera instanceof THREE.OrthographicCamera) {
-    return (camera.top - camera.bottom) / Math.max(viewportHeight, 1);
+    return camera.top - camera.bottom;
   }
 
-  return 1;
+  const viewHeight = camera.userData.viewHeight;
+  return typeof viewHeight === "number" && Number.isFinite(viewHeight)
+    ? viewHeight
+    : 1;
 }
 
 export function yawFromQuaternion(quaternion: THREE.Quaternion): number {

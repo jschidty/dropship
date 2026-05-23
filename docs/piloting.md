@@ -180,7 +180,10 @@ Phase 1 suggestion:
 - click orders as usual
 - release Tab to return to cockpit
 
-No AI auto-commander in Phase 1. Add it only if playtests show piloting makes the RTS layer unusable.
+The capture demo now has fleet autonomy for unattended tactical units. If
+piloting uses that help later, it must use the same command provenance and grace
+window rules as tactical autonomy; cockpit code should not directly rewrite
+fleet orders.
 
 ## Input lag
 

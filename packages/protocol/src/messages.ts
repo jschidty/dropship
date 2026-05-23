@@ -1,9 +1,14 @@
-import type { CommandBatch, CommandIntent } from "./commands";
+import type { CommandBatch, CommandIntent, CommandSource } from "./commands";
 import type { PlayerId } from "./handles";
 import type { MatchConfig, MatchEndReason } from "./matchConfig";
 import type { CompactSimSnapshot } from "./snapshot";
 
 export type MatchSessionRole = "player1" | "player2" | "spectator";
+
+export type ClientCommandSource = Extract<
+  CommandSource,
+  "player" | "autonomy"
+>;
 
 export type ReadyMessage = Readonly<{
   type: "ready";
@@ -15,6 +20,7 @@ export type CommandMessage = Readonly<{
   playerId: PlayerId;
   clientSeq: number;
   localTick: number;
+  source?: ClientCommandSource;
   command: CommandIntent;
 }>;
 

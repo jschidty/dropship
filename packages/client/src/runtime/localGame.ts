@@ -1,6 +1,10 @@
-import { createScriptedNpcController } from "@drop-ship/controllers";
+import {
+  createFleetAutonomyController,
+  createScriptedNpcController,
+} from "@drop-ship/controllers";
 import { DEFAULT_CONTENT_REGISTRY } from "@drop-ship/content";
 import {
+  compareScheduledCommands,
   createEmptyCommandBatch,
   type PlayerId,
   type ScheduledCommand,
@@ -26,7 +30,12 @@ export function createMinimalLocalGame(
   });
   const pendingCommands: ScheduledCommand[] = [];
   const pendingEvents: typeof world.events = [];
-  const scriptedNpcController = createScriptedNpcController();
+  const scriptedNpcController = createScriptedNpcController({
+    playerIds: readNpcControllerPlayerIds(world, playerId),
+  });
+  const fleetAutonomyController = createFleetAutonomyController({
+    playerIds: [playerId],
+  });
   const viewModelCache = createViewModelCache();
   const hashCache = createHashCache();
   let clientSeq = 0;
@@ -44,6 +53,7 @@ export function createMinimalLocalGame(
       const commands = sortScheduledCommands([
         ...pendingCommands.splice(0),
         ...scriptedNpcController.commandsForTick(world),
+        ...fleetAutonomyController.commandsForTick(world),
       ]);
       runTick(
         world,
@@ -141,12 +151,14 @@ export function createMinimalLocalGame(
       pendingCommands.splice(0);
       pendingEvents.splice(0);
       scriptedNpcController.reset?.(world);
+      fleetAutonomyController.reset?.(world);
       clientSeq = 0;
     },
     dispose() {
       pendingCommands.splice(0);
       pendingEvents.splice(0);
       scriptedNpcController.reset?.(world);
+      fleetAutonomyController.reset?.(world);
     },
   };
 }
@@ -154,13 +166,19 @@ export function createMinimalLocalGame(
 function sortScheduledCommands(
   commands: readonly ScheduledCommand[]
 ): readonly ScheduledCommand[] {
-  return commands
-    .slice()
-    .sort((a, b) =>
-      a.playerId === b.playerId
-        ? a.clientSeq - b.clientSeq
-        : a.playerId - b.playerId
-    );
+  return commands.slice().sort(compareScheduledCommands);
+}
+
+function readNpcControllerPlayerIds(
+  world: ReturnType<typeof createWorld>,
+  localPlayerId: PlayerId
+): readonly PlayerId[] {
+  return world.config.controllers
+    .filter(
+      (controller) =>
+        controller.type === "npc" && controller.playerId !== localPlayerId
+    )
+    .map((controller) => controller.playerId);
 }
 
 function createRandomSeed(previousSeed?: number): number {

@@ -1,6 +1,8 @@
 import type { EntityHandle, PlayerId } from "./handles";
 import type { Vec3Data } from "./matchConfig";
 
+export type CommandSource = "player" | "npc" | "autonomy" | "system";
+
 export type RandomTurnOwnedUnitsCommand = Readonly<{
   type: "randomTurnOwnedUnits";
 }>;
@@ -61,6 +63,7 @@ export type CommandIntent =
 export type ScheduledCommand = Readonly<{
   playerId: PlayerId;
   clientSeq: number;
+  source?: CommandSource;
   command: CommandIntent;
 }>;
 
@@ -69,9 +72,27 @@ export type CommandBatch = Readonly<{
   commands: readonly ScheduledCommand[];
 }>;
 
+export function compareScheduledCommands(
+  left: ScheduledCommand,
+  right: ScheduledCommand
+): number {
+  if (left.playerId !== right.playerId) {
+    return left.playerId - right.playerId;
+  }
+
+  const sourcePriority =
+    readCommandSourcePriority(left) - readCommandSourcePriority(right);
+
+  return sourcePriority !== 0 ? sourcePriority : left.clientSeq - right.clientSeq;
+}
+
 export function createEmptyCommandBatch(tick: number): CommandBatch {
   return {
     tick,
     commands: [],
   };
+}
+
+function readCommandSourcePriority(command: ScheduledCommand): number {
+  return (command.source ?? "player") === "player" ? 1 : 0;
 }

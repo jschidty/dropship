@@ -1,5 +1,5 @@
 import type { ShipStats } from "@drop-ship/content";
-import { sameHandle } from "@drop-ship/protocol";
+import { sameHandle, type CommandSource } from "@drop-ship/protocol";
 import { deterministicCos, deterministicSin, SIM_TAU } from "../deterministicMath";
 import { findPrngStream, nextFloat01 } from "../prng";
 import { readUnitShipStats } from "../shipStats";
@@ -19,10 +19,20 @@ export const CommandIntakeSystem: SimSystem = {
     const shipStats = new Map<number | string, ShipStats>();
 
     for (const scheduled of commands) {
+      const source: CommandSource = scheduled.source ?? "player";
+      const metadata = {
+        source,
+        issuedTick: world.tick,
+      };
+
       if (scheduled.command.type === "randomTurnOwnedUnits") {
         for (const unit of getUnitsInStableOrder(world)) {
           if (unit.owner !== scheduled.playerId) {
             continue;
+          }
+
+          if (source === "player") {
+            unit.lastPlayerOrderTick = world.tick;
           }
 
           const yaw = nextFloat01(commandPrng) * SIM_TAU;
@@ -47,14 +57,18 @@ export const CommandIntakeSystem: SimSystem = {
             continue;
           }
 
-          replaceUnitOrder(unit, {
-            type: "moveTo",
-            target: {
-              x: scheduled.command.target.x,
-              y: scheduled.command.target.y,
-              z: scheduled.command.target.z,
+          replaceUnitOrder(
+            unit,
+            {
+              type: "moveTo",
+              target: {
+                x: scheduled.command.target.x,
+                y: scheduled.command.target.y,
+                z: scheduled.command.target.z,
+              },
             },
-          });
+            metadata
+          );
         }
       }
 
@@ -70,9 +84,9 @@ export const CommandIntakeSystem: SimSystem = {
           }
 
           if (scheduled.command.queueMode === "append") {
-            appendUnitOrder(unit, scheduled.command.order);
+            appendUnitOrder(unit, scheduled.command.order, metadata);
           } else {
-            replaceUnitOrder(unit, scheduled.command.order);
+            replaceUnitOrder(unit, scheduled.command.order, metadata);
           }
         }
       }

@@ -3,7 +3,11 @@ import { SHIP_CLASS_IDS } from "@drop-ship/protocol";
 import type { PlanetViewModel, UnitViewModel } from "../types";
 import { createSelectionRingTexture, createUnitSymbolTexture } from "./canvasTextures";
 import { nextInstanceCapacity } from "./instancing";
-import { Z_AXIS, yawFromQuaternion } from "./renderMath";
+import {
+  Z_AXIS,
+  readCameraViewHeight,
+  yawFromQuaternion,
+} from "./renderMath";
 
 export type UnitBatchRenderer = {
   root: THREE.Group;
@@ -124,8 +128,6 @@ export function updateUnitBatches(
     (hoveredUnitKey && !selectedUnitKeys.has(hoveredUnitKey) ? 1 : 0);
   ensureSelectionMeshCapacity(batches, selectionRingCount);
   batches.billboardQuaternion.copy(camera.quaternion);
-  const symbolScale = UNIT_SYMBOL_SIZE_PX * worldUnitsPerPixel;
-  const selectionScale = SELECTION_RING_SIZE_PX * worldUnitsPerPixel;
 
   for (const key of batches.symbolCounts.keys()) {
     batches.symbolCounts.set(key, 0);
@@ -139,12 +141,25 @@ export function updateUnitBatches(
       unit.position,
       interpolationAlpha
     );
+    const symbolWorldUnitsPerPixel = readUnitBillboardWorldUnitsPerPixel(
+      batches,
+      position,
+      camera,
+      worldUnitsPerPixel
+    );
+
+    if (symbolWorldUnitsPerPixel <= 0) {
+      continue;
+    }
+
     const key = getUnitSymbolBatchKey(
       unit,
       isUnitSymbolOccludedByPlanet(batches, position, planets, camera)
     );
     const symbolMesh = batches.symbolMeshes.get(key);
     const symbolIndex = batches.symbolCounts.get(key) ?? 0;
+    const symbolScale = UNIT_SYMBOL_SIZE_PX * symbolWorldUnitsPerPixel;
+    const selectionScale = SELECTION_RING_SIZE_PX * symbolWorldUnitsPerPixel;
 
     if (symbolMesh) {
       writeUnitInstanceMatrix(
@@ -178,6 +193,30 @@ export function updateUnitBatches(
     batches.selectionMesh.count = selectedCount;
     batches.selectionMesh.instanceMatrix.needsUpdate = selectedCount > 0;
   }
+}
+
+function readUnitBillboardWorldUnitsPerPixel(
+  batches: UnitBatchRenderer,
+  position: THREE.Vector3,
+  camera: THREE.Camera,
+  focusWorldUnitsPerPixel: number
+): number {
+  if (!(camera instanceof THREE.PerspectiveCamera)) {
+    return focusWorldUnitsPerPixel;
+  }
+
+  batches.projectedPosition.copy(position).applyMatrix4(camera.matrixWorldInverse);
+  const depth = -batches.projectedPosition.z;
+
+  if (depth <= 0.0001) {
+    return 0;
+  }
+
+  const viewHeight = Math.max(readCameraViewHeight(camera), 1);
+  const focusDistance =
+    viewHeight / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+
+  return focusWorldUnitsPerPixel * (depth / Math.max(focusDistance, 1));
 }
 
 function ensureSymbolMeshCapacity(

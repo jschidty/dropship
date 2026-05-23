@@ -35,10 +35,12 @@ type Command = {
 Example order:
 
 ```ts
+type CommandSource = "player" | "npc" | "autonomy" | "system";
+
 type Order = {
   id: OrderId;
   issuedTick: number;
-  issuedBy: PlayerId | "system";
+  source: CommandSource;
   type: "MoveTo" | "AttackTarget" | "Mine" | "Dock" | "Orbit" | "Piloted";
   params: OrderParams;
   state: "pending" | "active" | "completed" | "failed";
@@ -56,6 +58,32 @@ type EntityHandle = {
 ```
 
 Never use raw bitECS runtime eids in commands, orders, snapshots, or replays.
+
+## Command Source And Provenance
+
+Every scheduled command may carry a source:
+
+- `player`: direct human input. Legacy commands without a source are treated as
+  player commands.
+- `npc`: an opponent controller acting for an NPC-owned player.
+- `autonomy`: a deterministic helper controller acting for a human player's
+  unattended fleet.
+- `system`: setup or deterministic sim-side initialization, such as starting
+  escort orders.
+
+The active order and queued orders store provenance metadata: source and issued
+tick. That metadata is sim state, not UI state, because future controllers may
+use it to decide whether they are allowed to replace an order. It must
+round-trip through snapshots and participate in replay hashes.
+
+The current fleet-autonomy controller uses this contract to keep player agency
+intact: it may command idle units, and it may replace stale player orders after
+a grace window, but it must not overwrite a fresh manual order. In local and
+headless command batches, non-player sources sort before `player` for the same
+player and tick, so a same-tick click remains the last applied command.
+
+Provenance is not a permission system by itself. Seat ownership, network
+validation, and replay authority still live at the command scheduling layer.
 
 ## Order queues
 

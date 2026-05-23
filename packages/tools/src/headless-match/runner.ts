@@ -7,6 +7,7 @@ import {
   type CommandController,
 } from "@drop-ship/controllers";
 import {
+  compareScheduledCommands,
   createEmptyCommandBatch,
   type CommandBatch,
   type MatchConfig,
@@ -226,13 +227,7 @@ function createBatchForTick(
 function sortScheduledCommands(
   commands: readonly ScheduledCommand[]
 ): readonly ScheduledCommand[] {
-  return commands
-    .slice()
-    .sort((a, b) =>
-      a.playerId === b.playerId
-        ? a.clientSeq - b.clientSeq
-        : a.playerId - b.playerId
-    );
+  return commands.slice().sort(compareScheduledCommands);
 }
 
 function collectCommandBatchesByTick(

@@ -1,5 +1,5 @@
 import type { EntityHandle, PlayerId } from "./handles";
-import type { UnitOrderIntent } from "./commands";
+import type { CommandSource, UnitOrderIntent } from "./commands";
 import type {
   CaptureDemoRules,
   GameMode,
@@ -34,6 +34,11 @@ export type UnitMoveOrderSnapshot = Readonly<{
 
 export type UnitOrderSnapshot = UnitOrderIntent;
 
+export type UnitOrderMetadataSnapshot = Readonly<{
+  source: CommandSource;
+  issuedTick: number;
+}>;
+
 export type UnitFighterSpawnSnapshot = Readonly<{
   nextSpawnTick: number;
   spawnedFighters: readonly EntityHandle[];
@@ -55,7 +60,11 @@ export type UnitSnapshot = Readonly<{
   velocity: Vec3Data;
   rotation: QuaternionData;
   moveOrder: UnitOrderSnapshot | null;
+  orderSource?: CommandSource | null;
+  orderIssuedTick?: number | null;
+  lastPlayerOrderTick?: number | null;
   orderQueue?: readonly UnitOrderSnapshot[];
+  orderQueueMetadata?: readonly UnitOrderMetadataSnapshot[];
   health: HealthSnapshot;
   weaponCooldownTicks: number;
   weaponCooldownTicksBySlot?: Readonly<Record<string, number>>;

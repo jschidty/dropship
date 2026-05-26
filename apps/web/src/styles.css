@@ -136,7 +136,7 @@ canvas {
 .render-mode-button:focus-visible,
 .command-menu-unit-select:focus-visible,
 .command-menu-unit-remove:focus-visible,
-.command-menu-history-entry:focus-visible,
+.objective-command-card:focus-visible,
 .command-menu-command:focus-visible,
 .command-menu-panel-summary:focus-visible,
 .hotkeys-dialog-two-player:focus-visible,
@@ -733,13 +733,163 @@ canvas {
   display: none;
 }
 
-.command-history-menu {
+.objective-command-menu {
+  position: absolute;
   top: 50%;
-  right: auto;
-  left: 28px;
+  left: 18px;
+  z-index: 4;
+  width: min(356px, calc(100vw - 36px));
+  max-height: calc(100vh - 96px);
   transform: translateY(-50%);
-  perspective: 860px;
-  perspective-origin: 50% 0%;
+  color: rgb(239 248 255 / 90%);
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.12;
+  pointer-events: auto;
+}
+
+.objective-command-menu[hidden] {
+  display: none;
+}
+
+.objective-command-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-height: inherit;
+  overflow-y: auto;
+  padding: 1px 2px 1px 1px;
+  scrollbar-color: rgb(116 217 255 / 72%) rgb(5 8 18 / 58%);
+  scrollbar-width: thin;
+}
+
+.objective-command-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.objective-command-grid::-webkit-scrollbar-track {
+  background: rgb(5 8 18 / 58%);
+}
+
+.objective-command-grid::-webkit-scrollbar-thumb {
+  border: 1px solid rgb(5 8 18 / 78%);
+  background: rgb(116 217 255 / 72%);
+}
+
+.objective-command-card {
+  --objective-color: #d6dae8;
+
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  width: 100%;
+  min-height: 54px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--objective-color) 58%, transparent);
+  border-radius: 0;
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--objective-color) 15%, transparent), transparent 54%),
+    linear-gradient(180deg, rgb(10 18 32 / 82%), rgb(5 8 18 / 84%));
+  box-shadow:
+    0 14px 24px rgb(0 0 0 / 24%),
+    inset 0 0 0 1px rgb(239 248 255 / 5%);
+  color: rgb(239 248 255 / 90%);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.objective-command-card[data-kind="planet"] {
+  --objective-color: #74d9ff;
+}
+
+.objective-command-card[data-kind="attack"] {
+  --objective-color: #ff4fd8;
+}
+
+.objective-command-card[data-kind="escort"] {
+  --objective-color: #86f0a8;
+}
+
+.objective-command-card[data-kind="move"] {
+  --objective-color: #ffd166;
+}
+
+.objective-command-card[data-kind="idle"] {
+  --objective-color: #d6dae8;
+}
+
+.objective-command-card::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--objective-color);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--objective-color) 58%, transparent);
+  content: "";
+}
+
+.objective-command-card-topline {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 6px 7px 0 8px;
+}
+
+.objective-command-card-hotkey {
+  display: grid;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--objective-color) 72%, transparent);
+  background: rgb(3 6 17 / 54%);
+  color: var(--objective-color);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.objective-command-card-hotkey[hidden] {
+  display: none;
+}
+
+.objective-command-card-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--objective-color);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.08;
+  text-transform: uppercase;
+}
+
+.objective-command-card-detail {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 7px 6px 8px;
+  color: rgb(239 248 255 / 72%);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.objective-command-card:hover,
+.objective-command-card[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--objective-color) 92%, transparent);
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--objective-color) 24%, transparent), transparent 58%),
+    linear-gradient(180deg, rgb(13 24 42 / 88%), rgb(5 8 18 / 86%));
+  box-shadow:
+    0 18px 30px rgb(0 0 0 / 32%),
+    0 0 18px color-mix(in srgb, var(--objective-color) 18%, transparent),
+    inset 0 0 0 1px rgb(239 248 255 / 7%);
 }
 
 .command-menu-content {
@@ -747,11 +897,6 @@ canvas {
   display: grid;
   gap: 4px;
   padding: 0;
-}
-
-.command-history-stack {
-  padding: 0 0 14px;
-  transform-style: preserve-3d;
 }
 
 .command-menu-panel {
@@ -782,8 +927,7 @@ canvas {
 
 .command-menu-unit-list,
 .command-menu-list,
-.command-menu-commands,
-.command-menu-history {
+.command-menu-commands {
   display: grid;
   gap: 0;
   margin-top: 0;
@@ -823,8 +967,7 @@ canvas {
 
 .command-menu-unit-select,
 .command-menu-unit-remove,
-.command-menu-command,
-.command-menu-history-entry {
+.command-menu-command {
   width: 100%;
   min-height: 23px;
   border: 0;
@@ -871,164 +1014,12 @@ canvas {
   padding: 0 7px;
 }
 
-.command-menu-history-entry {
-  display: grid;
-  gap: 1px;
-  border-top: 1px solid rgb(252 61 33 / 42%);
-  background: rgb(8 14 26 / 62%);
-  padding: 5px 7px;
-}
-
-.command-history-menu .command-menu-history {
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 0;
-  padding: 0;
-  transform-style: preserve-3d;
-}
-
-.command-history-menu
-  .command-menu-history-entry
-  + .command-menu-history-entry {
-  margin-bottom: -18px;
-}
-
-.command-history-menu .command-menu-history-entry {
-  --history-card-y: 0px;
-  --history-card-z: 8px;
-
-  position: relative;
-  min-height: 36px;
-  border: 1px solid rgb(252 61 33 / 78%);
-  background:
-    linear-gradient(105deg, rgb(252 61 33 / 18%), rgb(5 8 18 / 86%) 34%),
-    linear-gradient(180deg, rgb(20 28 52 / 78%), rgb(5 8 18 / 86%));
-  box-shadow:
-    0 16px 30px rgb(0 0 0 / 34%),
-    0 0 18px rgb(252 61 33 / 16%),
-    inset 0 0 0 1px rgb(239 248 255 / 5%);
-  transform: perspective(860px) rotateX(-15deg)
-    translate3d(0, var(--history-card-y), var(--history-card-z));
-  transform-origin: center bottom;
-  transform-style: preserve-3d;
-  transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease,
-    box-shadow 160ms ease,
-    transform 180ms ease;
-  will-change: transform;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(1) {
-  --history-card-y: 12px;
-  --history-card-z: 52px;
-
-  z-index: 20;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(2) {
-  --history-card-y: 9px;
-  --history-card-z: 46px;
-
-  z-index: 19;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(3) {
-  --history-card-y: 6px;
-  --history-card-z: 40px;
-
-  z-index: 18;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(4) {
-  --history-card-y: 3px;
-  --history-card-z: 34px;
-
-  z-index: 17;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(5) {
-  --history-card-y: 0px;
-  --history-card-z: 28px;
-
-  z-index: 16;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(6) {
-  --history-card-y: -3px;
-  --history-card-z: 22px;
-
-  z-index: 15;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(7) {
-  --history-card-y: -6px;
-  --history-card-z: 16px;
-
-  z-index: 14;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(8) {
-  --history-card-y: -9px;
-  --history-card-z: 10px;
-
-  z-index: 13;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(9) {
-  --history-card-y: -12px;
-  --history-card-z: 4px;
-
-  z-index: 12;
-}
-
-.command-history-menu .command-menu-history-entry:nth-child(10) {
-  --history-card-y: -15px;
-  --history-card-z: -2px;
-
-  z-index: 11;
-}
-
-.command-menu-history-label,
-.command-menu-history-detail {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-menu-history-label {
-  color: rgb(252 61 33 / 92%);
-  font-weight: 700;
-}
-
-.command-menu-history-detail {
-  color: rgb(239 248 255 / 72%);
-  font-size: 9px;
-}
-
 .command-menu-unit:hover,
 .command-menu-unit[aria-selected="true"],
 .command-menu-command[aria-pressed="true"],
-.command-menu-command:hover:not(:disabled),
-.command-menu-history-entry:hover {
+.command-menu-command:hover:not(:disabled) {
   background: rgb(252 61 33 / 16%);
   color: rgb(255 106 72 / 100%);
-}
-
-.command-history-menu .command-menu-history-entry:hover {
-  border-color: rgb(255 106 72 / 100%);
-  box-shadow:
-    0 22px 36px rgb(0 0 0 / 40%),
-    0 0 26px rgb(252 61 33 / 28%),
-    inset 0 0 0 1px rgb(239 248 255 / 8%);
-  transform: perspective(860px) rotateX(-15deg)
-    translate3d(
-      0,
-      calc(var(--history-card-y) - 12px),
-      calc(var(--history-card-z) + 18px)
-    );
 }
 
 .command-menu-unit-select:hover,
@@ -1468,6 +1459,18 @@ canvas {
 
   .command-menu {
     width: min(204px, calc(50vw - 22px));
+  }
+
+  .objective-command-menu {
+    top: 96px;
+    left: 10px;
+    width: min(320px, calc(100vw - 20px));
+    max-height: min(240px, calc(100vh - 178px));
+    transform: none;
+  }
+
+  .objective-command-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .right-side-stack {

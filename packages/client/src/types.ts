@@ -128,6 +128,15 @@ export type RuntimeConnectionStatus = Readonly<{
   }>[];
 }>;
 
+export type ClientIssueLevel = "fatal" | "error" | "warning" | "info";
+
+export type ClientIssueReport = Readonly<{
+  kind: string;
+  message: string;
+  level?: ClientIssueLevel;
+  context?: Readonly<Record<string, unknown>>;
+}>;
+
 export type MountMinimalGameOptions = Readonly<{
   playerId?: PlayerId;
   matchId?: string;
@@ -143,4 +152,5 @@ export type MountMinimalGameOptions = Readonly<{
   playerToken?: string;
   rememberPlayerToken?: (matchId: string, playerToken: string) => void;
   createTwoPlayerGame?: () => Promise<void>;
+  reportClientIssue?: (issue: ClientIssueReport) => void;
 }>;

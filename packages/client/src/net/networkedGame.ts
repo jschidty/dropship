@@ -19,7 +19,11 @@ import {
   runTick,
   serializeWorld,
 } from "@drop-ship/sim";
-import type { LocalGameRuntime, RuntimeConnectionStatus } from "../types";
+import type {
+  ClientIssueReport,
+  LocalGameRuntime,
+  RuntimeConnectionStatus,
+} from "../types";
 import {
   createHashCache,
   createViewModelCache,
@@ -38,6 +42,7 @@ export function createNetworkedGame(options: {
   creatorToken?: string;
   playerToken?: string;
   rememberPlayerToken?: (matchId: string, playerToken: string) => void;
+  reportClientIssue?: (issue: ClientIssueReport) => void;
 }): LocalGameRuntime {
   let assignedPlayerId = options.playerId ?? 1;
   let assignedRole: MatchSessionRole = options.creatorToken
@@ -80,6 +85,30 @@ export function createNetworkedGame(options: {
     options.matchId,
     () => assignedPlayerId
   );
+  const reportNetworkIssue = (
+    kind: string,
+    message: string,
+    level: ClientIssueReport["level"],
+    context: Readonly<Record<string, unknown>> = {}
+  ) => {
+    options.reportClientIssue?.({
+      kind,
+      message,
+      level,
+      context: {
+        matchId: options.matchId,
+        playerId: assignedPlayerId,
+        role: assignedRole,
+        canControl,
+        serverUrl: options.serverUrl ?? "same-origin",
+        socketState: socket?.readyState ?? null,
+        reconnectAttempt,
+        serverTick: status.serverTick ?? null,
+        online: navigator.onLine,
+        ...context,
+      },
+    });
+  };
   let loggedMatchResultTick: number | null = null;
   let reportedMatchEndTick: number | null = null;
   let lastConnectionStatusLogKey = "";
@@ -336,6 +365,21 @@ export function createNetworkedGame(options: {
       });
       socket = null;
       if (!disposed) {
+        if (!event.wasClean || event.code !== 1000) {
+          reportNetworkIssue(
+            "network.websocket.closed",
+            "WebSocket connection closed before the game was disposed.",
+            "warning",
+            {
+              code: event.code,
+              reason: event.reason || null,
+              wasClean: event.wasClean,
+              queuedBatches: queuedBatches.size,
+              outboxMessages: outbox.length,
+            }
+          );
+        }
+
         if (event.reason === "seat-replaced") {
           status = {
             ...status,
@@ -365,6 +409,15 @@ export function createNetworkedGame(options: {
         serverTick: status.serverTick ?? null,
         ...summarizeWorld(world),
       });
+      reportNetworkIssue(
+        "network.websocket.error",
+        "WebSocket connection error.",
+        "error",
+        {
+          queuedBatches: queuedBatches.size,
+          outboxMessages: outbox.length,
+        }
+      );
       status = {
         ...status,
         state: "error",
@@ -411,13 +464,36 @@ export function createNetworkedGame(options: {
   }
 
   function receiveServerMessage(data: string): void {
-    const message = JSON.parse(data) as ServerMessage | { type: "error"; code: string };
+    let message: ServerMessage | { type: "error"; code: string };
+
+    try {
+      message = JSON.parse(data) as ServerMessage | { type: "error"; code: string };
+    } catch (error) {
+      reportNetworkIssue(
+        "network.websocket.message_parse_error",
+        "Could not parse a WebSocket server message.",
+        "error",
+        {
+          dataLength: data.length,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }
+      );
+      throw error;
+    }
 
     if (message.type === "error") {
       debugLog("connection:server-error", {
         code: message.code,
         ...summarizeWorld(world),
       });
+      reportNetworkIssue(
+        "network.websocket.server_error",
+        "WebSocket server returned an error message.",
+        "error",
+        {
+          code: message.code,
+        }
+      );
       status = {
         ...status,
         state: "error",
@@ -688,7 +764,7 @@ export function createNetworkedGame(options: {
     logOutgoingClientMessage(message, socket?.readyState === WebSocket.OPEN);
 
     if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(encoded);
+      sendSocketPayload(socket, encoded);
       return;
     }
 
@@ -707,7 +783,24 @@ export function createNetworkedGame(options: {
     }
 
     while (outbox.length > 0) {
-      socket.send(outbox.shift() ?? "");
+      sendSocketPayload(socket, outbox.shift() ?? "");
+    }
+  }
+
+  function sendSocketPayload(activeSocket: WebSocket, payload: string): void {
+    try {
+      activeSocket.send(payload);
+    } catch (error) {
+      reportNetworkIssue(
+        "network.websocket.send_error",
+        "Could not send a WebSocket message.",
+        "error",
+        {
+          payloadLength: payload.length,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }
+      );
+      throw error;
     }
   }
 

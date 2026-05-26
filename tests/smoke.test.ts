@@ -57,6 +57,7 @@ import {
 } from "../packages/tools/src/index";
 import { createMinimalLocalGame } from "../packages/client/src/runtime/localGame";
 import {
+  createObjectiveCommandCards,
   selectClassHotkeyUnitKeys,
   selectMoveOrderUnits,
 } from "../packages/client/src/selection/commands";
@@ -68,7 +69,10 @@ import {
   rankAttackTargetCandidates,
   selectNextAttackTargetKey,
 } from "../packages/client/src/selection/targeting";
-import type { UnitViewModel } from "../packages/client/src/index";
+import type {
+  PlanetViewModel,
+  UnitViewModel,
+} from "../packages/client/src/index";
 
 await testCommandSchedulingAndCatchup();
 testCommandBufferPreservesAutonomySourceAndPriority();
@@ -95,6 +99,7 @@ testOrbitLaneOrderPreservesLaneSpec();
 testOrbitLaneVelocityUsesLanePlaneAndDirection();
 testCaptureDemoConfig();
 testClassHotkeySelectionFiltersSelectedUnits();
+testObjectiveCommandCardsGroupSharedTargets();
 testAttackTargetPriorityRanking();
 testSceneSelectionCandidateRanking();
 testShipsSpawnOutsidePlanets();
@@ -1705,6 +1710,60 @@ function testClassHotkeySelectionFiltersSelectedUnits(): void {
   );
 }
 
+function testObjectiveCommandCardsGroupSharedTargets(): void {
+  const nadir = createTestPlanetView("10:1", "Nadir", 10);
+  const enemyDropShip = createTestUnitView(
+    "enemy-drop-ship",
+    2,
+    13,
+    SHIP_CLASS_IDS.dropShip
+  );
+  const orbitDropShip = {
+    ...createTestUnitView("orbit-drop-ship", 1, 1, SHIP_CLASS_IDS.dropShip),
+    moveOrder: {
+      type: "orbitPlanet",
+      planet: nadir.handle,
+    },
+  } as UnitViewModel;
+  const captureScout = {
+    ...createTestUnitView("capture-scout", 1, 2, SHIP_CLASS_IDS.fighter),
+    moveOrder: {
+      type: "capturePlanet",
+      planet: nadir.handle,
+    },
+  } as UnitViewModel;
+  const attackScout = {
+    ...createTestUnitView("attack-scout", 1, 3, SHIP_CLASS_IDS.fighter),
+    moveOrder: {
+      type: "attackTarget",
+      target: enemyDropShip.handle,
+    },
+  } as UnitViewModel;
+  const attackBattleship = {
+    ...createTestUnitView("attack-battleship", 1, 4, SHIP_CLASS_IDS.battleship),
+    moveOrder: {
+      type: "attackTarget",
+      target: enemyDropShip.handle,
+    },
+  } as UnitViewModel;
+
+  const cards = createObjectiveCommandCards(
+    [orbitDropShip, captureScout, attackScout, attackBattleship, enemyDropShip],
+    1,
+    [nadir]
+  );
+
+  assert.equal(cards.length, 2);
+  assert.deepEqual(
+    cards.map((card) => card.title),
+    ["Nadir Operations", "Attack Drop Ship #13"]
+  );
+  assert.deepEqual(cards[0]?.unitKeys, ["orbit-drop-ship", "capture-scout"]);
+  assert.equal(cards[0]?.detail, "1 dropship, 1 scout");
+  assert.deepEqual(cards[1]?.unitKeys, ["attack-scout", "attack-battleship"]);
+  assert.equal(cards[1]?.detail, "1 scout, 1 battleship");
+}
+
 function testAttackTargetPriorityRanking(): void {
   const candidates = [
     {
@@ -1838,38 +1897,56 @@ function testCaptureDemoConfig(): void {
       (planet) => distance(planet.position, systemCenter) + planet.radius
     )
   );
+  const playerOneUnits = world.units.filter((unit) => unit.owner === 1);
+  const playerTwoUnits = world.units.filter((unit) => unit.owner === 2);
   const playerOneFleetCenter = averageTestPosition(
-    world.units
-      .filter((unit) => unit.owner === 1)
-      .map((unit) => unit.position)
+    playerOneUnits.map((unit) => unit.position)
   );
   const playerTwoFleetCenter = averageTestPosition(
-    world.units
-      .filter((unit) => unit.owner === 2)
-      .map((unit) => unit.position)
+    playerTwoUnits.map((unit) => unit.position)
   );
+  const playerOneAverageRadius = averageDistancesFrom(
+    playerOneUnits.map((unit) => unit.position),
+    systemCenter
+  );
+  const playerTwoAverageRadius = averageDistancesFrom(
+    playerTwoUnits.map((unit) => unit.position),
+    systemCenter
+  );
+  const playerOneDropShipAngles = playerOneUnits
+    .filter((unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip)
+    .map((unit) => angleAroundSystemCenter(unit.position, systemCenter));
+  const playerTwoDropShipAngles = playerTwoUnits
+    .filter((unit) => unit.shipClassId === SHIP_CLASS_IDS.dropShip)
+    .map((unit) => angleAroundSystemCenter(unit.position, systemCenter));
 
   assert.ok(
-    distance(playerOneFleetCenter, systemCenter) > parentMapRadius,
-    "Expected player one fleet to start outside the parent-planet rim"
+    distance(playerOneFleetCenter, systemCenter) > parentMapRadius * 0.35 &&
+      distance(playerOneFleetCenter, systemCenter) < parentMapRadius * 1.1,
+    "Expected player one fleet to start along an outer system arc"
   );
   assert.ok(
-    distance(playerTwoFleetCenter, systemCenter) > parentMapRadius,
-    "Expected player two fleet to start outside the parent-planet rim"
+    distance(playerTwoFleetCenter, systemCenter) > parentMapRadius * 0.35 &&
+      distance(playerTwoFleetCenter, systemCenter) < parentMapRadius * 1.1,
+    "Expected player two fleet to start along an outer system arc"
   );
-  for (const playerId of [1, 2] as const) {
-    assert.ok(
-      nearestDropShipSurfaceGap(
-        world,
-        playerId,
-        parentPlanets.filter(isPrimaryPlanet)
-      ) < 2600,
-      "Expected a forward drop-ship squadron to start near an outer primary planet"
-    );
-  }
   assert.ok(
-    distance(playerOneDropShip.position, playerTwoDropShip.position) > 450,
-    "Expected starting fleets to begin separated around the planetary system"
+    playerOneAverageRadius > parentMapRadius * 0.5 &&
+      playerOneAverageRadius < parentMapRadius * 1.1,
+    "Expected player one fleet to vary around the parent-map radius"
+  );
+  assert.ok(
+    playerTwoAverageRadius > parentMapRadius * 0.5 &&
+      playerTwoAverageRadius < parentMapRadius * 1.1,
+    "Expected player two fleet to vary around the parent-map radius"
+  );
+  assert.ok(
+    distance(playerOneDropShip.position, playerTwoDropShip.position) > 900,
+    "Expected arc starts to keep opposing squads separated"
+  );
+  assert.ok(
+    Math.max(...playerOneDropShipAngles) < Math.min(...playerTwoDropShipAngles),
+    "Expected player squad arcs to be contiguous instead of interleaved"
   );
 
   for (const unit of world.units) {
@@ -3576,7 +3653,7 @@ function assertCaptureDemoFleet(
 
   for (const unit of playerUnits) {
     assert.ok(
-      dropShips.some((candidate) => distance(unit.position, candidate.position) < 90),
+      dropShips.some((candidate) => distance(unit.position, candidate.position) < 120),
       "Expected every starting ship to spawn near one of its drop ships"
     );
   }
@@ -3670,9 +3747,47 @@ function createTestUnitView(
       generation: 1,
     },
     key,
+    label: readTestUnitLabel(shipClassId),
     owner,
     shipClassId,
+    moveOrder: null,
+    orbit: {
+      isOrbiting: false,
+      planet: null,
+      orbitTicks: 0,
+    },
+    health: {
+      current: 100,
+      max: 100,
+    },
   } as UnitViewModel;
+}
+
+function createTestPlanetView(
+  key: string,
+  label: string,
+  id: number
+): PlanetViewModel {
+  return {
+    handle: {
+      id,
+      generation: 1,
+    },
+    key,
+    label,
+  } as PlanetViewModel;
+}
+
+function readTestUnitLabel(shipClassId: number): string {
+  if (shipClassId === SHIP_CLASS_IDS.dropShip) {
+    return "Drop Ship";
+  }
+
+  if (shipClassId === SHIP_CLASS_IDS.battleship) {
+    return "Battleship";
+  }
+
+  return "Fighter";
 }
 
 function createMemoryStorage(): DurableObjectStorage {
@@ -3724,32 +3839,6 @@ function hexColorToRgb(color: string): { r: number; g: number; b: number } {
   };
 }
 
-function nearestDropShipSurfaceGap(
-  world: ReturnType<typeof createWorld>,
-  playerId: PlayerId,
-  planets: readonly ReturnType<typeof createWorld>["planets"][number][]
-): number {
-  let nearest = Number.POSITIVE_INFINITY;
-
-  for (const unit of world.units) {
-    if (
-      unit.owner !== playerId ||
-      unit.shipClassId !== SHIP_CLASS_IDS.dropShip
-    ) {
-      continue;
-    }
-
-    for (const planet of planets) {
-      nearest = Math.min(
-        nearest,
-        distance(unit.position, planet.position) - planet.radius
-      );
-    }
-  }
-
-  return nearest;
-}
-
 function isSunPlanet(
   planet: Readonly<{
     appearance: Readonly<{ planetClass: string }>;
@@ -3796,6 +3885,25 @@ function averageTestPosition(
     y: total.y / points.length,
     z: total.z / points.length,
   };
+}
+
+function averageDistancesFrom(
+  points: readonly Readonly<{ x: number; y: number; z: number }>[],
+  origin: Readonly<{ x: number; y: number; z: number }>
+): number {
+  assert.ok(points.length > 0);
+
+  return (
+    points.reduce((sum, point) => sum + distance(point, origin), 0) /
+    points.length
+  );
+}
+
+function angleAroundSystemCenter(
+  point: Readonly<{ x: number; y: number; z: number }>,
+  center: Readonly<{ x: number; y: number; z: number }>
+): number {
+  return Math.atan2(point.z - center.z, point.x - center.x);
 }
 
 function angleFromPositiveX(

@@ -210,7 +210,7 @@ Camera rules:
 - Manual rotate clears camera preset.
 - Selection changes may update focus, but should not erase the user's current
   visual center with a snap.
-- `Fit` and `Z` are explicit recentering commands.
+- `Fit`, `F`, and `Z` with no selection are explicit world recentering commands.
 - Camera animation should be interruptible; new input wins.
 
 ## Menus And Hotkeys
@@ -224,7 +224,8 @@ Required hotkey behavior:
 - `Tab`: cycle nearby targetable entities from the same candidate list as hover
 - `Shift+Tab`: cycle backward
 - `D`: clear selection and return camera focus through the normal focus model
-- `Z`: zoom to current selection
+- `Z`: zoom to current selection; with no selection, fit the world center
+- `F`: fit the world center
 - `1`, `8`, `9`, `0`: deterministic owned-unit selection shortcuts
 - `Space`: restore previous command group
 

@@ -191,7 +191,7 @@ Camera devices:
   battle feels like traveling through space instead of snapping between boards.
 - Keep the sun direction, orbital plane, and parent-planet rim legible across
   presets so players do not lose orientation after long pans.
-- Let explicit recentering commands such as `Fit` and `Z` do the large camera
+- Let explicit recentering commands such as `Fit`, `F`, and `Z` do the large camera
   moves; normal selection changes should not aggressively collapse the sense of
   distance.
 - When following a battle, preserve enough peripheral context to show nearby

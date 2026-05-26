@@ -1,6 +1,7 @@
 export type {
   LocalGameRuntime,
   MountedGame,
+  ClientIssueReport,
   MountMinimalGameOptions,
   PlanetViewModel,
   RenderQualityMode,
@@ -12,8 +13,11 @@ export { mountMinimalGame } from "./render/minimalGame";
 export { createMinimalLocalGame } from "./runtime/localGame";
 export { readPlanetViewModels, readUnitViewModels } from "./runtime/viewModels";
 export {
+  createObjectiveCommandCards,
   selectClassHotkeyUnitKeys,
   selectMoveOrderUnits,
+  type ObjectiveCommandCard,
+  type ObjectiveCommandCardKind,
 } from "./selection/commands";
 export {
   areSceneSelectionTargetsEqual,

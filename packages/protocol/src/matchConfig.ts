@@ -447,10 +447,14 @@ const PARENT_PLANET_PHASE_JITTER = 0.24;
 const PARENT_PLANET_MIN_ECCENTRICITY = 0.035;
 const PARENT_PLANET_ECCENTRICITY_RANGE = 0.17;
 const PARENT_PLANET_INCLINATION_JITTER = 0.035;
-const CAPTURE_DEMO_RIM_SPAWN_PADDING = 60;
-const CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA = 900;
-const CAPTURE_DEMO_FLEET_DEPTH_SCALE = 0.75;
-const CAPTURE_DEMO_FLEET_LATERAL_SCALE = 0.9;
+const CAPTURE_DEMO_SQUAD_ARC_MIN_RADIUS_FACTOR = 0.5;
+const CAPTURE_DEMO_SQUAD_ARC_MAX_RADIUS_FACTOR = 1.1;
+const CAPTURE_DEMO_SQUAD_ARC_SUN_PADDING = 520;
+const CAPTURE_DEMO_SQUAD_TEAM_ARC_SWEEP_RADIANS = MATCH_TAU * 0.14;
+const CAPTURE_DEMO_SQUAD_TEAM_ARC_GAP_RADIANS = 0.14;
+const CAPTURE_DEMO_SQUAD_ARC_CENTER_ANGLE = -MATCH_TAU / 4;
+const CAPTURE_DEMO_SQUAD_PLANET_CLEARANCE = 260;
+const CAPTURE_DEMO_SQUAD_PLACEMENT_ATTEMPTS = 8;
 const MINIMAL_SKIRMISH_PLANET_SPAWN_PADDING = 95;
 const STAR_PROFILE_STOPS: readonly StarProfileStop[] = [
   {
@@ -553,10 +557,7 @@ export function createCaptureDemoConfig(
   const normalizedOptions =
     typeof options === "number" ? { seed: options } : options;
   const base = createMinimalSkirmishConfig(options);
-  const initialUnits = createCaptureDemoUnits(
-    base.initialPlanets,
-    base.rules.capture.orbitMaxRadiusMultiplier,
-  );
+  const initialUnits = createCaptureDemoUnits(base.initialPlanets, base.seed);
 
   return {
     ...base,
@@ -710,8 +711,7 @@ export function resolveSimTuning(
 
 function createCaptureDemoUnits(
   planets: readonly InitialPlanetConfig[],
-  captureOrbitMaxRadiusMultiplier =
-    DEFAULT_MATCH_RULES.capture.orbitMaxRadiusMultiplier,
+  seed: number,
 ): readonly InitialUnitConfig[] {
   const primaryPlanetPosition =
     readFirstPrimaryPlanet(planets)?.position ??
@@ -826,406 +826,250 @@ function createCaptureDemoUnits(
     },
   }));
 
-  return moveCaptureDemoFleetsToOuterRim(
-    centeredUnits,
-    planets,
-    captureOrbitMaxRadiusMultiplier,
-  );
+  return deployCaptureDemoSquadsOnSystemArc(centeredUnits, planets, seed);
 }
 
-function moveCaptureDemoFleetsToOuterRim(
+type CaptureDemoSquad = Readonly<{
+  anchor: Vec3Data;
+  units: readonly InitialUnitConfig[];
+}>;
+
+function deployCaptureDemoSquadsOnSystemArc(
   units: readonly InitialUnitConfig[],
   planets: readonly InitialPlanetConfig[],
-  captureOrbitMaxRadiusMultiplier: number,
+  seed: number,
 ): readonly InitialUnitConfig[] {
   const center = readPlanetarySystemCenter(planets);
   const mapRadius = readParentPlanetMapRadius(planets, center);
-  const playerOneCentroid = averagePosition(
-    units.filter((unit) => unit.owner === 1).map((unit) => unit.position),
+  const sunRadius = planets.find(isSunPlanet)?.radius ?? 0;
+  const minArcRadius = Math.max(
+    mapRadius * CAPTURE_DEMO_SQUAD_ARC_MIN_RADIUS_FACTOR,
+    sunRadius + CAPTURE_DEMO_SQUAD_ARC_SUN_PADDING,
   );
-  const playerTwoCentroid = averagePosition(
-    units.filter((unit) => unit.owner === 2).map((unit) => unit.position),
+  const maxArcRadius = Math.max(
+    minArcRadius,
+    mapRadius * CAPTURE_DEMO_SQUAD_ARC_MAX_RADIUS_FACTOR,
   );
-  const axis = normalizeVec3OrFallback(
-    subtractVec3(playerTwoCentroid, playerOneCentroid),
-    { x: 1, y: 0, z: 1 },
+  const random = createSeededRandom(seed, "capture-demo-squad-arc");
+  const squadsByOwner = {
+    1: createCaptureDemoSquads(units, 1),
+    2: createCaptureDemoSquads(units, 2),
+  } satisfies Readonly<Record<1 | 2, readonly CaptureDemoSquad[]>>;
+  const squadCount = Math.max(
+    squadsByOwner[1].length,
+    squadsByOwner[2].length,
+    1,
   );
-  const outerPlanets = readOutermostOpposingPlanets(
-    planets,
-    center,
-    axis,
-    mapRadius,
-  );
+  const deployed = new Map<InitialUnitConfig, InitialUnitConfig>();
 
-  if (!outerPlanets) {
-    const spawnDistance = mapRadius + CAPTURE_DEMO_RIM_SPAWN_PADDING;
-    const targetCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
-      1: addVec3(center, scaleVec3(axis, -spawnDistance)),
-      2: addVec3(center, scaleVec3(axis, spawnDistance)),
-    };
-    const sourceCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
-      1: playerOneCentroid,
-      2: playerTwoCentroid,
-    };
+  for (const owner of [1, 2] as const) {
+    const squads = squadsByOwner[owner];
 
-    return units.map((unit) => {
-      const owner = unit.owner === 1 ? 1 : 2;
-      const offset = subtractVec3(unit.position, sourceCentroids[owner]);
+    squads.forEach((squad, index) => {
+      const placement = readCaptureDemoSquadArcPlacement({
+        owner,
+        index,
+        squadCount,
+        center,
+        minRadius: minArcRadius,
+        maxRadius: maxArcRadius,
+        planets,
+        random,
+      });
+      const targetAnchor = pointOnCaptureDemoArc(
+        center,
+        placement.radius,
+        placement.angle,
+        squad.anchor.y,
+      );
 
-      return {
-        ...unit,
-        position: addVec3(targetCentroids[owner], offset),
-      };
+      for (const unit of squad.units) {
+        deployed.set(unit, {
+          ...unit,
+          position: transformCaptureDemoSquadOffset(
+            unit.position,
+            squad.anchor,
+            targetAnchor,
+            placement.angle,
+          ),
+        });
+      }
     });
   }
 
-  const outerDeploymentAxis = normalizeVec3OrFallback(
-    subtractVec3(outerPlanets[2].position, outerPlanets[1].position),
-    axis,
-  );
-  const sourceCentroids: Readonly<Record<1 | 2, Vec3Data>> = {
-    1: playerOneCentroid,
-    2: playerTwoCentroid,
-  };
-  const outerDeployment: Readonly<
-    Record<1 | 2, CaptureDemoPlayerDeployment>
-  > = {
-    1: readPlayerDeployment(
-      units,
-      sourceCentroids[1],
-      outerPlanets[1],
-      center,
-      outerDeploymentAxis,
-      1,
-      captureOrbitMaxRadiusMultiplier,
-    ),
-    2: readPlayerDeployment(
-      units,
-      sourceCentroids[2],
-      outerPlanets[2],
-      center,
-      outerDeploymentAxis,
-      2,
-      captureOrbitMaxRadiusMultiplier,
-    ),
-  };
-  const outerUnits = units.map((unit) => ({
-    ...unit,
-    position: readCaptureDemoDeployedUnitPosition(
-      unit.position,
-      outerDeployment[unit.owner === 1 ? 1 : 2],
-      1,
-      1,
-    ),
-  }));
-  const outerPlayerOneCentroid = averagePosition(
-    outerUnits.filter((unit) => unit.owner === 1).map((unit) => unit.position),
-  );
-  const outerPlayerTwoCentroid = averagePosition(
-    outerUnits.filter((unit) => unit.owner === 2).map((unit) => unit.position),
-  );
-  const closePairAxis = normalizeVec3OrFallback(
-    subtractVec3(outerPlayerTwoCentroid, outerPlayerOneCentroid),
-    outerDeploymentAxis,
-  );
-  const closePlanets =
-    readClosestOpposedOuterPlanets(
-      planets,
-      center,
-      closePairAxis,
-      mapRadius,
-    ) ?? outerPlanets;
-  const primaryPlanets = planets.filter(isPrimaryPlanet);
-  const closeDeployment: Readonly<
-    Record<1 | 2, CaptureDemoPlayerDeployment>
-  > = {
-    1: readClosePairDeployment(
-      outerUnits,
-      primaryPlanets,
-      closePlanets[1],
-      center,
-      closePairAxis,
-      1,
-      captureOrbitMaxRadiusMultiplier,
-    ),
-    2: readClosePairDeployment(
-      outerUnits,
-      primaryPlanets,
-      closePlanets[2],
-      center,
-      closePairAxis,
-      2,
-      captureOrbitMaxRadiusMultiplier,
-    ),
-  };
-
-  return outerUnits.map((unit) => ({
-    ...unit,
-    position: readCaptureDemoDeployedUnitPosition(
-      unit.position,
-      closeDeployment[unit.owner === 1 ? 1 : 2],
-      CAPTURE_DEMO_FLEET_DEPTH_SCALE,
-      CAPTURE_DEMO_FLEET_LATERAL_SCALE,
-    ),
-  }));
+  return units.map((unit) => deployed.get(unit) ?? unit);
 }
 
-type CaptureDemoPlayerDeployment = Readonly<{
-  sourceFrontline: Vec3Data;
-  targetFrontline: Vec3Data;
-  outward: Vec3Data;
-}>;
+function createCaptureDemoSquads(
+  units: readonly InitialUnitConfig[],
+  owner: PlayerId,
+): readonly CaptureDemoSquad[] {
+  const ownerUnits = units.filter((unit) => unit.owner === owner);
+  const squads = ownerUnits
+    .filter((unit) => unit.templateId === TEMPLATE_IDS.dropShip)
+    .map((dropShip) => ({
+      anchor: dropShip.position,
+      units: [dropShip],
+    }));
 
-function readOutermostOpposingPlanets(
-  planets: readonly InitialPlanetConfig[],
-  center: Vec3Data,
-  axis: Vec3Data,
-  mapRadius: number,
-): Readonly<Record<1 | 2, InitialPlanetConfig>> | null {
-  const candidates = planets.filter(isPrimaryPlanet);
-
-  if (candidates.length < 2) {
-    return null;
-  }
-
-  let bestPair: readonly [InitialPlanetConfig, InitialPlanetConfig] | null =
-    null;
-  let bestScore = Number.NEGATIVE_INFINITY;
-
-  for (const left of candidates) {
-    for (const right of candidates) {
-      if (left === right) {
-        continue;
-      }
-
-      const leftOffset = subtractVec3(left.position, center);
-      const rightOffset = subtractVec3(right.position, center);
-      const leftDirection = normalizeVec3OrFallback(leftOffset, axis);
-      const rightDirection = normalizeVec3OrFallback(
-        rightOffset,
-        scaleVec3(axis, -1),
-      );
-      const opposition = (1 - dotVec3(leftDirection, rightDirection)) / 2;
-      const leftSurfaceRadius = lengthVec3(leftOffset) + left.radius;
-      const rightSurfaceRadius = lengthVec3(rightOffset) + right.radius;
-      const minSurfaceRadius = Math.min(leftSurfaceRadius, rightSurfaceRadius);
-      const averageSurfaceRadius =
-        (leftSurfaceRadius + rightSurfaceRadius) / 2;
-      const score =
-        minSurfaceRadius +
-        averageSurfaceRadius * 0.15 +
-        opposition * mapRadius * 0.35;
-
-      if (score > bestScore) {
-        bestPair = [left, right];
-        bestScore = score;
-      }
-    }
-  }
-
-  if (!bestPair) {
-    return null;
-  }
-
-  const firstProjection = dotVec3(
-    subtractVec3(bestPair[0].position, center),
-    axis,
-  );
-  const secondProjection = dotVec3(
-    subtractVec3(bestPair[1].position, center),
-    axis,
-  );
-
-  return firstProjection <= secondProjection
-    ? { 1: bestPair[0], 2: bestPair[1] }
-    : { 1: bestPair[1], 2: bestPair[0] };
-}
-
-function readClosestOpposedOuterPlanets(
-  planets: readonly InitialPlanetConfig[],
-  center: Vec3Data,
-  axis: Vec3Data,
-  mapRadius: number,
-): Readonly<Record<1 | 2, InitialPlanetConfig>> | null {
-  const candidates = planets.filter(isPrimaryPlanet);
-
-  let bestPair:
-    | Readonly<{
-        left: InitialPlanetConfig;
-        right: InitialPlanetConfig;
-      }>
-    | null = null;
-  let bestScore = Number.NEGATIVE_INFINITY;
-
-  for (const left of candidates) {
-    const leftOffset = subtractVec3(left.position, center);
-    const leftProjection = dotVec3(leftOffset, axis);
-    const leftSurfaceRadius = lengthVec3(leftOffset) + left.radius;
-
-    if (leftProjection >= 0 || leftSurfaceRadius < mapRadius * 0.48) {
+  for (const unit of ownerUnits) {
+    if (unit.templateId === TEMPLATE_IDS.dropShip) {
       continue;
     }
 
-    for (const right of candidates) {
-      const rightOffset = subtractVec3(right.position, center);
-      const rightProjection = dotVec3(rightOffset, axis);
-      const rightSurfaceRadius = lengthVec3(rightOffset) + right.radius;
+    const nearestSquad = findNearestCaptureDemoSquad(squads, unit.position);
 
-      if (
-        left === right ||
-        rightProjection <= 0 ||
-        rightSurfaceRadius < mapRadius * 0.48
-      ) {
-        continue;
-      }
-
-      const pairDistance = distanceVec3(left.position, right.position);
-      const outerness =
-        Math.min(leftSurfaceRadius, rightSurfaceRadius) / mapRadius;
-      const opposition =
-        Math.min(Math.abs(leftProjection) + Math.abs(rightProjection), mapRadius * 2) /
-        (mapRadius * 2);
-      const score =
-        -pairDistance +
-        outerness * mapRadius * 0.65 +
-        opposition * mapRadius * 0.35;
-
-      if (score > bestScore) {
-        bestPair = { left, right };
-        bestScore = score;
-      }
+    if (nearestSquad) {
+      nearestSquad.units.push(unit);
     }
   }
 
-  if (!bestPair) {
-    return null;
-  }
-
-  return { 1: bestPair.left, 2: bestPair.right };
+  return squads;
 }
 
-function readPlayerDeployment(
-  units: readonly InitialUnitConfig[],
-  sourceCentroid: Vec3Data,
-  planet: InitialPlanetConfig,
-  center: Vec3Data,
-  axis: Vec3Data,
-  owner: PlayerId,
-  captureOrbitMaxRadiusMultiplier: number,
-): CaptureDemoPlayerDeployment {
-  const outward = normalizeVec3OrFallback(
-    subtractVec3(planet.position, center),
-    owner === 1 ? scaleVec3(axis, -1) : axis,
-  );
-  const frontlineDropShip =
-    units
-      .filter(
-        (unit) =>
-          unit.owner === owner && unit.templateId === TEMPLATE_IDS.dropShip,
-      )
-      .sort((left, right) => {
-        const leftOffset = subtractVec3(left.position, sourceCentroid);
-        const rightOffset = subtractVec3(right.position, sourceCentroid);
+function findNearestCaptureDemoSquad(
+  squads: readonly { anchor: Vec3Data }[],
+  position: Vec3Data,
+): { anchor: Vec3Data; units: InitialUnitConfig[] } | null {
+  let nearest: { anchor: Vec3Data; units: InitialUnitConfig[] } | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
 
-        return dotVec3(leftOffset, outward) - dotVec3(rightOffset, outward);
-      })[0] ?? null;
-  const sourceOffset = frontlineDropShip
-    ? subtractVec3(frontlineDropShip.position, sourceCentroid)
-    : ({ x: 0, y: 0, z: 0 } as const);
-  const frontlineTarget = addVec3(
-    planet.position,
-    scaleVec3(
-      outward,
-      planet.radius * captureOrbitMaxRadiusMultiplier +
-        CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA,
-    ),
-  );
+  for (const squad of squads) {
+    const distance = distanceSquaredVec3(position, squad.anchor);
 
-  return {
-    sourceFrontline: addVec3(sourceCentroid, sourceOffset),
-    targetFrontline: frontlineTarget,
-    outward,
-  };
-}
-
-function readClosePairDeployment(
-  units: readonly InitialUnitConfig[],
-  planets: readonly InitialPlanetConfig[],
-  planet: InitialPlanetConfig,
-  center: Vec3Data,
-  axis: Vec3Data,
-  owner: PlayerId,
-  captureOrbitMaxRadiusMultiplier: number,
-): CaptureDemoPlayerDeployment {
-  const sourceFrontline =
-    readNearestDropShipPosition(units, planets, owner) ??
-    averagePosition(
-      units.filter((unit) => unit.owner === owner).map((unit) => unit.position),
-    );
-  const outward = normalizeVec3OrFallback(
-    subtractVec3(planet.position, center),
-    owner === 1 ? scaleVec3(axis, -1) : axis,
-  );
-  const targetFrontline = addVec3(
-    planet.position,
-    scaleVec3(
-      outward,
-      planet.radius * captureOrbitMaxRadiusMultiplier +
-        CAPTURE_DEMO_FRONTLINE_CAPTURE_ORBIT_EXTRA,
-    ),
-  );
-
-  return {
-    sourceFrontline,
-    targetFrontline,
-    outward,
-  };
-}
-
-function readNearestDropShipPosition(
-  units: readonly InitialUnitConfig[],
-  planets: readonly InitialPlanetConfig[],
-  owner: PlayerId,
-): Vec3Data | null {
-  let nearest: Vec3Data | null = null;
-  let nearestGap = Number.POSITIVE_INFINITY;
-
-  for (const unit of units) {
-    if (unit.owner !== owner || unit.templateId !== TEMPLATE_IDS.dropShip) {
+    if (distance >= nearestDistance) {
       continue;
     }
 
-    for (const planet of planets) {
-      const gap = distanceVec3(unit.position, planet.position) - planet.radius;
-
-      if (gap < nearestGap) {
-        nearest = unit.position;
-        nearestGap = gap;
-      }
-    }
+    nearest = squad as { anchor: Vec3Data; units: InitialUnitConfig[] };
+    nearestDistance = distance;
   }
 
   return nearest;
 }
 
-function readCaptureDemoDeployedUnitPosition(
-  position: Vec3Data,
-  deployment: CaptureDemoPlayerDeployment,
-  depthScale: number,
-  lateralScale: number,
-): Vec3Data {
-  const offset = subtractVec3(position, deployment.sourceFrontline);
-  const depth = dotVec3(offset, deployment.outward);
-  const depthVector = scaleVec3(deployment.outward, depth);
-  const lateralVector = subtractVec3(offset, depthVector);
+type CaptureDemoSquadPlacementOptions = Readonly<{
+  owner: PlayerId;
+  index: number;
+  squadCount: number;
+  center: Vec3Data;
+  minRadius: number;
+  maxRadius: number;
+  planets: readonly InitialPlanetConfig[];
+  random: () => number;
+}>;
 
-  return addVec3(
-    deployment.targetFrontline,
-    addVec3(
-      scaleVec3(depthVector, depthScale),
-      scaleVec3(lateralVector, lateralScale),
-    ),
+function readCaptureDemoSquadArcPlacement(
+  options: CaptureDemoSquadPlacementOptions,
+): { angle: number; radius: number } {
+  const { random } = options;
+  const angleMin = readCaptureDemoSquadArcAngleMin(options.owner);
+  const angleMax = readCaptureDemoSquadArcAngleMax(options.owner);
+  const baseProgress =
+    options.squadCount <= 1 ? 0.5 : options.index / (options.squadCount - 1);
+  const slotWidth =
+    options.squadCount <= 1
+      ? angleMax - angleMin
+      : (angleMax - angleMin) / (options.squadCount - 1);
+
+  let fallback = {
+    angle: lerp(angleMin, angleMax, baseProgress),
+    radius: lerp(options.minRadius, options.maxRadius, 0.78),
+  };
+
+  for (let attempt = 0; attempt < CAPTURE_DEMO_SQUAD_PLACEMENT_ATTEMPTS; attempt += 1) {
+    const angleJitter = (random() - 0.5) * slotWidth * 0.74;
+    const radius =
+      options.minRadius + random() * (options.maxRadius - options.minRadius);
+    const candidate = {
+      angle: clamp(
+        lerp(angleMin, angleMax, baseProgress) + angleJitter,
+        angleMin,
+        angleMax,
+      ),
+      radius,
+    };
+
+    fallback = candidate;
+
+    if (
+      isCaptureDemoSquadPlacementClear(
+        pointOnCaptureDemoArc(options.center, candidate.radius, candidate.angle, 0),
+        options.planets,
+      )
+    ) {
+      return candidate;
+    }
+  }
+
+  return fallback;
+}
+
+function readCaptureDemoSquadArcAngleMin(owner: PlayerId): number {
+  return (
+    readCaptureDemoSquadArcTeamCenter(owner) -
+    CAPTURE_DEMO_SQUAD_TEAM_ARC_SWEEP_RADIANS / 2
   );
+}
+
+function readCaptureDemoSquadArcAngleMax(owner: PlayerId): number {
+  return (
+    readCaptureDemoSquadArcTeamCenter(owner) +
+    CAPTURE_DEMO_SQUAD_TEAM_ARC_SWEEP_RADIANS / 2
+  );
+}
+
+function readCaptureDemoSquadArcTeamCenter(owner: PlayerId): number {
+  const teamOffset =
+    CAPTURE_DEMO_SQUAD_TEAM_ARC_SWEEP_RADIANS / 2 +
+    CAPTURE_DEMO_SQUAD_TEAM_ARC_GAP_RADIANS / 2;
+
+  return (
+    CAPTURE_DEMO_SQUAD_ARC_CENTER_ANGLE +
+    (owner === 1 ? -teamOffset : teamOffset)
+  );
+}
+
+function isCaptureDemoSquadPlacementClear(
+  point: Vec3Data,
+  planets: readonly InitialPlanetConfig[],
+): boolean {
+  return planets.every(
+    (planet) =>
+      distanceSquaredVec3(point, planet.position) >
+      (planet.radius + CAPTURE_DEMO_SQUAD_PLANET_CLEARANCE) *
+        (planet.radius + CAPTURE_DEMO_SQUAD_PLANET_CLEARANCE),
+  );
+}
+
+function pointOnCaptureDemoArc(
+  center: Vec3Data,
+  radius: number,
+  angle: number,
+  yOffset: number,
+): Vec3Data {
+  return {
+    x: quantize(center.x + Math.cos(angle) * radius),
+    y: quantize(center.y + yOffset),
+    z: quantize(center.z + Math.sin(angle) * radius),
+  };
+}
+
+function transformCaptureDemoSquadOffset(
+  position: Vec3Data,
+  sourceAnchor: Vec3Data,
+  targetAnchor: Vec3Data,
+  angle: number,
+): Vec3Data {
+  const local = subtractVec3(position, sourceAnchor);
+  const outward = { x: Math.cos(angle), y: 0, z: Math.sin(angle) };
+  const tangent = { x: -Math.sin(angle), y: 0, z: Math.cos(angle) };
+
+  return {
+    x: quantize(targetAnchor.x + tangent.x * local.x + outward.x * local.z),
+    y: quantize(targetAnchor.y + local.y),
+    z: quantize(targetAnchor.z + tangent.z * local.x + outward.z * local.z),
+  };
 }
 
 function readPlanetarySystemCenter(
@@ -1304,6 +1148,12 @@ function subtractVec3(left: Vec3Data, right: Vec3Data): Vec3Data {
   };
 }
 
+function distanceSquaredVec3(left: Vec3Data, right: Vec3Data): number {
+  const offset = subtractVec3(left, right);
+
+  return offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
+}
+
 function scaleVec3(vector: Vec3Data, scalar: number): Vec3Data {
   return {
     x: quantize(vector.x * scalar),
@@ -1312,27 +1162,8 @@ function scaleVec3(vector: Vec3Data, scalar: number): Vec3Data {
   };
 }
 
-function dotVec3(left: Vec3Data, right: Vec3Data): number {
-  return left.x * right.x + left.y * right.y + left.z * right.z;
-}
-
 function lengthVec3(vector: Vec3Data): number {
   return Math.hypot(vector.x, vector.y, vector.z);
-}
-
-function distanceVec3(left: Vec3Data, right: Vec3Data): number {
-  return lengthVec3(subtractVec3(left, right));
-}
-
-function normalizeVec3OrFallback(vector: Vec3Data, fallback: Vec3Data): Vec3Data {
-  const length = lengthVec3(vector);
-
-  if (length > 0.000001) {
-    return scaleVec3(vector, 1 / length);
-  }
-
-  const fallbackLength = Math.max(lengthVec3(fallback), 1);
-  return scaleVec3(fallback, 1 / fallbackLength);
 }
 
 function generatePlanetarySystem(seed: number): {

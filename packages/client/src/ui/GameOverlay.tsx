@@ -12,6 +12,7 @@ import {
   type ShipClassId,
 } from "@drop-ship/protocol";
 import { createUnitSymbolImageUrl } from "../render/canvasTextures";
+import type { ObjectiveCommandCard } from "../selection/commands";
 import type {
   PlanetViewModel,
   RenderQualityMode,
@@ -22,13 +23,6 @@ import type {
 import type { UiStore } from "./store";
 
 export type PendingCommandMenuCommand = "orbitPlanet" | null;
-
-export type CommandHistoryEntry = Readonly<{
-  id: number;
-  label: string;
-  detail: string;
-  unitCount: number;
-}>;
 
 export type MatchStatusSnapshot = Readonly<{
   remainingTicks: number;
@@ -96,7 +90,7 @@ export type GameOverlaySnapshot = Readonly<{
   selectedPlanet: SelectedPlanetStatsSnapshot | null;
   commandMenuLeaderKey: string | null;
   pendingCommand: PendingCommandMenuCommand;
-  commandHistory: readonly CommandHistoryEntry[];
+  objectiveCards: readonly ObjectiveCommandCard[];
   matchStatus: MatchStatusSnapshot;
   matchEnd: MatchEndDialogSnapshot;
   hotkeysOpen: boolean;
@@ -116,7 +110,7 @@ export type GameOverlayActions = Readonly<{
   deselectUnit: (unitKey: string) => void;
   escortLeader: () => void;
   toggleOrbitPlanetCommand: () => void;
-  selectCommandHistoryEntry: (entryId: number) => void;
+  selectObjectiveCommandCard: (cardId: string) => void;
   closeHotkeysDialog: () => void;
   readyForMatch: () => void;
   replayMatch: () => void;
@@ -139,7 +133,7 @@ export function createInitialOverlaySnapshot(
     selectedPlanet: null,
     commandMenuLeaderKey: null,
     pendingCommand: null,
-    commandHistory: [],
+    objectiveCards: [],
     matchStatus: {
       remainingTicks: 0,
       playerOneText: "P1 0P 0U",
@@ -214,7 +208,7 @@ function GameOverlay({
       <CameraPresetControls snapshot={snapshot} actions={actions} />
       <TopLeftControls snapshot={snapshot} actions={actions} />
       <MatchStatus snapshot={snapshot.matchStatus} />
-      <CommandHistoryMenu snapshot={snapshot} actions={actions} />
+      <ObjectiveCommandMenu snapshot={snapshot} actions={actions} />
       <RightSideStack snapshot={snapshot} actions={actions} />
       <RoleBadge snapshot={snapshot} />
       <HotkeysDialog snapshot={snapshot} actions={actions} />
@@ -370,46 +364,81 @@ function MatchStatus({ snapshot }: { snapshot: MatchStatusSnapshot }) {
   );
 }
 
-function CommandHistoryMenu({
+function ObjectiveCommandMenu({
   snapshot,
   actions,
 }: {
   snapshot: GameOverlaySnapshot;
   actions: GameOverlayActions;
 }) {
-  const hasCommandHistory = snapshot.commandHistory.length > 0;
+  const hasObjectiveCards = snapshot.objectiveCards.length > 0;
 
   return (
     <aside
-      className="command-menu command-history-menu"
-      hidden={!hasCommandHistory}
-      aria-label="Recent commands"
+      className="objective-command-menu"
+      hidden={!hasObjectiveCards}
+      aria-label="Objective groups"
       onPointerDown={stopOverlayPointer}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
       }}
     >
-      <div className="command-menu-history command-history-stack">
-        {snapshot.commandHistory.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            className="command-menu-history-entry"
-            title={`${entry.label} - ${entry.detail}`}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              actions.selectCommandHistoryEntry(entry.id);
-              event.currentTarget.blur();
-            }}
-          >
-            <span className="command-menu-history-label">{entry.label}</span>
-            <span className="command-menu-history-detail">{entry.detail}</span>
-          </button>
+      <div className="objective-command-grid">
+        {snapshot.objectiveCards.map((card, index) => (
+          <ObjectiveCommandCardButton
+            key={card.id}
+            card={card}
+            hotkey={index < 5 ? index + 1 : null}
+            selected={isObjectiveCommandCardSelected(
+              card,
+              snapshot.selectedUnits
+            )}
+            actions={actions}
+          />
         ))}
       </div>
     </aside>
+  );
+}
+
+function ObjectiveCommandCardButton({
+  card,
+  hotkey,
+  selected,
+  actions,
+}: {
+  card: ObjectiveCommandCard;
+  hotkey: number | null;
+  selected: boolean;
+  actions: GameOverlayActions;
+}) {
+  return (
+    <button
+      type="button"
+      className="objective-command-card"
+      data-kind={card.kind}
+      aria-pressed={selected}
+      title={`${card.title} - ${card.detail}`}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        actions.selectObjectiveCommandCard(card.id);
+        event.currentTarget.blur();
+      }}
+    >
+      <span className="objective-command-card-topline">
+        <span
+          className="objective-command-card-hotkey"
+          hidden={hotkey === null}
+          aria-hidden="true"
+        >
+          {hotkey}
+        </span>
+        <span className="objective-command-card-title">{card.title}</span>
+      </span>
+      <span className="objective-command-card-detail">{card.detail}</span>
+    </button>
   );
 }
 
@@ -1086,6 +1115,21 @@ function readSelectedStatsUnit(
   );
 }
 
+function isObjectiveCommandCardSelected(
+  card: ObjectiveCommandCard,
+  selectedUnits: readonly UnitViewModel[]
+): boolean {
+  if (
+    selectedUnits.length !== card.unitKeys.length ||
+    card.unitKeys.length === 0
+  ) {
+    return false;
+  }
+
+  const selectedKeys = new Set(selectedUnits.map((unit) => unit.key));
+  return card.unitKeys.every((unitKey) => selectedKeys.has(unitKey));
+}
+
 function formatPlanetClass(
   planetClass: PlanetViewModel["appearance"]["planetClass"]
 ): string {
@@ -1232,7 +1276,7 @@ const COMMAND_UNIT_GROUPS: readonly CommandUnitGroupDefinition[] = [
 ];
 
 const HOTKEYS: readonly (readonly [string, string])[] = [
-  ["1", "Select all owned units"],
+  ["1-5", "Select objective card"],
   ["8", "Filter/select fighters"],
   ["9", "Filter/select battleships"],
   ["0", "Filter/select drop ships"],
@@ -1240,6 +1284,7 @@ const HOTKEYS: readonly (readonly [string, string])[] = [
   ["C", "Capture selected planet"],
   ["G", "Guard selected planet"],
   ["Z", "Zoom to selection"],
+  ["F", "Fit to world"],
   ["T", "Toggle tactical overlay"],
   ["P", "Pause and show hotkeys"],
   ["Space", "Reselect previous command group"],

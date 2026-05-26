@@ -10,6 +10,16 @@ import {
   type RoutePropsForPath,
 } from "preact-iso";
 import { mountMinimalGame, type RenderQualityMode } from "@drop-ship/client";
+import {
+  initTelemetry,
+  reportClientIssue,
+  reportGameMountError,
+  reportNetworkIssue,
+  reportPreactError,
+  setGameTelemetryContext,
+} from "./telemetry";
+
+initTelemetry();
 
 const app = document.querySelector<HTMLElement>("#app");
 
@@ -22,7 +32,7 @@ hydrate(<App />, app);
 function App() {
   return (
     <LocationProvider>
-      <ErrorBoundary>
+      <ErrorBoundary onError={reportPreactError}>
         <Router>
           <Route path="/" component={GameRoute} />
           <Route path="/play/:gameId" component={GameRoute} />
@@ -111,25 +121,47 @@ function GameRoute({ gameId: routeGameId }: PlayRouteProps) {
       return;
     }
 
-    const mountedGame = mountMinimalGame(containerRef.current, {
+    setGameTelemetryContext({
       matchId: mountOptions.matchId,
       serverUrl: mountOptions.serverUrl,
       network: mountOptions.network,
-      seed: mountOptions.seed,
-      stressUnits: mountOptions.stressUnits,
       renderMode: mountOptions.renderMode,
-      debugMatchParams: mountOptions.debugMatchParams,
-      debugNetworkLogs: mountOptions.debugNetworkLogs,
-      initialPaused: mountOptions.initialPaused,
-      creatorToken: mountOptions.creatorToken,
-      playerToken: mountOptions.playerToken,
-      rememberPlayerToken,
-      createTwoPlayerGame: () =>
-        createTwoPlayerGame({
-          route: location.route,
-          serverUrl: mountOptions.serverUrl,
-        }),
+      routePath: location.path,
     });
+
+    let mountedGame: ReturnType<typeof mountMinimalGame>;
+
+    try {
+      mountedGame = mountMinimalGame(containerRef.current, {
+        matchId: mountOptions.matchId,
+        serverUrl: mountOptions.serverUrl,
+        network: mountOptions.network,
+        seed: mountOptions.seed,
+        stressUnits: mountOptions.stressUnits,
+        renderMode: mountOptions.renderMode,
+        debugMatchParams: mountOptions.debugMatchParams,
+        debugNetworkLogs: mountOptions.debugNetworkLogs,
+        initialPaused: mountOptions.initialPaused,
+        creatorToken: mountOptions.creatorToken,
+        playerToken: mountOptions.playerToken,
+        rememberPlayerToken,
+        reportClientIssue,
+        createTwoPlayerGame: () =>
+          createTwoPlayerGame({
+            route: location.route,
+            serverUrl: mountOptions.serverUrl,
+          }),
+      });
+    } catch (error) {
+      reportGameMountError(error, {
+        matchId: mountOptions.matchId ?? null,
+        network: mountOptions.network,
+        renderMode: mountOptions.renderMode ?? null,
+        stressUnits: mountOptions.stressUnits ?? null,
+        serverUrl: mountOptions.serverUrl ?? "same-origin",
+      });
+      throw error;
+    }
 
     return () => {
       mountedGame.dispose();
@@ -217,11 +249,33 @@ async function createTwoPlayerGame(options: {
   route: (url: string, replace?: boolean) => void;
   serverUrl?: string;
 }): Promise<void> {
-  const response = await fetch(createApiUrl("/api/matches", options.serverUrl), {
-    method: "POST",
-  });
+  const url = createApiUrl("/api/matches", options.serverUrl);
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+    });
+  } catch (error) {
+    reportNetworkIssue({
+      kind: "network.create_match.request_failed",
+      message: "Could not send the create match request.",
+      method: "POST",
+      url,
+      error,
+    });
+    throw error;
+  }
 
   if (!response.ok) {
+    reportNetworkIssue({
+      kind: "network.create_match.bad_response",
+      message: "Create match request returned an unsuccessful response.",
+      method: "POST",
+      url,
+      status: response.status,
+      level: response.status >= 500 ? "error" : "warning",
+    });
     throw new Error("Could not create a two player game.");
   }
 

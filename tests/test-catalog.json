@@ -1,0 +1,44 @@
+{
+  "version": "0.1",
+  "tests": [
+    {
+      "id": "fuel_sustainment_001",
+      "name": "Fuel Sustainment Baseline",
+      "mode": "discovery",
+      "status": "queued",
+      "seedMatrix": "data/seed_matrices/baseline_v1.json",
+      "outputPaths": {
+        "runs": "data/runs/",
+        "telemetry": "data/telemetry/",
+        "metrics": "data/metrics/",
+        "replays": "data/replays/"
+      }
+    },
+    {
+      "id": "objective_production_001",
+      "name": "Objective Production Baseline",
+      "mode": "discovery",
+      "status": "queued",
+      "seedMatrix": "data/seed_matrices/baseline_v1.json",
+      "outputPaths": {
+        "runs": "data/runs/",
+        "telemetry": "data/telemetry/",
+        "metrics": "data/metrics/",
+        "replays": "data/replays/"
+      }
+    },
+    {
+      "id": "fleet_role_001",
+      "name": "Fleet Role Separation",
+      "mode": "validation",
+      "status": "queued",
+      "seedMatrix": "data/seed_matrices/baseline_v1.json",
+      "outputPaths": {
+        "runs": "data/runs/",
+        "telemetry": "data/telemetry/",
+        "metrics": "data/metrics/",
+        "replays": "data/replays/"
+      }
+    }
+  ]
+}

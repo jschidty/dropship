@@ -1,1 +1,34 @@
+{
+  "version": "baseline_v1",
 
+  "ships": {
+    "dropship": {
+      "hp": 320,
+      "speed": 1.2,
+      "fuelCapacity": 120,
+      "fuelBurnRate": 1.2
+    },
+
+    "gunship": {
+      "hp": 90,
+      "speed": 2.4,
+      "weaponRange": 140,
+      "damage": 18,
+      "fuelCapacity": 180
+    },
+
+    "battleship": {
+      "hp": 260,
+      "speed": 0.9,
+      "weaponRange": 320,
+      "damage": 52,
+      "fuelCapacity": 320
+    }
+  },
+
+  "globalRules": {
+    "captureTime": 10,
+    "lowFuelThreshold": 0.30,
+    "criticalFuelThreshold": 0.12
+  }
+}
